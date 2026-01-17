@@ -1,0 +1,151 @@
+/**
+ * @hstry/types - TypeScript types for hstry adapters
+ */
+
+/** Message roles across different sources */
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
+/** Tool call status */
+export type ToolStatus = 'pending' | 'success' | 'error';
+
+/** Attachment types */
+export type AttachmentType = 'file' | 'image' | 'code';
+
+/** A conversation from any source, normalized to a common format */
+export interface Conversation {
+  externalId?: string;
+  title?: string;
+  createdAt: number;      // Unix timestamp (ms)
+  updatedAt?: number;
+  model?: string;
+  workspace?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  costUsd?: number;
+  messages: Message[];
+  metadata?: Record<string, unknown>;
+}
+
+/** A message within a conversation */
+export interface Message {
+  role: MessageRole;
+  content: string;
+  createdAt?: number;     // Unix timestamp (ms)
+  model?: string;
+  tokens?: number;
+  costUsd?: number;
+  toolCalls?: ToolCall[];
+  attachments?: Attachment[];
+  metadata?: Record<string, unknown>;
+}
+
+/** A tool call within a message */
+export interface ToolCall {
+  toolName: string;
+  input?: unknown;
+  output?: string;
+  status?: ToolStatus;
+  durationMs?: number;
+}
+
+/** An attachment to a message */
+export interface Attachment {
+  type: AttachmentType;
+  name?: string;
+  mimeType?: string;
+  content?: string;       // Base64 for binary, plain text for code
+  path?: string;
+  language?: string;      // For code blocks
+  metadata?: Record<string, unknown>;
+}
+
+/** Options for parsing conversations */
+export interface ParseOptions {
+  since?: number;         // Only parse after this timestamp (ms)
+  limit?: number;         // Max conversations to parse
+  includeTools?: boolean;
+  includeAttachments?: boolean;
+}
+
+/** Adapter metadata */
+export interface AdapterInfo {
+  name: string;
+  displayName: string;
+  version: string;
+  defaultPaths: string[];
+}
+
+/** Adapter interface that all adapters must implement */
+export interface Adapter {
+  /** Get adapter metadata */
+  info(): AdapterInfo;
+
+  /** Detect if path contains data for this adapter (0-1 confidence) */
+  detect(path: string): Promise<number | null>;
+
+  /** Parse conversations from path */
+  parse(path: string, opts?: ParseOptions): Promise<Conversation[]>;
+
+  /** Optional: supports incremental sync */
+  supportsIncremental?: boolean;
+  
+  /** Optional: parse only new conversations since timestamp */
+  parseSince?(path: string, since: number): Promise<Conversation[]>;
+}
+
+/** Request from hstry runtime */
+export type AdapterRequest =
+  | { method: 'info' }
+  | { method: 'detect'; params: { path: string } }
+  | { method: 'parse'; params: { path: string; opts?: ParseOptions } };
+
+/** Response to hstry runtime */
+export type AdapterResponse =
+  | AdapterInfo
+  | number | null
+  | Conversation[]
+  | { error: string };
+
+/** 
+ * Main entry point for adapters.
+ * Handles the request/response protocol with the Rust runtime.
+ */
+export function runAdapter(adapter: Adapter): void {
+  const requestJson = process.env.HSTRY_REQUEST || Bun?.env?.HSTRY_REQUEST || Deno?.env?.get?.('HSTRY_REQUEST');
+  
+  if (!requestJson) {
+    console.error(JSON.stringify({ error: 'HSTRY_REQUEST environment variable not set' }));
+    process.exit(1);
+  }
+
+  const request: AdapterRequest = JSON.parse(requestJson);
+
+  (async () => {
+    try {
+      let response: AdapterResponse;
+
+      switch (request.method) {
+        case 'info':
+          response = adapter.info();
+          break;
+        case 'detect':
+          response = await adapter.detect(request.params.path);
+          break;
+        case 'parse':
+          response = await adapter.parse(request.params.path, request.params.opts);
+          break;
+        default:
+          response = { error: `Unknown method: ${(request as any).method}` };
+      }
+
+      console.log(JSON.stringify(response));
+    } catch (err) {
+      console.log(JSON.stringify({ error: String(err) }));
+      process.exit(1);
+    }
+  })();
+}
+
+// Type declarations for different runtimes
+declare const Bun: { env?: Record<string, string> } | undefined;
+declare const Deno: { env?: { get?(key: string): string | undefined } } | undefined;

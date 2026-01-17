@@ -1,0 +1,14 @@
+[package]
+name = "hstry-runtime"
+version.workspace = true
+edition.workspace = true
+description = "TypeScript adapter runtime for hstry"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+hstry-core.workspace = true

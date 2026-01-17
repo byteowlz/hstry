@@ -1,0 +1,24 @@
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
+
+# Example configuration for hstry.
+# Copy this file to $XDG_CONFIG_HOME/hstry/config.toml and adjust as needed.
+
+profile = "default"
+
+[logging]
+# Valid levels: error, warn, info, debug, trace
+level = "info"
+# Optional path for log file output; supports ~ and environment variables.
+# file = "~/Library/Logs/hstry.log"
+
+[runtime]
+# Override the worker pool size; defaults to logical CPU count when unset.
+# parallelism = 8
+# Timeout in seconds for long-running operations.
+timeout = 60
+fail_fast = true
+
+[paths]
+# Uncomment to move persistent data/state to custom directories.
+# data_dir = "$XDG_DATA_HOME/hstry"
+# state_dir = "$XDG_STATE_HOME/hstry"

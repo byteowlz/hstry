@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: hstry
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          # Linux ARM64 (disabled by default - needs Cross.toml with OpenSSL config)
+          # - target: aarch64-unknown-linux-gnu
+          #   os: ubuntu-latest
+          #   archive: tar.gz
+          #   cross: true
+          # macOS Intel (cross-compiled from ARM64 runner - macos-13 is retired)
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            # Uncomment for CoreML acceleration:
+            # features: "--features coreml"
+          # Windows (may have C runtime issues with some crates)
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Uncomment if your project uses protobuf:
+      # - name: Install protoc (Linux)
+      #   if: runner.os == 'Linux'
+      #   run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      # - name: Install protoc (macOS)
+      #   if: runner.os == 'macOS'
+      #   run: brew install protobuf
+
+      # - name: Install protoc (Windows)
+      #   if: runner.os == 'Windows'
+      #   run: choco install protoc
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} ${{ matrix.features }}
+          else
+            cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+          fi
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          # Package all binaries from workspace (adjust as needed)
+          tar czvf ../../../${{ env.BINARY_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}*
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          # Package all binaries from workspace (adjust as needed)
+          7z a ../../../${{ env.BINARY_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip ${{ env.BINARY_NAME }}*.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: ${{ env.BINARY_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.target }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
+          sha256sum *.tar.gz > checksums.txt
+          if ls *.zip 1>/dev/null 2>&1; then
+            sha256sum *.zip >> checksums.txt
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # === Package Manager Publishing ===
+  # Uncomment the sections below to enable automatic publishing.
+  # Required secrets: TAP_GITHUB_TOKEN, AUR_SSH_PRIVATE_KEY, AUR_EMAIL
+
+  # publish-homebrew:
+  #   name: Publish to Homebrew
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Update Homebrew tap
+  #       uses: peter-evans/repository-dispatch@v3
+  #       with:
+  #         token: ${{ secrets.TAP_GITHUB_TOKEN }}
+  #         repository: byteowlz/homebrew-tap
+  #         event-type: update-formula
+  #         client-payload: |
+  #           {
+  #             "formula": "${{ env.BINARY_NAME }}",
+  #             "version": "${{ env.RELEASE_TAG }}",
+  #             "repo": "${{ github.repository }}"
+  #           }
+
+  # publish-aur:
+  #   name: Publish to AUR
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ env.RELEASE_TAG }}
+  #     - name: Generate PKGBUILD
+  #       run: |
+  #         VERSION="${{ env.RELEASE_TAG }}"
+  #         VERSION="${VERSION#v}"
+  #         curl -sL "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/checksums.txt" -o checksums.txt
+  #         SHA256=$(grep "x86_64-unknown-linux-gnu.tar.gz" checksums.txt | cut -d' ' -f1)
+  #         cat > PKGBUILD << EOF
+  #         # Maintainer: byteowlz
+  #         pkgname=${{ env.BINARY_NAME }}
+  #         pkgver=${VERSION}
+  #         pkgrel=1
+  #         pkgdesc="Your description here"
+  #         arch=('x86_64')
+  #         url="https://github.com/${{ github.repository }}"
+  #         license=('MIT')
+  #         depends=('gcc-libs')
+  #         source=("\$pkgname-\$pkgver.tar.gz::https://github.com/${{ github.repository }}/releases/download/v\$pkgver/${{ env.BINARY_NAME }}-v\$pkgver-x86_64-unknown-linux-gnu.tar.gz")
+  #         sha256sums=('${SHA256}')
+  #         package() {
+  #             install -Dm755 ${{ env.BINARY_NAME }} "\$pkgdir/usr/bin/${{ env.BINARY_NAME }}"
+  #         }
+  #         EOF
+  #     - name: Publish to AUR
+  #       uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+  #       with:
+  #         pkgname: ${{ env.BINARY_NAME }}
+  #         pkgbuild: ./PKGBUILD
+  #         commit_username: byteowlz
+  #         commit_email: ${{ secrets.AUR_EMAIL }}
+  #         ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+  #         commit_message: "Update to ${{ env.RELEASE_TAG }}"
+
+  # publish-scoop:
+  #   name: Publish to Scoop
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Update Scoop bucket
+  #       uses: peter-evans/repository-dispatch@v3
+  #       with:
+  #         token: ${{ secrets.TAP_GITHUB_TOKEN }}
+  #         repository: byteowlz/scoop-bucket
+  #         event-type: update-manifest
+  #         client-payload: |
+  #           {
+  #             "name": "${{ env.BINARY_NAME }}",
+  #             "version": "${{ env.RELEASE_TAG }}",
+  #             "repo": "${{ github.repository }}"
+  #           }

@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/byteowlz/hstry/schemas/config.schema.json",
+  "title": "hstry configuration",
+  "description": "Configuration schema for hstry",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor support"
+    },
+    "profile": {
+      "type": "string",
+      "description": "Active configuration profile",
+      "default": "default"
+    },
+    "logging": {
+      "type": "object",
+      "description": "Logging configuration",
+      "properties": {
+        "level": {
+          "type": "string",
+          "description": "Log level",
+          "enum": ["error", "warn", "info", "debug", "trace"],
+          "default": "info"
+        },
+        "file": {
+          "type": "string",
+          "description": "Optional path for log file output. Supports ~ and environment variables."
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "description": "Runtime configuration",
+      "properties": {
+        "parallelism": {
+          "type": "integer",
+          "description": "Worker pool size. Defaults to logical CPU count.",
+          "minimum": 1
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds for long-running operations",
+          "default": 60,
+          "minimum": 1
+        },
+        "fail_fast": {
+          "type": "boolean",
+          "description": "Stop on first error",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "paths": {
+      "type": "object",
+      "description": "Custom paths for data and state",
+      "properties": {
+        "data_dir": {
+          "type": "string",
+          "description": "Directory for persistent data. Supports ~ and environment variables."
+        },
+        "state_dir": {
+          "type": "string",
+          "description": "Directory for state files. Supports ~ and environment variables."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

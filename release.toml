@@ -1,0 +1,23 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# Global settings
+# Disable publishing to crates.io
+publish = false
+
+# Don't push tags to git remote automatically
+push = false
+
+# Allow releases from these branches
+allow-branch = ["main", "master", "develop"]
+
+# Pre-release configuration
+pre-release-commit-message = "chore: release {{version}}"
+
+# Tag configuration
+tag = true
+tag-message = "Release {{version}}"
+tag-name = "v{{version}}"
+
+# Disable all features by default
+enable-all-features = false

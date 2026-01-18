@@ -1,6 +1,6 @@
 //! Database operations for hstry.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::*;
 use crate::schema::SCHEMA;
 use chrono::Utc;
@@ -41,6 +41,7 @@ impl Database {
     /// Initialize schema.
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        self.ensure_fts_schema().await?;
         Ok(())
     }
 
@@ -129,6 +130,57 @@ impl Database {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
         }))
+    }
+
+    /// Get a source by adapter and path.
+    pub async fn get_source_by_adapter_path(
+        &self,
+        adapter: &str,
+        path: &str,
+    ) -> Result<Option<Source>> {
+        let row = sqlx::query("SELECT * FROM sources WHERE adapter = ? AND path = ?")
+            .bind(adapter)
+            .bind(path)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(|row| Source {
+            id: row.get("id"),
+            adapter: row.get("adapter"),
+            path: row.get("path"),
+            last_sync_at: row.get::<Option<i64>, _>("last_sync_at").map(|ts| {
+                chrono::DateTime::from_timestamp(ts, 0)
+                    .unwrap_or_default()
+                    .with_timezone(&Utc)
+            }),
+            config: row
+                .get::<Option<String>, _>("config")
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+        }))
+    }
+
+    /// Remove a source and all associated data.
+    pub async fn remove_source(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("DELETE FROM conversations WHERE source_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+
+        let result = sqlx::query("DELETE FROM sources WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Err(Error::NotFound(format!("source '{id}'")));
+        }
+
+        tx.commit().await?;
+        Ok(())
     }
 
     // =========================================================================
@@ -226,6 +278,22 @@ impl Database {
         }
     }
 
+    /// Get conversation ID by source_id + external_id.
+    pub async fn get_conversation_id(
+        &self,
+        source_id: &str,
+        external_id: &str,
+    ) -> Result<Option<Uuid>> {
+        let row =
+            sqlx::query("SELECT id FROM conversations WHERE source_id = ? AND external_id = ?")
+                .bind(source_id)
+                .bind(external_id)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        Ok(row.map(|row| Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default()))
+    }
+
     /// Get conversation count.
     pub async fn count_conversations(&self) -> Result<i64> {
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM conversations")
@@ -295,27 +363,223 @@ impl Database {
     // Search
     // =========================================================================
 
-    /// Full-text search across messages.
-    pub async fn search(&self, query: &str, limit: i64) -> Result<Vec<Message>> {
-        let rows = sqlx::query(
+    /// Full-text search across messages with snippet and provenance.
+    pub async fn search(&self, query: &str, opts: SearchOptions) -> Result<Vec<SearchHit>> {
+        let mode = opts.mode.resolve(query);
+        let table = mode.table_name();
+
+        let mut sql = format!(
             r#"
-            SELECT m.* FROM messages m
-            JOIN messages_fts fts ON m.rowid = fts.rowid
-            WHERE messages_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
+            SELECT
+                m.id AS message_id,
+                m.conversation_id AS conversation_id,
+                m.idx AS message_idx,
+                m.role AS role,
+                m.content AS content,
+                m.created_at AS created_at,
+                c.source_id AS source_id,
+                c.external_id AS external_id,
+                c.title AS title,
+                c.workspace AS workspace,
+                s.adapter AS source_adapter,
+                s.path AS source_path,
+                snippet({table}, 0, '[', ']', '…', 12) AS snippet,
+                bm25({table}) AS score
+            FROM {table}
+            JOIN messages m ON m.rowid = {table}.rowid
+            JOIN conversations c ON c.id = m.conversation_id
+            JOIN sources s ON s.id = c.source_id
+            WHERE {table} MATCH ?
+            "#
+        );
+
+        if opts.source_id.is_some() {
+            sql.push_str(" AND c.source_id = ?");
+        }
+        if opts.workspace.is_some() {
+            sql.push_str(" AND c.workspace = ?");
+        }
+
+        sql.push_str(" ORDER BY score ASC");
+
+        if let Some(limit) = opts.limit {
+            sql.push_str(&format!(" LIMIT {limit}"));
+        }
+        if let Some(offset) = opts.offset {
+            sql.push_str(&format!(" OFFSET {offset}"));
+        }
+
+        let mut query_builder = sqlx::query(&sql);
+        query_builder = query_builder.bind(query);
+
+        if let Some(ref source_id) = opts.source_id {
+            query_builder = query_builder.bind(source_id);
+        }
+        if let Some(ref workspace) = opts.workspace {
+            query_builder = query_builder.bind(workspace);
+        }
+
+        let rows = query_builder.fetch_all(&self.pool).await?;
+
+        let mut hits = Vec::new();
+        for row in rows {
+            hits.push(SearchHit {
+                message_id: Uuid::parse_str(row.get::<&str, _>("message_id")).unwrap_or_default(),
+                conversation_id: Uuid::parse_str(row.get::<&str, _>("conversation_id"))
+                    .unwrap_or_default(),
+                message_idx: row.get("message_idx"),
+                role: MessageRole::from(row.get::<&str, _>("role")),
+                content: row.get("content"),
+                snippet: row.get::<String, _>("snippet"),
+                created_at: row
+                    .get::<Option<i64>, _>("created_at")
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|dt| dt.with_timezone(&Utc)),
+                score: row.get::<f32, _>("score"),
+                source_id: row.get("source_id"),
+                external_id: row.get("external_id"),
+                title: row.get("title"),
+                workspace: row.get("workspace"),
+                source_adapter: row.get("source_adapter"),
+                source_path: row.get("source_path"),
+            });
+        }
+
+        Ok(hits)
+    }
+
+    async fn ensure_fts_schema(&self) -> Result<()> {
+        let messages_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
+            .fetch_one(&self.pool)
+            .await?;
+
+        self.ensure_fts_table(
+            "messages_fts",
+            r#"
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+                content,
+                content=messages,
+                content_rowid=rowid,
+                tokenize = 'porter',
+                prefix = '2 3 4'
+            );
             "#,
+            &[
+                r#"
+                CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                END;
+                "#,
+                r#"
+                CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                    VALUES('delete', OLD.rowid, OLD.content);
+                END;
+                "#,
+                r#"
+                CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                    VALUES('delete', OLD.rowid, OLD.content);
+                    INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                END;
+                "#,
+            ],
+            &["messages_ai", "messages_ad", "messages_au"],
+            messages_count.0,
+            |sql| sql.contains("tokenize = 'porter'") && sql.contains("prefix = '2 3 4'"),
         )
-        .bind(query)
-        .bind(limit)
-        .fetch_all(&self.pool)
         .await?;
 
-        let mut messages = Vec::new();
-        for row in rows {
-            messages.push(message_from_row(&row)?);
+        self.ensure_fts_table(
+            "messages_code_fts",
+            r#"
+            CREATE VIRTUAL TABLE messages_code_fts USING fts5(
+                content,
+                content=messages,
+                content_rowid=rowid,
+                tokenize = "unicode61 tokenchars '_./:'",
+                prefix = '2 3 4'
+            );
+            "#,
+            &[
+                r#"
+                CREATE TRIGGER messages_code_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                END;
+                "#,
+                r#"
+                CREATE TRIGGER messages_code_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+                    VALUES('delete', OLD.rowid, OLD.content);
+                END;
+                "#,
+                r#"
+                CREATE TRIGGER messages_code_au AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+                    VALUES('delete', OLD.rowid, OLD.content);
+                    INSERT INTO messages_code_fts(rowid, content)
+                    VALUES (NEW.rowid, NEW.content);
+                END;
+                "#,
+            ],
+            &["messages_code_ai", "messages_code_ad", "messages_code_au"],
+            messages_count.0,
+            |sql| sql.contains("unicode61") && sql.contains("tokenchars") && sql.contains("prefix"),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_fts_table<F>(
+        &self,
+        name: &str,
+        create_sql: &str,
+        trigger_sql: &[&str],
+        trigger_names: &[&str],
+        messages_count: i64,
+        schema_ok: F,
+    ) -> Result<()>
+    where
+        F: Fn(&str) -> bool,
+    {
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        let should_recreate = match existing {
+            Some((sql,)) => !schema_ok(&sql),
+            None => true,
+        };
+
+        if should_recreate {
+            let mut tx = self.pool.begin().await?;
+            for trigger in trigger_names {
+                let drop_sql = format!("DROP TRIGGER IF EXISTS {trigger}");
+                sqlx::raw_sql(&drop_sql).execute(&mut *tx).await?;
+            }
+            let drop_table = format!("DROP TABLE IF EXISTS {name}");
+            sqlx::raw_sql(&drop_table).execute(&mut *tx).await?;
+            sqlx::raw_sql(create_sql).execute(&mut *tx).await?;
+            for sql in trigger_sql {
+                sqlx::raw_sql(sql).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
         }
-        Ok(messages)
+
+        if messages_count > 0 {
+            let row_count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {name}"))
+                .fetch_one(&self.pool)
+                .await?;
+            if row_count.0 == 0 {
+                let rebuild = format!("INSERT INTO {name}({name}) VALUES('rebuild')");
+                sqlx::raw_sql(&rebuild).execute(&self.pool).await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -326,6 +590,62 @@ pub struct ListConversationsOptions {
     pub workspace: Option<String>,
     pub after: Option<chrono::DateTime<Utc>>,
     pub limit: Option<i64>,
+}
+
+/// Options for search queries.
+#[derive(Debug, Default)]
+pub struct SearchOptions {
+    pub source_id: Option<String>,
+    pub workspace: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub mode: SearchMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMode {
+    Auto,
+    NaturalLanguage,
+    Code,
+}
+
+impl Default for SearchMode {
+    fn default() -> Self {
+        SearchMode::Auto
+    }
+}
+
+impl SearchMode {
+    fn resolve(self, query: &str) -> SearchMode {
+        match self {
+            SearchMode::Auto => detect_search_mode(query),
+            other => other,
+        }
+    }
+
+    fn table_name(self) -> &'static str {
+        match self {
+            SearchMode::Auto | SearchMode::NaturalLanguage => "messages_fts",
+            SearchMode::Code => "messages_code_fts",
+        }
+    }
+}
+
+fn detect_search_mode(query: &str) -> SearchMode {
+    let has_path = query.contains('/') || query.contains('\\');
+    let has_scope = query.contains("::") || query.contains("->");
+    let has_snake = query.contains('_');
+    let has_dot = query.contains('.');
+    let has_camel = query
+        .chars()
+        .zip(query.chars().skip(1))
+        .any(|(a, b)| a.is_lowercase() && b.is_uppercase());
+
+    if has_path || has_scope || has_snake || has_dot || has_camel {
+        SearchMode::Code
+    } else {
+        SearchMode::NaturalLanguage
+    }
 }
 
 fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Conversation> {

@@ -81,6 +81,11 @@ pub enum AdapterRequest {
     Detect { path: String },
     #[serde(rename = "parse")]
     Parse { path: String, opts: ParseOptions },
+    #[serde(rename = "export")]
+    Export {
+        conversations: Vec<ExportConversation>,
+        opts: ExportOptions,
+    },
 }
 
 /// Parse options sent to adapter.
@@ -94,6 +99,18 @@ pub struct ParseOptions {
     pub include_tools: bool,
     #[serde(default)]
     pub include_attachments: bool,
+}
+
+/// Export options sent to adapter.
+#[derive(Debug, Serialize)]
+pub struct ExportOptions {
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pretty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_tools: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_attachments: Option<bool>,
 }
 
 /// Parsed conversation from TS adapter (matches TS types)
@@ -141,6 +158,49 @@ pub struct ParsedToolCall {
     pub duration_ms: Option<i64>,
 }
 
+/// Export conversation input (matches TS types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportConversation {
+    pub external_id: Option<String>,
+    pub title: Option<String>,
+    pub created_at: i64, // Unix ms
+    pub updated_at: Option<i64>,
+    pub model: Option<String>,
+    pub workspace: Option<String>,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    pub cost_usd: Option<f64>,
+    pub messages: Vec<ParsedMessage>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Export file entry (for multi-file formats).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFile {
+    pub path: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+}
+
+/// Export result from adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<ExportFile>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Response from adapter.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -148,6 +208,7 @@ pub enum AdapterResponse {
     Info(AdapterInfo),
     Detect(Option<f32>),
     Parse(Vec<ParsedConversation>),
+    Export(ExportResult),
     Error { error: String },
 }
 
@@ -278,6 +339,29 @@ impl AdapterRunner {
             .await?
         {
             AdapterResponse::Parse(conversations) => Ok(conversations),
+            AdapterResponse::Error { error } => anyhow::bail!("Adapter error: {error}"),
+            _ => anyhow::bail!("Unexpected response type"),
+        }
+    }
+
+    /// Export conversations to a format.
+    pub async fn export(
+        &self,
+        adapter_path: &Path,
+        conversations: Vec<ExportConversation>,
+        opts: ExportOptions,
+    ) -> anyhow::Result<ExportResult> {
+        match self
+            .call(
+                adapter_path,
+                AdapterRequest::Export {
+                    conversations,
+                    opts,
+                },
+            )
+            .await?
+        {
+            AdapterResponse::Export(result) => Ok(result),
             AdapterResponse::Error { error } => anyhow::bail!("Adapter error: {error}"),
             _ => anyhow::bail!("Unexpected response type"),
         }

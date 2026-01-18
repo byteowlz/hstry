@@ -233,6 +233,38 @@ const adapter: Adapter = {
   async parseSince(path: string, since: number): Promise<Conversation[]> {
     return this.parse(path, { since });
   },
+
+  async export(conversations, opts) {
+    if (opts.format === 'markdown') {
+      return {
+        format: 'markdown',
+        content: conversationsToMarkdown(conversations),
+        mimeType: 'text/markdown',
+      };
+    }
+
+    if (opts.format === 'json') {
+      return {
+        format: 'json',
+        content: JSON.stringify(conversations, null, opts.pretty ? 2 : 0),
+        mimeType: 'application/json',
+      };
+    }
+
+    if (opts.format !== 'opencode') {
+      throw new Error(`Unsupported export format: ${opts.format}`);
+    }
+
+    const files = buildOpenCodeFiles(conversations);
+    return {
+      format: 'opencode',
+      files,
+      mimeType: 'application/json',
+      metadata: {
+        root: 'project/',
+      },
+    };
+  },
 };
 
 /**
@@ -372,6 +404,136 @@ function mapRole(role: string): Message['role'] {
     default:
       return 'assistant';
   }
+}
+
+function conversationsToMarkdown(conversations: Conversation[]): string {
+  const blocks: string[] = [];
+  for (const conv of conversations) {
+    const title = conv.title ?? 'Conversation';
+    blocks.push(`# ${title}`);
+    blocks.push('');
+    blocks.push(`- Created: ${new Date(conv.createdAt).toISOString()}`);
+    if (conv.updatedAt) {
+      blocks.push(`- Updated: ${new Date(conv.updatedAt).toISOString()}`);
+    }
+    if (conv.workspace) {
+      blocks.push(`- Workspace: ${conv.workspace}`);
+    }
+    blocks.push('');
+
+    for (const msg of conv.messages) {
+      blocks.push(`## ${msg.role}`);
+      if (msg.createdAt) {
+        blocks.push(`_at ${new Date(msg.createdAt).toISOString()}_`);
+      }
+      blocks.push('');
+      blocks.push(msg.content || '');
+      blocks.push('');
+    }
+  }
+  return blocks.join('\n').trim() + '\n';
+}
+
+function buildOpenCodeFiles(conversations: Conversation[]): { path: string; content: string }[] {
+  const files: { path: string; content: string }[] = [];
+
+  for (const conv of conversations) {
+    const sessionId = conv.externalId ?? randomId('ses_');
+    const projectName = workspaceToProjectName(conv.workspace);
+    const basePath = `project/${projectName}/storage/session`;
+    const infoDir = `${basePath}/info`;
+    const messageDir = `${basePath}/message/${sessionId}`;
+    const partDir = `${basePath}/part/${sessionId}`;
+
+    const sessionInfo = {
+      id: sessionId,
+      version: '1',
+      title: conv.title ?? null,
+      parentID: null,
+      directory: conv.workspace ?? null,
+      projectID: projectName,
+      time: {
+        created: conv.createdAt,
+        updated: conv.updatedAt ?? conv.createdAt,
+      },
+    };
+    files.push({
+      path: `${infoDir}/${sessionId}.json`,
+      content: JSON.stringify(sessionInfo, null, 2),
+    });
+
+    conv.messages.forEach((msg, idx) => {
+      const msgId = `msg_${idx + 1}`;
+      const created = msg.createdAt ?? conv.createdAt;
+      const messageInfo = {
+        id: msgId,
+        sessionID: sessionId,
+        role: msg.role,
+        time: {
+          created,
+        },
+        modelID: msg.model ?? null,
+        providerID: null,
+        agent: null,
+        tokens: msg.tokens ? { input: msg.tokens, output: 0 } : undefined,
+        cost: msg.costUsd ?? undefined,
+      };
+      files.push({
+        path: `${messageDir}/${msgId}.json`,
+        content: JSON.stringify(messageInfo, null, 2),
+      });
+
+      const partEntries: PartInfo[] = [];
+      if (msg.content) {
+        partEntries.push({
+          id: `prt_${idx + 1}_text`,
+          messageID: msgId,
+          sessionID: sessionId,
+          type: 'text',
+          text: msg.content,
+        });
+      }
+
+      if (msg.toolCalls) {
+        msg.toolCalls.forEach((tool, toolIdx) => {
+          partEntries.push({
+            id: `prt_${idx + 1}_tool_${toolIdx + 1}`,
+            messageID: msgId,
+            sessionID: sessionId,
+            type: 'tool',
+            tool: tool.toolName,
+            state: {
+              status: tool.status,
+              input: tool.input,
+              output: tool.output,
+            },
+          });
+        });
+      }
+
+      partEntries.forEach(part => {
+        files.push({
+          path: `${partDir}/${msgId}/${part.id}.json`,
+          content: JSON.stringify(part, null, 2),
+        });
+      });
+    });
+  }
+
+  return files;
+}
+
+function workspaceToProjectName(workspace?: string): string {
+  if (!workspace) return 'global';
+  return workspace.replace(/^\/+/, '').replace(/[\\/]/g, '-');
+}
+
+function randomId(prefix: string): string {
+  const uuid =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}${Math.random().toString(16).slice(2)}`;
+  return `${prefix}${uuid.replace(/-/g, '').slice(0, 12)}`;
 }
 
 // Run the adapter

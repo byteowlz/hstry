@@ -98,7 +98,17 @@ CREATE TABLE IF NOT EXISTS conversation_embeddings (
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
     content=messages,
-    content_rowid=rowid
+    content_rowid=rowid,
+    tokenize = 'porter',
+    prefix = '2 3 4'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_code_fts USING fts5(
+    content,
+    content=messages,
+    content_rowid=rowid,
+    tokenize = "unicode61 tokenchars '_./:'",
+    prefix = '2 3 4'
 );
 
 -- Triggers to keep FTS in sync
@@ -113,6 +123,21 @@ END;
 CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
     INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_code_ai AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_code_ad AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+    VALUES('delete', OLD.rowid, OLD.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_code_au AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+    VALUES('delete', OLD.rowid, OLD.content);
+    INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
 END;
 
 -- Indexes

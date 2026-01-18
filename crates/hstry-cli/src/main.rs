@@ -1,12 +1,14 @@
 //! hstry CLI - Universal AI chat history
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, Runtime};
 
+mod service;
+mod sync;
 #[derive(Debug, Parser)]
 #[command(
     name = "hstry",
@@ -45,6 +47,18 @@ enum Command {
         /// Maximum results
         #[arg(short, long, default_value = "20")]
         limit: i64,
+
+        /// Filter by source
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Filter by workspace
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Search mode (auto, natural, code)
+        #[arg(long, value_enum, default_value = "auto")]
+        mode: SearchModeArg,
     },
 
     /// List conversations
@@ -74,8 +88,17 @@ enum Command {
         command: SourceCommand,
     },
 
-    /// List available adapters
-    Adapters,
+    /// Manage adapters
+    Adapters {
+        #[command(subcommand)]
+        command: Option<AdapterCommand>,
+    },
+
+    /// Manage background service
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
 
     /// Scan for chat history sources
     Scan,
@@ -110,6 +133,54 @@ enum SourceCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum AdapterCommand {
+    /// List available adapters
+    List,
+
+    /// Add an adapter directory to the config
+    Add {
+        /// Path to the adapter directory
+        path: PathBuf,
+    },
+
+    /// Enable an adapter for imports
+    Enable {
+        /// Adapter name
+        name: String,
+    },
+
+    /// Disable an adapter for imports
+    Disable {
+        /// Adapter name
+        name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Enable the service in config
+    Enable,
+
+    /// Disable the service in config
+    Disable,
+
+    /// Start the background service
+    Start,
+
+    /// Run the service in the foreground
+    Run,
+
+    /// Restart the background service
+    Restart,
+
+    /// Stop the background service
+    Stop,
+
+    /// Show service status
+    Status,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -126,11 +197,8 @@ async fn main() -> Result<()> {
         .init();
 
     // Load config
-    let config = if let Some(path) = cli.config {
-        Config::load_from_path(&path)?
-    } else {
-        Config::load()?
-    };
+    let config_path = cli.config.unwrap_or_else(Config::default_config_path);
+    let config = Config::ensure_at(&config_path)?;
 
     // Open database
     let db = Database::open(&config.database).await?;
@@ -143,8 +211,14 @@ async fn main() -> Result<()> {
     let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
 
     match cli.command {
-        Command::Sync { source } => cmd_sync(&db, &runner, source).await,
-        Command::Search { query, limit } => cmd_search(&db, &query, limit).await,
+        Command::Sync { source } => cmd_sync(&db, &runner, &config, source).await,
+        Command::Search {
+            query,
+            limit,
+            source,
+            workspace,
+            mode,
+        } => cmd_search(&db, &query, limit, source, workspace, mode).await,
         Command::List {
             source,
             workspace,
@@ -152,8 +226,9 @@ async fn main() -> Result<()> {
         } => cmd_list(&db, source, workspace, limit).await,
         Command::Show { id } => cmd_show(&db, &id).await,
         Command::Source { command } => cmd_source(&db, &runner, command).await,
-        Command::Adapters => cmd_adapters(&runner),
-        Command::Scan => cmd_scan(&runner).await,
+        Command::Adapters { command } => cmd_adapters(&runner, &config, &config_path, command),
+        Command::Service { command } => service::cmd_service(&config_path, command).await,
+        Command::Scan => cmd_scan(&runner, &config).await,
         Command::Stats => cmd_stats(&db).await,
     }
 }
@@ -161,6 +236,7 @@ async fn main() -> Result<()> {
 async fn cmd_sync(
     db: &Database,
     runner: &AdapterRunner,
+    config: &Config,
     source_filter: Option<String>,
 ) -> Result<()> {
     let sources = db.list_sources().await?;
@@ -179,85 +255,35 @@ async fn cmd_sync(
 
         println!("Syncing {} ({})...", source.id, source.adapter);
 
-        let adapter_path = match runner.find_adapter(&source.adapter) {
-            Some(p) => p,
-            None => {
-                eprintln!("  Adapter '{}' not found, skipping", source.adapter);
-                continue;
-            }
-        };
+        if !config.adapter_enabled(&source.adapter) {
+            println!("  Adapter disabled in config, skipping");
+            continue;
+        }
 
-        let path = match &source.path {
-            Some(p) => p.clone(),
-            None => {
-                eprintln!("  No path configured, skipping");
-                continue;
-            }
-        };
-
-        match runner.parse(&adapter_path, &path, Default::default()).await {
-            Ok(conversations) => {
-                let mut new_count = 0;
-                for conv in conversations {
-                    let hstry_conv = hstry_core::models::Conversation {
-                        id: uuid::Uuid::new_v4(),
-                        source_id: source.id.clone(),
-                        external_id: conv.external_id,
-                        title: conv.title,
-                        created_at: chrono::DateTime::from_timestamp_millis(conv.created_at as i64)
-                            .unwrap_or_default()
-                            .with_timezone(&chrono::Utc),
-                        updated_at: conv.updated_at.and_then(|ts| {
-                            chrono::DateTime::from_timestamp_millis(ts as i64)
-                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                        }),
-                        model: conv.model,
-                        workspace: conv.workspace,
-                        tokens_in: conv.tokens_in.map(|t| t as i64),
-                        tokens_out: conv.tokens_out.map(|t| t as i64),
-                        cost_usd: conv.cost_usd,
-                        metadata: conv
-                            .metadata
-                            .map(|m| serde_json::to_value(m).unwrap_or_default())
-                            .unwrap_or_default(),
-                    };
-
-                    db.upsert_conversation(&hstry_conv).await?;
-
-                    for (idx, msg) in conv.messages.iter().enumerate() {
-                        let hstry_msg = hstry_core::models::Message {
-                            id: uuid::Uuid::new_v4(),
-                            conversation_id: hstry_conv.id,
-                            idx: idx as i32,
-                            role: hstry_core::models::MessageRole::from(msg.role.as_str()),
-                            content: msg.content.clone(),
-                            created_at: msg.created_at.and_then(|ts| {
-                                chrono::DateTime::from_timestamp_millis(ts as i64)
-                                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                            }),
-                            model: msg.model.clone(),
-                            tokens: msg.tokens.map(|t| t as i64),
-                            cost_usd: msg.cost_usd,
-                            metadata: serde_json::Value::Object(Default::default()),
-                        };
-                        db.insert_message(&hstry_msg).await?;
-                    }
-
-                    new_count += 1;
-                }
-                println!("  Synced {} conversations", new_count);
-            }
-            Err(e) => {
-                eprintln!("  Error: {}", e);
-            }
+        if let Err(err) = sync::sync_source(db, runner, &source).await {
+            eprintln!("  Error: {}", err);
         }
     }
 
     Ok(())
 }
 
-async fn cmd_search(db: &Database, query: &str, limit: i64) -> Result<()> {
-    let messages = db.search(query, limit).await?;
+async fn cmd_search(
+    db: &Database,
+    query: &str,
+    limit: i64,
+    source: Option<String>,
+    workspace: Option<String>,
+    mode: SearchModeArg,
+) -> Result<()> {
+    let opts = hstry_core::db::SearchOptions {
+        source_id: source,
+        workspace,
+        limit: Some(limit),
+        offset: None,
+        mode: mode.into(),
+    };
+    let messages = db.search(query, opts).await?;
 
     if messages.is_empty() {
         println!("No results found.");
@@ -265,15 +291,46 @@ async fn cmd_search(db: &Database, query: &str, limit: i64) -> Result<()> {
     }
 
     for msg in messages {
+        let source_path = msg
+            .source_path
+            .as_ref()
+            .map(|path| format!(" ({path})"))
+            .unwrap_or_default();
+        let external = msg
+            .external_id
+            .as_ref()
+            .map(|id| format!(" ext:{id}"))
+            .unwrap_or_default();
         println!(
-            "[{}] {}: {}",
+            "[{} #{} {} | {}{}{}] {}",
             msg.conversation_id,
+            msg.message_idx,
             msg.role,
-            truncate(&msg.content, 100)
+            msg.source_adapter,
+            source_path,
+            external,
+            truncate(&msg.snippet, 120)
         );
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum SearchModeArg {
+    Auto,
+    Natural,
+    Code,
+}
+
+impl From<SearchModeArg> for hstry_core::db::SearchMode {
+    fn from(value: SearchModeArg) -> Self {
+        match value {
+            SearchModeArg::Auto => hstry_core::db::SearchMode::Auto,
+            SearchModeArg::Natural => hstry_core::db::SearchMode::NaturalLanguage,
+            SearchModeArg::Code => hstry_core::db::SearchMode::Code,
+        }
+    }
 }
 
 async fn cmd_list(
@@ -394,30 +451,69 @@ async fn cmd_source(db: &Database, runner: &AdapterRunner, command: SourceComman
             }
         }
         SourceCommand::Remove { id } => {
-            println!("Removing source: {}", id);
-            // TODO: implement remove
+            db.remove_source(&id).await?;
+            println!("Removed source: {}", id);
         }
     }
     Ok(())
 }
 
-fn cmd_adapters(runner: &AdapterRunner) -> Result<()> {
-    let adapters = runner.list_adapters();
-    if adapters.is_empty() {
-        println!("No adapters found.");
-    } else {
-        println!("Available adapters:");
-        for adapter in adapters {
-            println!("  {}", adapter);
+fn cmd_adapters(
+    runner: &AdapterRunner,
+    config: &Config,
+    config_path: &Path,
+    command: Option<AdapterCommand>,
+) -> Result<()> {
+    let mut config = config.clone();
+    match command.unwrap_or(AdapterCommand::List) {
+        AdapterCommand::List => {
+            let adapters = runner.list_adapters();
+            if adapters.is_empty() {
+                println!("No adapters found.");
+            } else {
+                println!("Available adapters:");
+                for adapter in adapters {
+                    let status = if config.adapter_enabled(&adapter) {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    };
+                    println!("  {} ({})", adapter, status);
+                }
+            }
+        }
+        AdapterCommand::Add { path } => {
+            let expanded = Config::expand_path(&path.to_string_lossy());
+            if !config.adapter_paths.contains(&expanded) {
+                config.adapter_paths.push(expanded);
+                config.save_to_path(config_path)?;
+                println!("Added adapter path to config.");
+            } else {
+                println!("Adapter path already present in config.");
+            }
+        }
+        AdapterCommand::Enable { name } => {
+            upsert_adapter_config(&mut config, &name, true);
+            config.save_to_path(config_path)?;
+            println!("Enabled adapter: {}", name);
+        }
+        AdapterCommand::Disable { name } => {
+            upsert_adapter_config(&mut config, &name, false);
+            config.save_to_path(config_path)?;
+            println!("Disabled adapter: {}", name);
         }
     }
+
     Ok(())
 }
 
-async fn cmd_scan(runner: &AdapterRunner) -> Result<()> {
+async fn cmd_scan(runner: &AdapterRunner, config: &Config) -> Result<()> {
     println!("Scanning for chat history sources...\n");
 
     for adapter_name in runner.list_adapters() {
+        if !config.adapter_enabled(&adapter_name) {
+            continue;
+        }
         if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
             if let Ok(info) = runner.get_info(&adapter_path).await {
                 for default_path in &info.default_paths {
@@ -443,6 +539,17 @@ async fn cmd_scan(runner: &AdapterRunner) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn upsert_adapter_config(config: &mut Config, name: &str, enabled: bool) {
+    if let Some(entry) = config.adapters.iter_mut().find(|entry| entry.name == name) {
+        entry.enabled = enabled;
+    } else {
+        config.adapters.push(hstry_core::config::AdapterConfig {
+            name: name.to_string(),
+            enabled,
+        });
+    }
 }
 
 async fn cmd_stats(db: &Database) -> Result<()> {

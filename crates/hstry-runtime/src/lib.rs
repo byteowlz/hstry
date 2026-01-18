@@ -5,5 +5,11 @@
 
 pub mod runner;
 
+pub use runner::AdapterRequest;
+pub use runner::AdapterResponse;
 pub use runner::AdapterRunner;
+pub use runner::ExportConversation;
+pub use runner::ExportOptions;
+pub use runner::ExportResult;
+pub use runner::ParsedMessage;
 pub use runner::Runtime;

@@ -23,6 +23,15 @@ pub struct Config {
     /// Embedding endpoint for semantic search (e.g., mmry's /v1/embeddings).
     pub embedding_endpoint: Option<String>,
 
+    /// Workspace roots to scan recursively for session output.
+    pub workspaces: Vec<String>,
+
+    /// Adapter configuration overrides.
+    pub adapters: Vec<AdapterConfig>,
+
+    /// Service configuration.
+    pub service: ServiceConfig,
+
     /// Sources configuration.
     pub sources: Vec<SourceConfig>,
 }
@@ -64,6 +73,9 @@ impl Default for Config {
             adapter_paths,
             js_runtime: "auto".to_string(),
             embedding_endpoint: None,
+            workspaces: Vec::new(),
+            adapters: Vec::new(),
+            service: ServiceConfig::default(),
             sources: Vec::new(),
         }
     }
@@ -83,8 +95,9 @@ impl Config {
     /// Load configuration from a specific file.
     pub fn load_from_path(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)
+        let mut config: Config = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("Failed to parse config: {e}")))?;
+        config.expand_paths()?;
         Ok(config)
     }
 
@@ -96,14 +109,70 @@ impl Config {
             .join("config.toml")
     }
 
+    /// Save configuration to a specific file path.
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// Ensure config exists at the given path, creating defaults if missing.
+    pub fn ensure_at(path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::load_from_path(path)
+        } else {
+            let mut config = Self::default();
+            config.expand_paths()?;
+            config.save_to_path(path)?;
+            Ok(config)
+        }
+    }
+
     /// Expand a path, replacing ~ with home directory.
     pub fn expand_path(path: &str) -> PathBuf {
-        if path.starts_with("~/") {
-            if let Some(home) = dirs::home_dir() {
-                return home.join(&path[2..]);
-            }
+        let expanded = shellexpand::full(path)
+            .map(|v| v.into_owned())
+            .unwrap_or_else(|_| path.to_string());
+        PathBuf::from(expanded)
+    }
+
+    fn expand_paths(&mut self) -> Result<()> {
+        self.database = Self::expand_path(&self.database.to_string_lossy());
+        self.adapter_paths = self
+            .adapter_paths
+            .iter()
+            .map(|p| Self::expand_path(&p.to_string_lossy()))
+            .collect();
+        self.workspaces = self
+            .workspaces
+            .iter()
+            .map(|p| Self::expand_path(p).to_string_lossy().to_string())
+            .collect();
+        self.sources = self
+            .sources
+            .iter()
+            .map(|source| SourceConfig {
+                id: source.id.clone(),
+                adapter: source.adapter.clone(),
+                path: Self::expand_path(&source.path)
+                    .to_string_lossy()
+                    .to_string(),
+                auto_sync: source.auto_sync,
+            })
+            .collect();
+        Ok(())
+    }
+
+    /// Check whether a given adapter is enabled.
+    pub fn adapter_enabled(&self, name: &str) -> bool {
+        if let Some(entry) = self.adapters.iter().find(|adapter| adapter.name == name) {
+            entry.enabled
+        } else {
+            true
         }
-        PathBuf::from(path)
     }
 }
 
@@ -122,6 +191,37 @@ pub struct SourceConfig {
     /// Whether to auto-sync this source.
     #[serde(default = "default_true")]
     pub auto_sync: bool,
+}
+
+/// Configuration for a single adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdapterConfig {
+    /// Adapter name (e.g., "codex", "claude-web").
+    pub name: String,
+
+    /// Whether this adapter is enabled for imports.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Background service configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServiceConfig {
+    /// Whether the service should auto-run when started.
+    pub enabled: bool,
+
+    /// Poll interval in seconds (fallback when filesystem events are missed).
+    pub poll_interval_secs: u64,
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_secs: 30,
+        }
+    }
 }
 
 fn default_true() -> bool {

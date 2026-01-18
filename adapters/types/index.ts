@@ -67,6 +67,40 @@ export interface ParseOptions {
   includeAttachments?: boolean;
 }
 
+/** Export formats supported by adapters */
+export type ExportFormat =
+  | 'markdown'
+  | 'json'
+  | 'opencode'
+  | 'codex'
+  | 'claude-code'
+  | 'claude-web'
+  | 'chatgpt'
+  | 'gemini'
+  | 'aider';
+
+/** Options for exporting conversations */
+export interface ExportOptions {
+  format: ExportFormat;
+  pretty?: boolean;
+  includeTools?: boolean;
+  includeAttachments?: boolean;
+}
+
+export interface ExportFile {
+  path: string;
+  content: string;
+  encoding?: 'utf8' | 'base64';
+}
+
+export interface ExportResult {
+  format: ExportFormat;
+  content?: string;
+  files?: ExportFile[];
+  mimeType?: string;
+  metadata?: Record<string, unknown>;
+}
+
 /** Adapter metadata */
 export interface AdapterInfo {
   name: string;
@@ -91,19 +125,24 @@ export interface Adapter {
   
   /** Optional: parse only new conversations since timestamp */
   parseSince?(path: string, since: number): Promise<Conversation[]>;
+
+  /** Export conversations to a specific format */
+  export?(conversations: Conversation[], opts: ExportOptions): Promise<ExportResult>;
 }
 
 /** Request from hstry runtime */
 export type AdapterRequest =
   | { method: 'info' }
   | { method: 'detect'; params: { path: string } }
-  | { method: 'parse'; params: { path: string; opts?: ParseOptions } };
+  | { method: 'parse'; params: { path: string; opts?: ParseOptions } }
+  | { method: 'export'; params: { conversations: Conversation[]; opts: ExportOptions } };
 
 /** Response to hstry runtime */
 export type AdapterResponse =
   | AdapterInfo
   | number | null
   | Conversation[]
+  | ExportResult
   | { error: string };
 
 /** 
@@ -133,6 +172,13 @@ export function runAdapter(adapter: Adapter): void {
           break;
         case 'parse':
           response = await adapter.parse(request.params.path, request.params.opts);
+          break;
+        case 'export':
+          if (!adapter.export) {
+            response = { error: 'Adapter does not support export' };
+            break;
+          }
+          response = await adapter.export(request.params.conversations, request.params.opts);
           break;
         default:
           response = { error: `Unknown method: ${(request as any).method}` };

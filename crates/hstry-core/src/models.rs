@@ -150,3 +150,22 @@ pub struct MessageWithExtras {
     pub tool_calls: Vec<ToolCall>,
     pub attachments: Vec<Attachment>,
 }
+
+/// Search hit for message-level queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub message_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_idx: i32,
+    pub role: MessageRole,
+    pub content: String,
+    pub snippet: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub score: f32,
+    pub source_id: String,
+    pub external_id: Option<String>,
+    pub title: Option<String>,
+    pub workspace: Option<String>,
+    pub source_adapter: String,
+    pub source_path: Option<String>,
+}

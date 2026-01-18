@@ -147,6 +147,7 @@ pub fn get_service_status(config_path: &Path) -> Result<ServiceStatus> {
     })
 }
 
+#[derive(Debug, serde::Serialize)]
 pub struct ServiceStatus {
     pub enabled: bool,
     pub running: bool,
@@ -513,8 +514,17 @@ impl ServiceState {
             }
 
             println!("Syncing {} ({})...", source.id, source.adapter);
-            if let Err(err) = sync::sync_source(&self.db, &self.runner, &source).await {
-                eprintln!("  Error: {}", err);
+            match sync::sync_source(&self.db, &self.runner, &source).await {
+                Ok(result) => {
+                    if result.conversations > 0 {
+                        println!("  Synced {} conversations", result.conversations);
+                    } else {
+                        println!("  No new conversations");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("  Error: {}", err);
+                }
             }
         }
         Ok(())

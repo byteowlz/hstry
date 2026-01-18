@@ -1,74 +1,82 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/byteowlz/hstry/schemas/config.schema.json",
-  "title": "hstry configuration",
-  "description": "Configuration schema for hstry",
+  "title": "hstry config",
   "type": "object",
+  "additionalProperties": false,
   "properties": {
-    "$schema": {
+    "database": {
       "type": "string",
-      "description": "JSON Schema reference for editor support"
+      "description": "Path to the hstry database file."
     },
-    "profile": {
+    "adapter_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Directories to search for adapters."
+    },
+    "js_runtime": {
       "type": "string",
-      "description": "Active configuration profile",
-      "default": "default"
+      "enum": ["auto", "bun", "deno", "node"],
+      "description": "Preferred JavaScript runtime."
     },
-    "logging": {
-      "type": "object",
-      "description": "Logging configuration",
-      "properties": {
-        "level": {
-          "type": "string",
-          "description": "Log level",
-          "enum": ["error", "warn", "info", "debug", "trace"],
-          "default": "info"
-        },
-        "file": {
-          "type": "string",
-          "description": "Optional path for log file output. Supports ~ and environment variables."
-        }
-      },
-      "additionalProperties": false
+    "embedding_endpoint": {
+      "type": ["string", "null"],
+      "description": "Optional embedding endpoint."
     },
-    "runtime": {
-      "type": "object",
-      "description": "Runtime configuration",
-      "properties": {
-        "parallelism": {
-          "type": "integer",
-          "description": "Worker pool size. Defaults to logical CPU count.",
-          "minimum": 1
-        },
-        "timeout": {
-          "type": "integer",
-          "description": "Timeout in seconds for long-running operations",
-          "default": 60,
-          "minimum": 1
-        },
-        "fail_fast": {
-          "type": "boolean",
-          "description": "Stop on first error",
-          "default": true
-        }
-      },
-      "additionalProperties": false
+    "workspaces": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Workspace roots to scan recursively."
     },
-    "paths": {
-      "type": "object",
-      "description": "Custom paths for data and state",
-      "properties": {
-        "data_dir": {
-          "type": "string",
-          "description": "Directory for persistent data. Supports ~ and environment variables."
-        },
-        "state_dir": {
-          "type": "string",
-          "description": "Directory for state files. Supports ~ and environment variables."
-        }
-      },
-      "additionalProperties": false
+    "adapters": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/AdapterConfig" }
+    },
+    "service": {
+      "$ref": "#/definitions/ServiceConfig"
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/SourceConfig" }
     }
   },
-  "additionalProperties": false
+  "required": [
+    "database",
+    "adapter_paths",
+    "js_runtime",
+    "workspaces",
+    "adapters",
+    "service",
+    "sources"
+  ],
+  "definitions": {
+    "AdapterConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true }
+      },
+      "required": ["name"]
+    },
+    "ServiceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "poll_interval_secs": { "type": "integer", "minimum": 1, "default": 30 }
+      },
+      "required": ["enabled", "poll_interval_secs"]
+    },
+    "SourceConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "adapter": { "type": "string" },
+        "path": { "type": "string" },
+        "auto_sync": { "type": "boolean", "default": true }
+      },
+      "required": ["id", "adapter", "path"]
+    }
+  }
 }

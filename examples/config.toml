@@ -1,24 +1,49 @@
-"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
+# Example hstry configuration
 
-# Example configuration for hstry.
-# Copy this file to $XDG_CONFIG_HOME/hstry/config.toml and adjust as needed.
+# Path to the hstry database
+database = "~/.local/share/hstry/hstry.db"
 
-profile = "default"
+# Adapter directories to search for adapters
+adapter_paths = [
+  "~/.config/hstry/adapters",
+  "/usr/local/share/hstry/adapters"
+]
 
-[logging]
-# Valid levels: error, warn, info, debug, trace
-level = "info"
-# Optional path for log file output; supports ~ and environment variables.
-# file = "~/Library/Logs/hstry.log"
+# JavaScript runtime preference: "auto", "bun", "deno", or "node"
+js_runtime = "auto"
 
-[runtime]
-# Override the worker pool size; defaults to logical CPU count when unset.
-# parallelism = 8
-# Timeout in seconds for long-running operations.
-timeout = 60
-fail_fast = true
+# Optional embedding endpoint for semantic search
+# embedding_endpoint = "http://localhost:8000/v1/embeddings"
 
-[paths]
-# Uncomment to move persistent data/state to custom directories.
-# data_dir = "$XDG_DATA_HOME/hstry"
-# state_dir = "$XDG_STATE_HOME/hstry"
+# Workspace roots to scan recursively for session output
+workspaces = [
+  "~/code",
+  "~/work"
+]
+
+# Adapter overrides (enable/disable imports)
+[[adapters]]
+name = "codex"
+enabled = true
+
+[[adapters]]
+name = "claude-web"
+enabled = false
+
+# Service settings
+[service]
+enabled = false
+poll_interval_secs = 30
+
+# Explicit sources (auto-synced unless disabled)
+[[sources]]
+id = "codex-main"
+adapter = "codex"
+path = "~/.codex/sessions"
+auto_sync = true
+
+[[sources]]
+id = "claude-web"
+adapter = "claude-web"
+path = "~/Downloads/claude-export"
+auto_sync = false

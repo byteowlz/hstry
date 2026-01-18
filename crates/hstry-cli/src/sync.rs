@@ -5,7 +5,18 @@ use chrono::Utc;
 use hstry_core::{Database, models::Source};
 use hstry_runtime::{AdapterRunner, runner::ParseOptions};
 
-pub async fn sync_source(db: &Database, runner: &AdapterRunner, source: &Source) -> Result<()> {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SyncStats {
+    pub source_id: String,
+    pub conversations: usize,
+    pub messages: usize,
+}
+
+pub async fn sync_source(
+    db: &Database,
+    runner: &AdapterRunner,
+    source: &Source,
+) -> Result<SyncStats> {
     let adapter_path = runner
         .find_adapter(&source.adapter)
         .with_context(|| format!("Adapter '{}' not found", source.adapter))?;
@@ -25,6 +36,7 @@ pub async fn sync_source(db: &Database, runner: &AdapterRunner, source: &Source)
     let conversations = runner.parse(&adapter_path, path, parse_opts).await?;
 
     let mut new_count = 0usize;
+    let mut message_count = 0usize;
     for conv in conversations {
         let mut conv_id = uuid::Uuid::new_v4();
         if let Some(external_id) = conv.external_id.as_deref() {
@@ -74,20 +86,19 @@ pub async fn sync_source(db: &Database, runner: &AdapterRunner, source: &Source)
                 metadata: serde_json::Value::Object(Default::default()),
             };
             db.insert_message(&hstry_msg).await?;
+            message_count += 1;
         }
 
         new_count += 1;
-    }
-
-    if new_count > 0 {
-        println!("  Synced {} conversations", new_count);
-    } else {
-        println!("  No new conversations");
     }
 
     let mut updated = source.clone();
     updated.last_sync_at = Some(Utc::now());
     db.upsert_source(&updated).await?;
 
-    Ok(())
+    Ok(SyncStats {
+        source_id: source.id.clone(),
+        conversations: new_count,
+        messages: message_count,
+    })
 }

@@ -1,14 +1,100 @@
 //! hstry CLI - Universal AI chat history
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, Runtime};
+use serde::de::DeserializeOwned;
 
 mod service;
 mod sync;
+
+#[derive(Debug, serde::Deserialize)]
+struct SyncInput {
+    source: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SearchInput {
+    query: String,
+    limit: Option<i64>,
+    source: Option<String>,
+    workspace: Option<String>,
+    mode: Option<SearchModeArg>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ListInput {
+    source: Option<String>,
+    workspace: Option<String>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ShowInput {
+    id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SourceAddInput {
+    path: String,
+    adapter: Option<String>,
+    id: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SourceRemoveInput {
+    id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AdapterAddInput {
+    path: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AdapterToggleInput {
+    name: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct JsonResponse<T> {
+    ok: bool,
+    result: Option<T>,
+    error: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SyncSummary {
+    sources: Vec<sync::SyncStats>,
+    total_sources: usize,
+    total_conversations: usize,
+    total_messages: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct StatsSummary {
+    sources: i64,
+    conversations: i64,
+    messages: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ScanHit {
+    adapter: String,
+    display_name: String,
+    path: String,
+    confidence: f32,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AdapterStatus {
+    name: String,
+    enabled: bool,
+}
 #[derive(Debug, Parser)]
 #[command(
     name = "hstry",
@@ -21,6 +107,10 @@ struct Cli {
     /// Config file path
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+
+    /// Output JSON for programmatic use
+    #[arg(long, global = true)]
+    json: bool,
 
     /// Increase verbosity
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -37,6 +127,10 @@ enum Command {
         /// Only sync a specific source
         #[arg(long)]
         source: Option<String>,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Search across chat history
@@ -59,6 +153,10 @@ enum Command {
         /// Search mode (auto, natural, code)
         #[arg(long, value_enum, default_value = "auto")]
         mode: SearchModeArg,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// List conversations
@@ -74,12 +172,20 @@ enum Command {
         /// Maximum results
         #[arg(short, long, default_value = "50")]
         limit: i64,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Show a conversation
     Show {
         /// Conversation ID
         id: String,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Manage sources
@@ -121,6 +227,10 @@ enum SourceCommand {
         /// Custom source ID
         #[arg(long)]
         id: Option<String>,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// List configured sources
@@ -130,6 +240,10 @@ enum SourceCommand {
     Remove {
         /// Source ID
         id: String,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 }
 
@@ -142,18 +256,30 @@ enum AdapterCommand {
     Add {
         /// Path to the adapter directory
         path: PathBuf,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Enable an adapter for imports
     Enable {
         /// Adapter name
         name: String,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 
     /// Disable an adapter for imports
     Disable {
         /// Adapter name
         name: String,
+
+        /// Read JSON input from file or "-" for stdin
+        #[arg(long)]
+        input: Option<PathBuf>,
     },
 }
 
@@ -211,25 +337,84 @@ async fn main() -> Result<()> {
     let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
 
     match cli.command {
-        Command::Sync { source } => cmd_sync(&db, &runner, &config, source).await,
+        Command::Sync { source, input } => {
+            let input = read_input::<SyncInput>(input)?;
+            let source = input.and_then(|v| v.source).or(source);
+            cmd_sync(&db, &runner, &config, source, cli.json).await
+        }
         Command::Search {
             query,
             limit,
             source,
             workspace,
             mode,
-        } => cmd_search(&db, &query, limit, source, workspace, mode).await,
+            input,
+        } => {
+            let input = read_input::<SearchInput>(input)?;
+            let query = input.as_ref().map(|v| v.query.clone()).unwrap_or(query);
+            let limit = input.as_ref().and_then(|v| v.limit).unwrap_or(limit);
+            let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
+            let workspace = input
+                .as_ref()
+                .and_then(|v| v.workspace.clone())
+                .or(workspace);
+            let mode = input.as_ref().and_then(|v| v.mode).unwrap_or(mode);
+            cmd_search(&db, &query, limit, source, workspace, mode, cli.json).await
+        }
         Command::List {
             source,
             workspace,
             limit,
-        } => cmd_list(&db, source, workspace, limit).await,
-        Command::Show { id } => cmd_show(&db, &id).await,
-        Command::Source { command } => cmd_source(&db, &runner, command).await,
-        Command::Adapters { command } => cmd_adapters(&runner, &config, &config_path, command),
-        Command::Service { command } => service::cmd_service(&config_path, command).await,
-        Command::Scan => cmd_scan(&runner, &config).await,
-        Command::Stats => cmd_stats(&db).await,
+            input,
+        } => {
+            let input = read_input::<ListInput>(input)?;
+            let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
+            let workspace = input
+                .as_ref()
+                .and_then(|v| v.workspace.clone())
+                .or(workspace);
+            let limit = input.as_ref().and_then(|v| v.limit).unwrap_or(limit);
+            cmd_list(&db, source, workspace, limit, cli.json).await
+        }
+        Command::Show { id, input } => {
+            let input = read_input::<ShowInput>(input)?;
+            let id = input.as_ref().map(|v| v.id.clone()).unwrap_or(id);
+            cmd_show(&db, &id, cli.json).await
+        }
+        Command::Source { command } => cmd_source(&db, &runner, command, cli.json).await,
+        Command::Adapters { command } => {
+            cmd_adapters(&runner, &config, &config_path, command, cli.json)
+        }
+        Command::Service { command } => match command {
+            ServiceCommand::Status => {
+                let status = service::get_service_status(&config_path)?;
+                if cli.json {
+                    emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(status),
+                        error: None,
+                    })
+                } else {
+                    service::cmd_service(&config_path, ServiceCommand::Status).await
+                }
+            }
+            ServiceCommand::Run => service::cmd_service(&config_path, ServiceCommand::Run).await,
+            other => {
+                service::cmd_service(&config_path, other).await?;
+                if cli.json {
+                    let status = service::get_service_status(&config_path)?;
+                    emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(status),
+                        error: None,
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        },
+        Command::Scan => cmd_scan(&runner, &config, cli.json).await,
+        Command::Stats => cmd_stats(&db, cli.json).await,
     }
 }
 
@@ -238,14 +423,28 @@ async fn cmd_sync(
     runner: &AdapterRunner,
     config: &Config,
     source_filter: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let sources = db.list_sources().await?;
 
     if sources.is_empty() {
+        if json {
+            return emit_json(JsonResponse::<SyncSummary> {
+                ok: true,
+                result: Some(SyncSummary {
+                    sources: Vec::new(),
+                    total_sources: 0,
+                    total_conversations: 0,
+                    total_messages: 0,
+                }),
+                error: None,
+            });
+        }
         println!("No sources configured. Use 'hstry source add <path>' to add a source.");
         return Ok(());
     }
 
+    let mut stats = Vec::new();
     for source in sources {
         if let Some(ref filter) = source_filter {
             if &source.id != filter {
@@ -253,16 +452,50 @@ async fn cmd_sync(
             }
         }
 
-        println!("Syncing {} ({})...", source.id, source.adapter);
-
         if !config.adapter_enabled(&source.adapter) {
-            println!("  Adapter disabled in config, skipping");
+            if !json {
+                println!("Syncing {} ({})...", source.id, source.adapter);
+                println!("  Adapter disabled in config, skipping");
+            }
             continue;
         }
 
-        if let Err(err) = sync::sync_source(db, runner, &source).await {
-            eprintln!("  Error: {}", err);
+        if !json {
+            println!("Syncing {} ({})...", source.id, source.adapter);
         }
+        match sync::sync_source(db, runner, &source).await {
+            Ok(result) => {
+                if !json {
+                    if result.conversations > 0 {
+                        println!("  Synced {} conversations", result.conversations);
+                    } else {
+                        println!("  No new conversations");
+                    }
+                }
+                stats.push(result);
+            }
+            Err(err) => {
+                if !json {
+                    eprintln!("  Error: {}", err);
+                }
+            }
+        }
+    }
+
+    if json {
+        let total_sources = stats.len();
+        let total_conversations = stats.iter().map(|s| s.conversations).sum();
+        let total_messages = stats.iter().map(|s| s.messages).sum();
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(SyncSummary {
+                sources: stats,
+                total_sources,
+                total_conversations,
+                total_messages,
+            }),
+            error: None,
+        });
     }
 
     Ok(())
@@ -275,6 +508,7 @@ async fn cmd_search(
     source: Option<String>,
     workspace: Option<String>,
     mode: SearchModeArg,
+    json: bool,
 ) -> Result<()> {
     let opts = hstry_core::db::SearchOptions {
         source_id: source,
@@ -284,6 +518,14 @@ async fn cmd_search(
         mode: mode.into(),
     };
     let messages = db.search(query, opts).await?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(messages),
+            error: None,
+        });
+    }
 
     if messages.is_empty() {
         println!("No results found.");
@@ -316,7 +558,8 @@ async fn cmd_search(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 enum SearchModeArg {
     Auto,
     Natural,
@@ -338,6 +581,7 @@ async fn cmd_list(
     source: Option<String>,
     workspace: Option<String>,
     limit: i64,
+    json: bool,
 ) -> Result<()> {
     let opts = hstry_core::db::ListConversationsOptions {
         source_id: source,
@@ -347,6 +591,14 @@ async fn cmd_list(
     };
 
     let conversations = db.list_conversations(opts).await?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(conversations),
+            error: None,
+        });
+    }
 
     if conversations.is_empty() {
         println!("No conversations found.");
@@ -362,12 +614,32 @@ async fn cmd_list(
     Ok(())
 }
 
-async fn cmd_show(db: &Database, id: &str) -> Result<()> {
+async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(id)?;
     let conv = db
         .get_conversation(uuid)
         .await?
         .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+
+    let messages = db.get_messages(uuid).await?;
+    if json {
+        let details = hstry_core::models::ConversationWithMessages {
+            conversation: conv,
+            messages: messages
+                .into_iter()
+                .map(|message| hstry_core::models::MessageWithExtras {
+                    message,
+                    tool_calls: Vec::new(),
+                    attachments: Vec::new(),
+                })
+                .collect(),
+        };
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(details),
+            error: None,
+        });
+    }
 
     println!("Title: {}", conv.title.as_deref().unwrap_or("(untitled)"));
     println!("Created: {}", conv.created_at);
@@ -377,7 +649,6 @@ async fn cmd_show(db: &Database, id: &str) -> Result<()> {
     }
     println!();
 
-    let messages = db.get_messages(uuid).await?;
     for msg in messages {
         println!("--- {} ---", msg.role);
         println!("{}", msg.content);
@@ -387,10 +658,30 @@ async fn cmd_show(db: &Database, id: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_source(db: &Database, runner: &AdapterRunner, command: SourceCommand) -> Result<()> {
+async fn cmd_source(
+    db: &Database,
+    runner: &AdapterRunner,
+    command: SourceCommand,
+    json: bool,
+) -> Result<()> {
     match command {
-        SourceCommand::Add { path, adapter, id } => {
-            let path_str = path.to_string_lossy().to_string();
+        SourceCommand::Add {
+            path,
+            adapter,
+            id,
+            input,
+        } => {
+            let input = read_input::<SourceAddInput>(input)?;
+            let path_str = input
+                .as_ref()
+                .map(|v| v.path.clone())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            let (input_adapter, input_id) = input
+                .as_ref()
+                .map(|v| (v.adapter.clone(), v.id.clone()))
+                .unwrap_or((None, None));
+            let adapter = input_adapter.or(adapter);
+            let id = input_id.or(id);
 
             // Auto-detect adapter if not specified
             let adapter_name = if let Some(a) = adapter {
@@ -433,10 +724,24 @@ async fn cmd_source(db: &Database, runner: &AdapterRunner, command: SourceComman
             };
 
             db.upsert_source(&source).await?;
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(source),
+                    error: None,
+                });
+            }
             println!("Added source: {} ({})", source_id, adapter_name);
         }
         SourceCommand::List => {
             let sources = db.list_sources().await?;
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(sources),
+                    error: None,
+                });
+            }
             if sources.is_empty() {
                 println!("No sources configured.");
             } else {
@@ -450,8 +755,17 @@ async fn cmd_source(db: &Database, runner: &AdapterRunner, command: SourceComman
                 }
             }
         }
-        SourceCommand::Remove { id } => {
+        SourceCommand::Remove { id, input } => {
+            let input = read_input::<SourceRemoveInput>(input)?;
+            let id = input.as_ref().map(|v| v.id.clone()).unwrap_or(id);
             db.remove_source(&id).await?;
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({ "id": id })),
+                    error: None,
+                });
+            }
             println!("Removed source: {}", id);
         }
     }
@@ -463,43 +777,105 @@ fn cmd_adapters(
     config: &Config,
     config_path: &Path,
     command: Option<AdapterCommand>,
+    json: bool,
 ) -> Result<()> {
     let mut config = config.clone();
     match command.unwrap_or(AdapterCommand::List) {
         AdapterCommand::List => {
             let adapters = runner.list_adapters();
-            if adapters.is_empty() {
+            let statuses: Vec<AdapterStatus> = adapters
+                .into_iter()
+                .map(|adapter| AdapterStatus {
+                    enabled: config.adapter_enabled(&adapter),
+                    name: adapter,
+                })
+                .collect();
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(statuses),
+                    error: None,
+                });
+            }
+            if statuses.is_empty() {
                 println!("No adapters found.");
             } else {
                 println!("Available adapters:");
-                for adapter in adapters {
-                    let status = if config.adapter_enabled(&adapter) {
+                for adapter in statuses {
+                    let status = if adapter.enabled {
                         "enabled"
                     } else {
                         "disabled"
                     };
-                    println!("  {} ({})", adapter, status);
+                    println!("  {} ({})", adapter.name, status);
                 }
             }
         }
-        AdapterCommand::Add { path } => {
+        AdapterCommand::Add { path, input } => {
+            let input = read_input::<AdapterAddInput>(input)?;
+            let path = input
+                .as_ref()
+                .map(|v| PathBuf::from(&v.path))
+                .unwrap_or(path);
             let expanded = Config::expand_path(&path.to_string_lossy());
             if !config.adapter_paths.contains(&expanded) {
                 config.adapter_paths.push(expanded);
                 config.save_to_path(config_path)?;
+                if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({
+                            "adapter_paths": config.adapter_paths,
+                        })),
+                        error: None,
+                    });
+                }
                 println!("Added adapter path to config.");
             } else {
+                if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({
+                            "adapter_paths": config.adapter_paths,
+                        })),
+                        error: None,
+                    });
+                }
                 println!("Adapter path already present in config.");
             }
         }
-        AdapterCommand::Enable { name } => {
+        AdapterCommand::Enable { name, input } => {
+            let input = read_input::<AdapterToggleInput>(input)?;
+            let name = input.as_ref().map(|v| v.name.clone()).unwrap_or(name);
             upsert_adapter_config(&mut config, &name, true);
             config.save_to_path(config_path)?;
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(AdapterStatus {
+                        name,
+                        enabled: true,
+                    }),
+                    error: None,
+                });
+            }
             println!("Enabled adapter: {}", name);
         }
-        AdapterCommand::Disable { name } => {
+        AdapterCommand::Disable { name, input } => {
+            let input = read_input::<AdapterToggleInput>(input)?;
+            let name = input.as_ref().map(|v| v.name.clone()).unwrap_or(name);
             upsert_adapter_config(&mut config, &name, false);
             config.save_to_path(config_path)?;
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(AdapterStatus {
+                        name,
+                        enabled: false,
+                    }),
+                    error: None,
+                });
+            }
             println!("Disabled adapter: {}", name);
         }
     }
@@ -507,9 +883,12 @@ fn cmd_adapters(
     Ok(())
 }
 
-async fn cmd_scan(runner: &AdapterRunner, config: &Config) -> Result<()> {
-    println!("Scanning for chat history sources...\n");
+async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result<()> {
+    if !json {
+        println!("Scanning for chat history sources...\n");
+    }
 
+    let mut hits = Vec::new();
     for adapter_name in runner.list_adapters() {
         if !config.adapter_enabled(&adapter_name) {
             continue;
@@ -524,18 +903,35 @@ async fn cmd_scan(runner: &AdapterRunner, config: &Config) -> Result<()> {
                             .await
                         {
                             if confidence > 0.5 {
-                                println!(
-                                    "  {} {} (confidence: {:.0}%)",
-                                    info.display_name,
-                                    expanded.display(),
-                                    confidence * 100.0
-                                );
+                                if json {
+                                    hits.push(ScanHit {
+                                        adapter: adapter_name.clone(),
+                                        display_name: info.display_name.clone(),
+                                        path: expanded.to_string_lossy().to_string(),
+                                        confidence,
+                                    });
+                                } else {
+                                    println!(
+                                        "  {} {} (confidence: {:.0}%)",
+                                        info.display_name,
+                                        expanded.display(),
+                                        confidence * 100.0
+                                    );
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(hits),
+            error: None,
+        });
     }
 
     Ok(())
@@ -552,10 +948,57 @@ fn upsert_adapter_config(config: &mut Config, name: &str, enabled: bool) {
     }
 }
 
-async fn cmd_stats(db: &Database) -> Result<()> {
+fn read_input<T: DeserializeOwned>(input: Option<PathBuf>) -> Result<Option<T>> {
+    let Some(path) = input else {
+        return Ok(None);
+    };
+    let mut buf = String::new();
+    if path.as_os_str() == "-" {
+        std::io::stdin().read_to_string(&mut buf)?;
+    } else {
+        let mut file = std::fs::File::open(path)?;
+        file.read_to_string(&mut buf)?;
+    }
+    let value = serde_json::from_str(&buf)?;
+    Ok(Some(value))
+}
+
+fn emit_json<T: serde::Serialize>(value: T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn read_input_reads_json_file() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        writeln!(file, "{{\"id\":\"conv-1\"}}").expect("write");
+        let value: Option<ShowInput> = read_input(Some(file.path().to_path_buf())).expect("read");
+        let value = value.expect("value");
+        assert_eq!(value.id, "conv-1");
+    }
+}
+
+async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     let sources = db.list_sources().await?;
     let conv_count = db.count_conversations().await?;
     let msg_count = db.count_messages().await?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(StatsSummary {
+                sources: sources.len() as i64,
+                conversations: conv_count,
+                messages: msg_count,
+            }),
+            error: None,
+        });
+    }
 
     println!("Database Statistics");
     println!("-------------------");

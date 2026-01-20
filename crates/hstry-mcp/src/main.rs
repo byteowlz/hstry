@@ -10,7 +10,7 @@ use rmcp::{
     transport::io::stdio,
 };
 
-use rust_core::{AppConfig, AppPaths};
+use hstry_core::Config;
 
 fn main() {
     if let Err(err) = try_main() {
@@ -22,8 +22,11 @@ fn main() {
 #[tokio::main]
 async fn try_main() -> Result<()> {
     let cli = Cli::parse();
-    let paths = AppPaths::discover(cli.common.config)?;
-    let config = AppConfig::load(&paths, false)?;
+    let config_path = cli
+        .common
+        .config
+        .unwrap_or_else(Config::default_config_path);
+    let config = Config::ensure_at(&config_path)?;
 
     let server = McpServer::new(config);
     let transport = stdio();
@@ -52,11 +55,11 @@ struct CommonOpts {
 
 #[derive(Clone)]
 struct McpServer {
-    config: AppConfig,
+    config: Config,
 }
 
 impl McpServer {
-    fn new(config: AppConfig) -> Self {
+    fn new(config: Config) -> Self {
         Self { config }
     }
 }
@@ -64,9 +67,9 @@ impl McpServer {
 #[tool(tool_box)]
 impl McpServer {
     /// Get the current configuration profile
-    #[tool(description = "Returns the current configuration profile name")]
+    #[tool(description = "Returns the active configuration profile name")]
     async fn get_profile(&self) -> String {
-        self.config.profile.clone()
+        "default".to_string()
     }
 
     /// Echo a message back
@@ -75,10 +78,10 @@ impl McpServer {
         format!("Echo: {message}")
     }
 
-    /// Get runtime configuration
-    #[tool(description = "Returns the runtime configuration including parallelism and timeout")]
+    /// Get service configuration
+    #[tool(description = "Returns the service configuration (enabled and poll interval)")]
     async fn get_runtime_config(&self) -> String {
-        serde_json::to_string_pretty(&self.config.runtime).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string_pretty(&self.config.service).unwrap_or_else(|_| "{}".to_string())
     }
 }
 

@@ -1,10 +1,13 @@
 //! hstry CLI - Universal AI chat history
 
-use std::io::Read;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use hstry_core::models::{Conversation, Message, MessageRole, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, Runtime};
 use serde::de::DeserializeOwned;
@@ -211,6 +214,12 @@ enum Command {
 
     /// Show database statistics
     Stats,
+
+    /// Integrate with mmry
+    Mmry {
+        #[command(subcommand)]
+        command: MmryCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -305,6 +314,68 @@ enum ServiceCommand {
 
     /// Show service status
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum MmryCommand {
+    /// Extract memories into mmry
+    Extract {
+        /// mmry store name
+        #[arg(long, default_value = "hstry")]
+        store: String,
+
+        /// Path to mmry binary
+        #[arg(long, default_value = "mmry")]
+        mmry_bin: String,
+
+        /// mmry config file path
+        #[arg(long, value_name = "PATH")]
+        mmry_config: Option<PathBuf>,
+
+        /// Filter by source
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Filter by workspace
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Only include conversations created after this RFC3339 timestamp
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Limit number of conversations
+        #[arg(long)]
+        limit: Option<i64>,
+
+        /// Include only these message roles (defaults: user, assistant)
+        #[arg(long, value_enum)]
+        role: Vec<MmryRoleArg>,
+
+        /// Override memory type for all entries
+        #[arg(long, value_enum)]
+        memory_type: Option<MmryMemoryTypeArg>,
+
+        /// Print payload instead of invoking mmry
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum MmryRoleArg {
+    User,
+    Assistant,
+    System,
+    Tool,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum MmryMemoryTypeArg {
+    Episodic,
+    Semantic,
+    Procedural,
 }
 
 #[tokio::main]
@@ -415,6 +486,7 @@ async fn main() -> Result<()> {
         },
         Command::Scan => cmd_scan(&runner, &config, cli.json).await,
         Command::Stats => cmd_stats(&db, cli.json).await,
+        Command::Mmry { command } => cmd_mmry(&db, command, cli.json).await,
     }
 }
 
@@ -1007,6 +1079,369 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     println!("Messages:      {}", msg_count);
 
     Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MmryMemory {
+    content: String,
+    #[serde(rename = "memory_type")]
+    memory_type: String,
+    category: String,
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    importance: Option<i32>,
+    metadata: serde_json::Value,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MmryExtractSummary {
+    conversations: usize,
+    messages: usize,
+    memories: usize,
+    store: String,
+    mmry_bin: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MmryExtractResult {
+    summary: MmryExtractSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<Vec<MmryMemory>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mmry_stdout: Option<String>,
+}
+
+async fn cmd_mmry(db: &Database, command: MmryCommand, json: bool) -> Result<()> {
+    match command {
+        MmryCommand::Extract {
+            store,
+            mmry_bin,
+            mmry_config,
+            source,
+            workspace,
+            after,
+            limit,
+            role,
+            memory_type,
+            dry_run,
+        } => {
+            cmd_mmry_extract(
+                db,
+                &store,
+                &mmry_bin,
+                mmry_config.as_deref(),
+                source,
+                workspace,
+                after.as_deref(),
+                limit,
+                role,
+                memory_type,
+                dry_run,
+                json,
+            )
+            .await
+        }
+    }
+}
+
+async fn cmd_mmry_extract(
+    db: &Database,
+    store: &str,
+    mmry_bin: &str,
+    mmry_config: Option<&Path>,
+    source: Option<String>,
+    workspace: Option<String>,
+    after: Option<&str>,
+    limit: Option<i64>,
+    roles: Vec<MmryRoleArg>,
+    memory_type: Option<MmryMemoryTypeArg>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let sources = db.list_sources().await?;
+    let source_map: HashMap<String, Source> =
+        sources.into_iter().map(|s| (s.id.clone(), s)).collect();
+
+    let after = match after {
+        Some(raw) => Some(
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .map_err(|err| anyhow::anyhow!("Invalid --after timestamp: {err}"))?
+                .with_timezone(&chrono::Utc),
+        ),
+        None => None,
+    };
+
+    let convs = db
+        .list_conversations(hstry_core::db::ListConversationsOptions {
+            source_id: source.clone(),
+            workspace: workspace.clone(),
+            after,
+            limit,
+        })
+        .await?;
+
+    let active_roles = if roles.is_empty() {
+        vec![MmryRoleArg::User, MmryRoleArg::Assistant]
+    } else {
+        roles
+    };
+
+    let memory_type = memory_type.unwrap_or(MmryMemoryTypeArg::Episodic);
+    let memory_type_str = match memory_type {
+        MmryMemoryTypeArg::Episodic => "episodic",
+        MmryMemoryTypeArg::Semantic => "semantic",
+        MmryMemoryTypeArg::Procedural => "procedural",
+    };
+
+    let mut memories = Vec::new();
+    let mut message_count = 0usize;
+
+    for conv in &convs {
+        let messages = db.get_messages(conv.id).await?;
+        for msg in messages {
+            if !role_allowed(&active_roles, &msg.role) {
+                continue;
+            }
+            message_count += 1;
+            let source = source_map.get(&conv.source_id);
+            let category = conv
+                .workspace
+                .clone()
+                .unwrap_or_else(|| "hstry".to_string());
+            let mut tags = vec![
+                "hstry".to_string(),
+                format!("role:{}", msg.role),
+                format!("source:{}", conv.source_id),
+            ];
+            if let Some(adapter) = source.map(|s| s.adapter.as_str()) {
+                tags.push(format!("adapter:{adapter}"));
+            }
+            if let Some(workspace) = conv.workspace.as_deref() {
+                tags.push(format!("workspace:{workspace}"));
+            }
+
+            let metadata = build_mmry_metadata(conv, &msg, source);
+
+            memories.push(MmryMemory {
+                content: msg.content,
+                memory_type: memory_type_str.to_string(),
+                category,
+                tags,
+                importance: None,
+                metadata,
+            });
+        }
+    }
+
+    let summary = MmryExtractSummary {
+        conversations: convs.len(),
+        messages: message_count,
+        memories: memories.len(),
+        store: store.to_string(),
+        mmry_bin: mmry_bin.to_string(),
+    };
+
+    if memories.is_empty() {
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(MmryExtractResult {
+                    summary,
+                    payload: if dry_run { Some(memories) } else { None },
+                    mmry_stdout: None,
+                }),
+                error: None,
+            });
+        }
+        println!("No messages matched the filters.");
+        return Ok(());
+    }
+
+    if dry_run {
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(MmryExtractResult {
+                    summary,
+                    payload: Some(memories),
+                    mmry_stdout: None,
+                }),
+                error: None,
+            });
+        }
+        println!("{}", serde_json::to_string_pretty(&memories)?);
+        return Ok(());
+    }
+
+    let mmry_output = run_mmry_add(mmry_bin, mmry_config, store, &memories)?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(MmryExtractResult {
+                summary,
+                payload: None,
+                mmry_stdout: mmry_output,
+            }),
+            error: None,
+        });
+    }
+
+    println!(
+        "Sent {} memories from {} conversations to mmry store '{}'.",
+        summary.memories, summary.conversations, store
+    );
+
+    Ok(())
+}
+
+fn role_allowed(roles: &[MmryRoleArg], role: &MessageRole) -> bool {
+    roles.iter().any(|candidate| match (candidate, role) {
+        (MmryRoleArg::User, MessageRole::User) => true,
+        (MmryRoleArg::Assistant, MessageRole::Assistant) => true,
+        (MmryRoleArg::System, MessageRole::System) => true,
+        (MmryRoleArg::Tool, MessageRole::Tool) => true,
+        (MmryRoleArg::Other, MessageRole::Other) => true,
+        _ => false,
+    })
+}
+
+fn build_mmry_metadata(
+    conv: &Conversation,
+    msg: &Message,
+    source: Option<&Source>,
+) -> serde_json::Value {
+    let mut inner = serde_json::Map::new();
+    inner.insert(
+        "conversation_id".to_string(),
+        serde_json::Value::String(conv.id.to_string()),
+    );
+    inner.insert(
+        "message_id".to_string(),
+        serde_json::Value::String(msg.id.to_string()),
+    );
+    inner.insert(
+        "message_index".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(msg.idx as i64)),
+    );
+    inner.insert(
+        "role".to_string(),
+        serde_json::Value::String(msg.role.to_string()),
+    );
+    inner.insert(
+        "source_id".to_string(),
+        serde_json::Value::String(conv.source_id.clone()),
+    );
+    if let Some(source) = source {
+        inner.insert(
+            "adapter".to_string(),
+            serde_json::Value::String(source.adapter.clone()),
+        );
+        if let Some(path) = source.path.as_ref() {
+            inner.insert(
+                "source_path".to_string(),
+                serde_json::Value::String(path.clone()),
+            );
+        }
+    }
+    if let Some(external_id) = conv.external_id.as_ref() {
+        inner.insert(
+            "external_id".to_string(),
+            serde_json::Value::String(external_id.clone()),
+        );
+    }
+    if let Some(title) = conv.title.as_ref() {
+        inner.insert(
+            "title".to_string(),
+            serde_json::Value::String(title.clone()),
+        );
+    }
+    if let Some(workspace) = conv.workspace.as_ref() {
+        inner.insert(
+            "workspace".to_string(),
+            serde_json::Value::String(workspace.clone()),
+        );
+    }
+    inner.insert(
+        "conversation_created_at".to_string(),
+        serde_json::Value::String(conv.created_at.to_rfc3339()),
+    );
+    if let Some(updated) = conv.updated_at.as_ref() {
+        inner.insert(
+            "conversation_updated_at".to_string(),
+            serde_json::Value::String(updated.to_rfc3339()),
+        );
+    }
+    if let Some(created) = msg.created_at.as_ref() {
+        inner.insert(
+            "message_created_at".to_string(),
+            serde_json::Value::String(created.to_rfc3339()),
+        );
+    }
+    if let Some(model) = msg.model.as_ref() {
+        inner.insert(
+            "message_model".to_string(),
+            serde_json::Value::String(model.clone()),
+        );
+    }
+    if let Some(tokens) = msg.tokens {
+        inner.insert(
+            "message_tokens".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(tokens)),
+        );
+    }
+    if let Some(cost) = msg.cost_usd {
+        if let Some(value) = serde_json::Number::from_f64(cost) {
+            inner.insert(
+                "message_cost_usd".to_string(),
+                serde_json::Value::Number(value),
+            );
+        }
+    }
+
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("hstry".to_string(), serde_json::Value::Object(inner));
+    serde_json::Value::Object(metadata)
+}
+
+fn run_mmry_add(
+    mmry_bin: &str,
+    mmry_config: Option<&Path>,
+    store: &str,
+    memories: &[MmryMemory],
+) -> Result<Option<String>> {
+    let mut command = ProcessCommand::new(mmry_bin);
+    command.arg("add").arg("-").arg("--store").arg(store);
+    if let Some(config_path) = mmry_config {
+        command.arg("--config").arg(config_path);
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command.spawn()?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("mmry stdin missing"))?;
+        let payload = serde_json::to_vec(memories)?;
+        stdin.write_all(&payload)?;
+    }
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("mmry add failed: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(stdout))
+    }
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

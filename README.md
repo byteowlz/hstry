@@ -1,141 +1,145 @@
-# Rust Workspace Template
+# hstry
 
-A batteries-included Rust workspace template with CLI, TUI, MCP server, and HTTP API crates sharing a common core library.
+Universal AI chat history database. Aggregates conversations from multiple AI tools (ChatGPT, Claude, Gemini, Cursor, Claude Code, etc.) into a single searchable SQLite database.
+
+## Features
+
+- Import chat history from multiple sources via pluggable TypeScript adapters
+- Full-text search with separate indexes for natural language and code
+- Filter by source, workspace, or time range
+- Background service for automatic syncing
+- Export memories to mmry for semantic search
+- JSON output for scripting and MCP integration
+
+## Installation
+
+```bash
+cargo install --path crates/hstry-cli
+```
+
+Or build from source:
+
+```bash
+cargo build --release
+```
 
 ## Quick Start
 
-Install the latest stable Rust toolchain (`rustup default stable`), then:
-
 ```bash
-cargo build
-cargo test
+# Scan for supported chat history sources
+hstry scan
+
+# Add a source (auto-detects adapter)
+hstry source add ~/.codex/sessions
+
+# Sync all sources
+hstry sync
+
+# Search your history
+hstry search "how to parse JSON"
+
+# List recent conversations
+hstry list --limit 10
+
+# View a specific conversation
+hstry show <conversation-id>
 ```
 
-Run individual binaries:
+## Commands
 
-```bash
-cargo run -p hstry-cli -- run
-cargo run -p hstry-tui
-cargo run -p hstry-api -- --port 3000
-cargo run -p hstry-mcp
+| Command | Description |
+|---------|-------------|
+| `scan` | Detect chat history sources on the system |
+| `sync` | Import conversations from all configured sources |
+| `search <query>` | Full-text search across all messages |
+| `list` | List conversations with optional filters |
+| `show <id>` | Display a conversation with all messages |
+| `source add/list/remove` | Manage import sources |
+| `adapters` | List, enable, or disable adapters |
+| `service start/stop/status` | Control background sync service |
+| `stats` | Show database statistics |
+| `mmry extract` | Export memories to mmry |
+
+## Search Modes
+
+The search command auto-detects query type:
+
+- **Natural language**: Uses porter stemming for English text
+- **Code**: Preserves underscores, dots, and path separators
+
+Force a mode with `--mode natural` or `--mode code`.
+
+## Configuration
+
+Default config: `~/.config/hstry/config.toml`
+
+```toml
+database = "~/.local/share/hstry/hstry.db"
+adapter_paths = ["~/.config/hstry/adapters"]
+js_runtime = "auto"  # bun, deno, or node
+
+[[adapters]]
+name = "codex"
+enabled = true
+
+[service]
+enabled = false
+poll_interval_secs = 30
 ```
 
-Scaffold a new project:
+See `examples/config.toml` for all options.
 
-```bash
-scripts/new-cli.sh my-app
-```
+## Supported Sources
 
-```powershell
-pwsh scripts/new-cli.ps1 my-app
-```
+### Coding Agents (automatic local storage)
 
-This creates a new workspace with all crates renamed (e.g., `my-app-core`, `my-app-cli`, etc.).
+| Adapter | Default Path | Description |
+|---------|--------------|-------------|
+| `claude-code` | `~/.claude/projects` | Claude Code CLI |
+| `codex` | `~/.codex/sessions` | OpenAI Codex CLI |
+| `opencode` | `~/.local/share/opencode` | OpenCode |
+| `pi` | `~/.pi/agent/sessions` | Pi coding agent |
+| `aider` | Project directories | Aider (finds `.aider.chat.history.md`) |
+
+### Web Exports (manual download)
+
+| Adapter | Source | Export Location |
+|---------|--------|-----------------|
+| `chatgpt` | ChatGPT | Settings > Data controls > Export |
+| `claude-web` | Claude.ai | Settings > Export data |
+| `gemini` | Gemini | google.com/takeout > Gemini Apps |
+
+Point these adapters at the extracted export directory (e.g., `~/Downloads/chatgpt-export`).
+
+## Adapters
+
+Adapters are TypeScript modules that parse chat history from specific tools. Each adapter implements:
+
+- `detect(path)` - Check if a path contains valid data
+- `parse(path, options)` - Extract conversations and messages
+
+Add custom adapters by placing them in `adapter_paths`.
 
 ## Workspace Structure
 
 ```
 crates/
-  hstry-core/    # Shared library: config, paths, error types
-  hstry-cli/     # Command-line interface
-  hstry-tui/     # Terminal user interface (ratatui)
-  hstry-mcp/     # Model Context Protocol server
-  hstry-api/     # HTTP API server (axum)
-examples/
-  config.toml   # Example configuration
-scripts/
-  new-cli.sh    # Unix scaffolding script
-  new-cli.ps1   # PowerShell scaffolding script
+  hstry-core/     # Database, config, models
+  hstry-runtime/  # TypeScript adapter execution
+  hstry-cli/      # Command-line interface
+  hstry-tui/      # Terminal UI (ratatui)
+  hstry-mcp/      # MCP server
+  hstry-api/      # HTTP API (axum)
 ```
-
-## Crates
-
-### hstry-core
-
-Shared library providing:
-- `AppConfig` - Configuration loading via `config` crate
-- `AppPaths` - XDG-compliant path resolution
-- Error types and common utilities
-
-### hstry-cli
-
-Command-line interface with:
-- Subcommands: `run`, `init`, `config`, `completions`
-- Global flags: `-q`, `-v`, `--debug`, `--trace`, `--json`, `--yaml`, `--no-color`, `--dry-run`, `--yes`
-- Shell completion generation
-
-```bash
-cargo run -p hstry-cli -- --help
-cargo run -p hstry-cli -- completions bash > target/hstry-cli.bash
-```
-
-### hstry-tui
-
-Terminal UI built with ratatui featuring:
-- Three-pane layout (navigation, list, details)
-- Vim-style navigation (j/k/h/l)
-- Modal help system
-
-```bash
-cargo run -p hstry-tui
-```
-
-### hstry-mcp
-
-MCP (Model Context Protocol) server exposing tools:
-- `get_profile` - Current configuration profile
-- `echo` - Echo messages
-- `get_runtime_config` - Runtime configuration
-
-```bash
-cargo run -p hstry-mcp
-```
-
-### hstry-api
-
-HTTP API server (axum) with endpoints:
-- `GET /` - Service info
-- `GET /health` - Health check
-- `GET /config` - Current configuration
-
-```bash
-cargo run -p hstry-api -- --port 3000
-curl http://localhost:3000/health
-```
-
-## Configuration
-
-Default config path: `$XDG_CONFIG_HOME/rust-workspace/config.toml`
-
-Override with `--config <path>` or environment variables using the `RUST_WORKSPACE__` prefix:
-
-```bash
-RUST_WORKSPACE__LOGGING__LEVEL=debug cargo run -p hstry-cli -- run
-```
-
-See `examples/config.toml` for all options.
 
 ## Development
 
 ```bash
-cargo fmt                                    # Format code
-cargo clippy --all-targets --all-features   # Lint
-cargo test                                   # Run tests
-cargo build --release                        # Release build
+just check-all  # Format, lint, and test
+just test       # Run tests only
+just clippy     # Lint only
 ```
 
-## Scaffolding
+## License
 
-The `scripts/new-cli.sh` (Unix) and `scripts/new-cli.ps1` (PowerShell) scripts create a new project from this template:
-
-```bash
-scripts/new-cli.sh my-app --path ~/projects/my-app
-```
-
-This will:
-1. Copy the template to the destination
-2. Rename all crates from `rust-*` to `my-app-*`
-3. Update all references in Cargo.toml, source files, and documentation
-4. Rename crate directories accordingly
-
-Requirements: `python3` for the shell script, PowerShell 7 for the Windows script.
+MIT

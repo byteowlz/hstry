@@ -1,13 +1,11 @@
 # Example hstry configuration
+# Schema: https://raw.githubusercontent.com/byteowlz/schemas/main/hstry/hstry.config.schema.json
 
 # Path to the hstry database
 database = "~/.local/share/hstry/hstry.db"
 
 # Adapter directories to search for adapters
-adapter_paths = [
-  "~/.config/hstry/adapters",
-  "/usr/local/share/hstry/adapters"
-]
+adapter_paths = ["~/.config/hstry/adapters", "/usr/local/share/hstry/adapters"]
 
 # JavaScript runtime preference: "auto", "bun", "deno", or "node"
 js_runtime = "auto"
@@ -16,10 +14,7 @@ js_runtime = "auto"
 # embedding_endpoint = "http://localhost:8000/v1/embeddings"
 
 # Workspace roots to scan recursively for session output
-workspaces = [
-  "~/code",
-  "~/work"
-]
+workspaces = ["~/code", "~/work"]
 
 # Adapter overrides (enable/disable imports)
 [[adapters]]
@@ -35,15 +30,84 @@ enabled = false
 enabled = false
 poll_interval_secs = 30
 
-# Explicit sources (auto-synced unless disabled)
+# =============================================================================
+# Source Examples
+# =============================================================================
+# Each source points an adapter at a specific data location.
+# Use `hstry scan` to auto-detect available sources.
+#
+# Default storage locations by adapter:
+#
+# | Adapter     | Default Path                           | Notes                           |
+# |-------------|----------------------------------------|---------------------------------|
+# | claude-code | ~/.claude/projects                     | Claude Code CLI sessions        |
+# | codex       | ~/.codex/sessions                      | OpenAI Codex CLI sessions       |
+# | opencode    | ~/.local/share/opencode                | OpenCode sessions               |
+# | pi          | ~/.pi/agent/sessions                   | Pi coding agent sessions        |
+# | aider       | ~/projects, ~/work, ~/src              | .aider.chat.history.md files    |
+# | chatgpt     | ~/Downloads                            | ChatGPT export (conversations.json) |
+# | claude-web  | ~/Downloads                            | Claude.ai export JSON           |
+# | gemini      | ~/Downloads                            | Gemini/AI Studio export JSON    |
+
+# -----------------------------------------------------------------------------
+# Coding Agents (continuous local storage)
+# -----------------------------------------------------------------------------
+
 [[sources]]
-id = "codex-main"
+id = "claude-code"
+adapter = "claude-code"
+path = "~/.claude/projects"
+auto_sync = true
+
+[[sources]]
+id = "codex"
 adapter = "codex"
 path = "~/.codex/sessions"
 auto_sync = true
 
 [[sources]]
-id = "claude-web"
+id = "opencode"
+adapter = "opencode"
+path = "~/.local/share/opencode"
+auto_sync = true
+
+[[sources]]
+id = "pi"
+adapter = "pi"
+path = "~/.pi/agent/sessions"
+auto_sync = true
+
+# Aider stores history in each project directory
+# Point to your projects root and it will find .aider.chat.history.md files
+[[sources]]
+id = "aider-projects"
+adapter = "aider"
+path = "~/projects"
+auto_sync = true
+
+# -----------------------------------------------------------------------------
+# Web Exports (manual download required)
+# -----------------------------------------------------------------------------
+# These require you to export your data from the web interface first.
+
+# ChatGPT: Settings > Data controls > Export data
+# Extracts conversations.json from the downloaded zip
+[[sources]]
+id = "chatgpt-export"
+adapter = "chatgpt"
+path = "~/Downloads/chatgpt-export"
+auto_sync = false
+
+# Claude.ai: Settings > Export data
+[[sources]]
+id = "claude-web-export"
 adapter = "claude-web"
 path = "~/Downloads/claude-export"
+auto_sync = false
+
+# Gemini: google.com/takeout (select Gemini Apps)
+[[sources]]
+id = "gemini-export"
+adapter = "gemini"
+path = "~/Downloads/gemini-export"
 auto_sync = false

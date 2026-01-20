@@ -77,7 +77,8 @@ export type ExportFormat =
   | 'claude-web'
   | 'chatgpt'
   | 'gemini'
-  | 'aider';
+  | 'aider'
+  | 'pi';
 
 /** Options for exporting conversations */
 export interface ExportOptions {

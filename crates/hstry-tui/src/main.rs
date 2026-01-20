@@ -18,7 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use rust_core::{AppConfig, AppPaths};
+use hstry_core::Config;
 
 fn main() {
     if let Err(err) = try_main() {
@@ -29,8 +29,11 @@ fn main() {
 
 fn try_main() -> Result<()> {
     let cli = Cli::parse();
-    let paths = AppPaths::discover(cli.common.config)?;
-    let config = AppConfig::load(&paths, false)?;
+    let config_path = cli
+        .common
+        .config
+        .unwrap_or_else(Config::default_config_path);
+    let config = Config::ensure_at(&config_path)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -73,7 +76,7 @@ enum AppMode {
 }
 
 struct App {
-    config: AppConfig,
+    config: Config,
     mode: AppMode,
     selected_index: usize,
     items: Vec<String>,
@@ -81,7 +84,7 @@ struct App {
 }
 
 impl App {
-    fn new(config: AppConfig) -> Self {
+    fn new(config: Config) -> Self {
         Self {
             config,
             mode: AppMode::Normal,
@@ -204,8 +207,9 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default().title(" Details ").borders(Borders::ALL);
     let content = if app.selected_index < app.items.len() {
         format!(
-            "Selected: {}\nProfile: {}",
-            app.items[app.selected_index], app.config.profile
+            "Selected: {}\nDatabase: {}",
+            app.items[app.selected_index],
+            app.config.database.display()
         )
     } else {
         "No item selected".to_string()

@@ -11,7 +11,7 @@ use serde::Serialize;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use rust_core::{AppConfig, AppPaths};
+use hstry_core::Config;
 
 fn main() {
     if let Err(err) = try_main() {
@@ -25,8 +25,11 @@ async fn try_main() -> Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
-    let paths = AppPaths::discover(cli.common.config)?;
-    let config = AppConfig::load(&paths, false)?;
+    let config_path = cli
+        .common
+        .config
+        .unwrap_or_else(Config::default_config_path);
+    let config = Config::ensure_at(&config_path)?;
 
     let state = AppState {
         config: Arc::new(config),
@@ -74,7 +77,7 @@ struct CommonOpts {
 
 #[derive(Clone)]
 struct AppState {
-    config: Arc<AppConfig>,
+    config: Arc<Config>,
 }
 
 #[derive(Serialize)]
@@ -99,6 +102,6 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
-async fn get_config(State(state): State<AppState>) -> Result<Json<AppConfig>, StatusCode> {
+async fn get_config(State(state): State<AppState>) -> Result<Json<Config>, StatusCode> {
     Ok(Json((*state.config).clone()))
 }

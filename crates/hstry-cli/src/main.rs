@@ -1114,8 +1114,9 @@ async fn cmd_search(
             .unwrap_or_default();
         println!("Date: {}{}", created, updated);
 
-        // Snippet with search highlights
-        println!("Snippet: {}", truncate(&msg.snippet, 200));
+        // Snippet with search highlights (colorized for TTY)
+        let snippet = truncate(&msg.snippet, 200);
+        println!("Snippet: {}", colorize_highlights(&snippet));
     }
     // Final separator
     if count > 0 {
@@ -2375,4 +2376,25 @@ fn truncate(s: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &s[..max_len])
     }
+}
+
+/// Convert bracket-highlighted text `[match]` to ANSI color codes for TTY output.
+/// Falls back to brackets if not a TTY or NO_COLOR is set.
+fn colorize_highlights(s: &str) -> String {
+    use std::io::IsTerminal;
+
+    // Check if we should use colors
+    let use_color = std::io::stdout().is_terminal()
+        && std::env::var("NO_COLOR").is_err()
+        && std::env::var("FORCE_COLOR").map_or(true, |v| v != "0");
+
+    if !use_color {
+        return s.to_string();
+    }
+
+    // ANSI codes: bold yellow for highlights
+    const HIGHLIGHT_START: &str = "\x1b[1;33m"; // Bold yellow
+    const HIGHLIGHT_END: &str = "\x1b[0m"; // Reset
+
+    s.replace('[', HIGHLIGHT_START).replace(']', HIGHLIGHT_END)
 }

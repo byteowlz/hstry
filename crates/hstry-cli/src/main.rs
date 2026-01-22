@@ -7,10 +7,11 @@ use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use hstry_core::config::{AdapterRepo, AdapterRepoSource};
 use hstry_core::models::{Conversation, Message, MessageRole, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 
 mod service;
 mod sync;
@@ -134,6 +135,24 @@ enum Command {
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Import chat history from a file or directory with auto-detection
+    Import {
+        /// Path to file or directory to import
+        path: PathBuf,
+
+        /// Force a specific adapter (skip auto-detection)
+        #[arg(short, long)]
+        adapter: Option<String>,
+
+        /// Custom source ID (defaults to adapter name)
+        #[arg(long)]
+        source_id: Option<String>,
+
+        /// Only show what would be imported (don't write to database)
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Search across chat history
@@ -317,6 +336,90 @@ enum AdapterCommand {
         #[arg(long)]
         input: Option<PathBuf>,
     },
+
+    /// Update/download adapters from configured repositories
+    Update {
+        /// Specific adapter to update (updates all if not specified)
+        #[arg(short, long)]
+        adapter: Option<String>,
+
+        /// Only update from specific repo
+        #[arg(short, long)]
+        repo: Option<String>,
+
+        /// Force update even if already up to date
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Manage adapter repositories
+    Repo {
+        #[command(subcommand)]
+        command: AdapterRepoCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdapterRepoCommand {
+    /// List configured adapter repositories
+    List,
+
+    /// Add a git repository (GitHub, GitLab, Gitea, self-hosted, etc.)
+    AddGit {
+        /// Repository name (e.g., "community")
+        name: String,
+
+        /// Git repository URL (HTTPS or SSH)
+        url: String,
+
+        /// Branch, tag, or commit to use
+        #[arg(short = 'r', long, default_value = "main")]
+        git_ref: String,
+
+        /// Path within repo where adapters are located
+        #[arg(short, long, default_value = "adapters")]
+        path: String,
+    },
+
+    /// Add an archive URL (tarball or zip)
+    AddArchive {
+        /// Repository name
+        name: String,
+
+        /// URL to the archive (.tar.gz, .zip, .tgz)
+        url: String,
+
+        /// Path within archive where adapters are located
+        #[arg(short, long, default_value = "adapters")]
+        path: String,
+    },
+
+    /// Add a local filesystem path
+    AddLocal {
+        /// Repository name
+        name: String,
+
+        /// Path to adapters directory
+        path: PathBuf,
+    },
+
+    /// Remove an adapter repository
+    Remove {
+        /// Repository name
+        name: String,
+    },
+
+    /// Enable an adapter repository
+    Enable {
+        /// Repository name
+        name: String,
+    },
+
+    /// Disable an adapter repository
+    Disable {
+        /// Repository name
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -440,6 +543,17 @@ async fn main() -> Result<()> {
             let input = read_input::<SyncInput>(input)?;
             let source = input.and_then(|v| v.source).or(source);
             cmd_sync(&db, &runner, &config, source, cli.json).await
+        }
+        Command::Import {
+            path,
+            adapter,
+            source_id,
+            dry_run,
+        } => {
+            cmd_import(
+                &db, &runner, &config, path, adapter, source_id, dry_run, cli.json,
+            )
+            .await
         }
         Command::Search {
             query,
@@ -648,6 +762,297 @@ async fn cmd_sync(
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+struct ImportResult {
+    adapter: String,
+    confidence: f32,
+    source_id: String,
+    conversations: usize,
+    messages: usize,
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DetectionResult {
+    adapter: String,
+    confidence: f32,
+}
+
+async fn cmd_import(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    path: PathBuf,
+    adapter: Option<String>,
+    source_id: Option<String>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let path_str = path.to_string_lossy().to_string();
+    let expanded = Config::expand_path(&path_str);
+
+    if !expanded.exists() {
+        if json {
+            return emit_json(JsonResponse::<()> {
+                ok: false,
+                result: None,
+                error: Some(format!("Path not found: {}", expanded.display())),
+            });
+        }
+        anyhow::bail!("Path not found: {}", expanded.display());
+    }
+
+    // Detect or use specified adapter
+    let (adapter_name, confidence) = if let Some(name) = adapter {
+        // Verify adapter exists
+        if runner.find_adapter(&name).is_none() {
+            if json {
+                return emit_json(JsonResponse::<()> {
+                    ok: false,
+                    result: None,
+                    error: Some(format!("Adapter '{}' not found", name)),
+                });
+            }
+            anyhow::bail!("Adapter '{}' not found", name);
+        }
+        (name, 1.0f32)
+    } else {
+        // Auto-detect adapter
+        if !json {
+            println!("Detecting format for {}...", expanded.display());
+        }
+
+        let mut best_match: Option<(String, f32)> = None;
+        let mut all_matches: Vec<DetectionResult> = Vec::new();
+
+        for adapter_name in runner.list_adapters() {
+            if !config.adapter_enabled(&adapter_name) {
+                continue;
+            }
+
+            if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
+                if let Ok(Some(conf)) = runner
+                    .detect(&adapter_path, &expanded.to_string_lossy())
+                    .await
+                {
+                    if conf > 0.3 {
+                        all_matches.push(DetectionResult {
+                            adapter: adapter_name.clone(),
+                            confidence: conf,
+                        });
+
+                        if best_match.is_none() || conf > best_match.as_ref().unwrap().1 {
+                            best_match = Some((adapter_name, conf));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by confidence descending
+        all_matches.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if !json && all_matches.len() > 1 {
+            println!("Detected formats:");
+            for m in &all_matches {
+                println!("  {} ({:.0}%)", m.adapter, m.confidence * 100.0);
+            }
+        }
+
+        match best_match {
+            Some((name, conf)) => {
+                if !json {
+                    println!("Using adapter: {} (confidence: {:.0}%)", name, conf * 100.0);
+                }
+                (name, conf)
+            }
+            None => {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(
+                            "Could not detect format. Use --adapter to specify.".to_string(),
+                        ),
+                    });
+                }
+                anyhow::bail!(
+                    "Could not detect format for {}. Use --adapter to specify.",
+                    expanded.display()
+                );
+            }
+        }
+    };
+
+    let adapter_path = runner.find_adapter(&adapter_name).unwrap();
+    let source_id = source_id.unwrap_or_else(|| format!("import-{}", adapter_name));
+
+    // Parse conversations
+    let parse_opts = hstry_runtime::runner::ParseOptions {
+        since: None,
+        limit: None,
+        include_tools: true,
+        include_attachments: true,
+    };
+
+    let conversations = runner
+        .parse(&adapter_path, &expanded.to_string_lossy(), parse_opts)
+        .await?;
+
+    if conversations.is_empty() {
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(ImportResult {
+                    adapter: adapter_name,
+                    confidence,
+                    source_id,
+                    conversations: 0,
+                    messages: 0,
+                    dry_run,
+                }),
+                error: None,
+            });
+        }
+        println!("No conversations found.");
+        return Ok(());
+    }
+
+    let conv_count = conversations.len();
+    let msg_count: usize = conversations.iter().map(|c| c.messages.len()).sum();
+
+    if dry_run {
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(ImportResult {
+                    adapter: adapter_name,
+                    confidence,
+                    source_id,
+                    conversations: conv_count,
+                    messages: msg_count,
+                    dry_run: true,
+                }),
+                error: None,
+            });
+        }
+        println!(
+            "Dry run: would import {} conversations ({} messages)",
+            conv_count, msg_count
+        );
+        for conv in &conversations {
+            let title = conv.title.as_deref().unwrap_or("Untitled");
+            let msg_cnt = conv.messages.len();
+            println!("  - {} ({} messages)", title, msg_cnt);
+        }
+        return Ok(());
+    }
+
+    // Ensure source exists
+    let source = hstry_core::models::Source {
+        id: source_id.clone(),
+        adapter: adapter_name.clone(),
+        path: Some(expanded.to_string_lossy().to_string()),
+        last_sync_at: None,
+        config: serde_json::json!({}),
+    };
+    db.upsert_source(&source).await?;
+
+    // Import conversations
+    if !json {
+        println!("Importing {} conversations...", conv_count);
+    }
+
+    let mut imported_convs = 0usize;
+    let mut imported_msgs = 0usize;
+
+    for conv in conversations {
+        let mut conv_id = uuid::Uuid::new_v4();
+        if let Some(external_id) = conv.external_id.as_deref() {
+            if let Some(existing) = db.get_conversation_id(&source_id, external_id).await? {
+                conv_id = existing;
+            }
+        }
+
+        let hstry_conv = hstry_core::models::Conversation {
+            id: conv_id,
+            source_id: source_id.clone(),
+            external_id: conv.external_id,
+            title: conv.title,
+            created_at: chrono::DateTime::from_timestamp_millis(conv.created_at as i64)
+                .unwrap_or_default()
+                .with_timezone(&chrono::Utc),
+            updated_at: conv.updated_at.and_then(|ts| {
+                chrono::DateTime::from_timestamp_millis(ts as i64)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            }),
+            model: conv.model,
+            workspace: conv.workspace,
+            tokens_in: conv.tokens_in.map(|t| t as i64),
+            tokens_out: conv.tokens_out.map(|t| t as i64),
+            cost_usd: conv.cost_usd,
+            metadata: conv
+                .metadata
+                .map(|m| serde_json::to_value(m).unwrap_or_default())
+                .unwrap_or_default(),
+        };
+
+        db.upsert_conversation(&hstry_conv).await?;
+
+        for (idx, msg) in conv.messages.iter().enumerate() {
+            let hstry_msg = hstry_core::models::Message {
+                id: uuid::Uuid::new_v4(),
+                conversation_id: hstry_conv.id,
+                idx: idx as i32,
+                role: hstry_core::models::MessageRole::from(msg.role.as_str()),
+                content: msg.content.clone(),
+                created_at: msg.created_at.and_then(|ts| {
+                    chrono::DateTime::from_timestamp_millis(ts as i64)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                }),
+                model: msg.model.clone(),
+                tokens: msg.tokens.map(|t| t as i64),
+                cost_usd: msg.cost_usd,
+                metadata: serde_json::Value::Object(Default::default()),
+            };
+            db.insert_message(&hstry_msg).await?;
+            imported_msgs += 1;
+        }
+
+        imported_convs += 1;
+    }
+
+    // Update source last_sync_at
+    let mut updated_source = source;
+    updated_source.last_sync_at = Some(chrono::Utc::now());
+    db.upsert_source(&updated_source).await?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(ImportResult {
+                adapter: adapter_name,
+                confidence,
+                source_id,
+                conversations: imported_convs,
+                messages: imported_msgs,
+                dry_run: false,
+            }),
+            error: None,
+        });
+    }
+
+    println!(
+        "Imported {} conversations ({} messages)",
+        imported_convs, imported_msgs
+    );
+    Ok(())
+}
+
 async fn cmd_search(
     db: &Database,
     query: &str,
@@ -693,10 +1098,7 @@ async fn cmd_search(
             .unwrap_or_default();
         println!(
             "Score: {:.2} | {} | {}{}",
-            display_score,
-            msg.role,
-            msg.source_adapter,
-            workspace
+            display_score, msg.role, msg.source_adapter, workspace
         );
 
         // Title if available
@@ -1043,6 +1445,290 @@ fn cmd_adapters(
             }
             println!("Disabled adapter: {}", name);
         }
+        AdapterCommand::Update {
+            adapter,
+            repo,
+            force,
+        } => {
+            // TODO: Implement actual download/update logic
+            // For now, just report what would be updated
+            let repos_to_update: Vec<_> = config
+                .adapter_repos
+                .iter()
+                .filter(|r| r.enabled)
+                .filter(|r| repo.as_ref().is_none_or(|name| &r.name == name))
+                .collect();
+
+            if repos_to_update.is_empty() {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some("No matching enabled repositories found".to_string()),
+                    });
+                }
+                println!("No matching enabled repositories found.");
+                return Ok(());
+            }
+
+            if json {
+                #[derive(Serialize)]
+                struct UpdateResult {
+                    repos: Vec<String>,
+                    adapter: Option<String>,
+                    force: bool,
+                    message: String,
+                }
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(UpdateResult {
+                        repos: repos_to_update.iter().map(|r| r.name.clone()).collect(),
+                        adapter,
+                        force,
+                        message: "Update functionality not yet implemented".to_string(),
+                    }),
+                    error: None,
+                });
+            }
+
+            println!("Would update from repositories:");
+            for r in &repos_to_update {
+                let source_info = match &r.source {
+                    AdapterRepoSource::Git { url, git_ref, .. } => {
+                        format!("git: {} ({})", url, git_ref)
+                    }
+                    AdapterRepoSource::Archive { url, .. } => {
+                        format!("archive: {}", url)
+                    }
+                    AdapterRepoSource::Local { path } => {
+                        format!("local: {}", path)
+                    }
+                };
+                println!("  {} - {}", r.name, source_info);
+            }
+            if let Some(adapter_name) = &adapter {
+                println!("Filtering for adapter: {}", adapter_name);
+            }
+            if force {
+                println!("Force update enabled");
+            }
+            println!("\nNote: Update functionality not yet implemented.");
+        }
+        AdapterCommand::Repo { command } => {
+            cmd_adapter_repo(&mut config, config_path, command, json)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_adapter_repo(
+    config: &mut Config,
+    config_path: &Path,
+    command: AdapterRepoCommand,
+    json: bool,
+) -> Result<()> {
+    match command {
+        AdapterRepoCommand::List => {
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(&config.adapter_repos),
+                    error: None,
+                });
+            }
+            if config.adapter_repos.is_empty() {
+                println!("No adapter repositories configured.");
+            } else {
+                println!("Adapter repositories:");
+                for repo in &config.adapter_repos {
+                    let status = if repo.enabled { "enabled" } else { "disabled" };
+                    let source_info = match &repo.source {
+                        AdapterRepoSource::Git { url, git_ref, path } => {
+                            format!("git {} ({}) path={}", url, git_ref, path)
+                        }
+                        AdapterRepoSource::Archive { url, path } => {
+                            format!("archive {} path={}", url, path)
+                        }
+                        AdapterRepoSource::Local { path } => {
+                            format!("local {}", path)
+                        }
+                    };
+                    println!("  {} ({}) - {}", repo.name, status, source_info);
+                }
+            }
+        }
+        AdapterRepoCommand::AddGit {
+            name,
+            url,
+            git_ref,
+            path,
+        } => {
+            // Check if repo with this name already exists
+            if config.adapter_repos.iter().any(|r| r.name == name) {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' already exists", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' already exists", name);
+            }
+
+            let repo = AdapterRepo {
+                name: name.clone(),
+                source: AdapterRepoSource::Git { url, git_ref, path },
+                enabled: true,
+            };
+            config.adapter_repos.push(repo.clone());
+            config.save_to_path(config_path)?;
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(repo),
+                    error: None,
+                });
+            }
+            println!("Added git repository: {}", name);
+        }
+        AdapterRepoCommand::AddArchive { name, url, path } => {
+            if config.adapter_repos.iter().any(|r| r.name == name) {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' already exists", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' already exists", name);
+            }
+
+            let repo = AdapterRepo {
+                name: name.clone(),
+                source: AdapterRepoSource::Archive { url, path },
+                enabled: true,
+            };
+            config.adapter_repos.push(repo.clone());
+            config.save_to_path(config_path)?;
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(repo),
+                    error: None,
+                });
+            }
+            println!("Added archive repository: {}", name);
+        }
+        AdapterRepoCommand::AddLocal { name, path } => {
+            if config.adapter_repos.iter().any(|r| r.name == name) {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' already exists", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' already exists", name);
+            }
+
+            let repo = AdapterRepo {
+                name: name.clone(),
+                source: AdapterRepoSource::Local {
+                    path: path.to_string_lossy().to_string(),
+                },
+                enabled: true,
+            };
+            config.adapter_repos.push(repo.clone());
+            config.save_to_path(config_path)?;
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(repo),
+                    error: None,
+                });
+            }
+            println!("Added local repository: {}", name);
+        }
+        AdapterRepoCommand::Remove { name } => {
+            let original_len = config.adapter_repos.len();
+            config.adapter_repos.retain(|r| r.name != name);
+
+            if config.adapter_repos.len() == original_len {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' not found", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' not found", name);
+            }
+
+            config.save_to_path(config_path)?;
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({ "removed": name })),
+                    error: None,
+                });
+            }
+            println!("Removed repository: {}", name);
+        }
+        AdapterRepoCommand::Enable { name } => {
+            let repo = config.adapter_repos.iter_mut().find(|r| r.name == name);
+            if let Some(repo) = repo {
+                repo.enabled = true;
+                config.save_to_path(config_path)?;
+
+                if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({ "name": name, "enabled": true })),
+                        error: None,
+                    });
+                }
+                println!("Enabled repository: {}", name);
+            } else {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' not found", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' not found", name);
+            }
+        }
+        AdapterRepoCommand::Disable { name } => {
+            let repo = config.adapter_repos.iter_mut().find(|r| r.name == name);
+            if let Some(repo) = repo {
+                repo.enabled = false;
+                config.save_to_path(config_path)?;
+
+                if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({ "name": name, "enabled": false })),
+                        error: None,
+                    });
+                }
+                println!("Disabled repository: {}", name);
+            } else {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Repository '{}' not found", name)),
+                    });
+                }
+                anyhow::bail!("Repository '{}' not found", name);
+            }
+        }
     }
 
     Ok(())
@@ -1265,7 +1951,11 @@ async fn cmd_export(
     if let Some(content) = &result.content {
         if let Some(output_path) = output {
             fs::write(&output_path, content)?;
-            println!("Exported {} conversations to {}", conversations.len(), output_path.display());
+            println!(
+                "Exported {} conversations to {}",
+                conversations.len(),
+                output_path.display()
+            );
         } else {
             println!("{}", content);
         }

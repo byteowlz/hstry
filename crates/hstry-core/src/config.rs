@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 use crate::error::Result;
 
+/// Default GitHub repository for adapters.
+pub const DEFAULT_ADAPTER_REPO: &str = "https://github.com/byteowlz/hstry";
+
 /// Main application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,6 +19,10 @@ pub struct Config {
 
     /// Adapter directories to search for adapters.
     pub adapter_paths: Vec<PathBuf>,
+
+    /// Repositories for downloading/updating adapters.
+    /// Each repo can provide different adapters.
+    pub adapter_repos: Vec<AdapterRepo>,
 
     /// JavaScript runtime preference: "bun", "deno", "node", or "auto".
     pub js_runtime: String,
@@ -34,6 +41,80 @@ pub struct Config {
 
     /// Sources configuration.
     pub sources: Vec<SourceConfig>,
+}
+
+/// Configuration for an adapter repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdapterRepo {
+    /// Unique name for this repo (e.g., "official", "community").
+    pub name: String,
+
+    /// Source type and location.
+    #[serde(flatten)]
+    pub source: AdapterRepoSource,
+
+    /// Whether this repo is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Source types for adapter repositories.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum AdapterRepoSource {
+    /// Git repository (works with GitHub, GitLab, Gitea, self-hosted, etc.)
+    Git {
+        /// Repository URL (HTTPS or SSH).
+        /// Examples:
+        /// - https://github.com/byteowlz/hstry
+        /// - https://gitlab.com/user/adapters
+        /// - git@github.com:byteowlz/hstry.git
+        /// - https://gitea.example.com/org/adapters
+        url: String,
+
+        /// Branch, tag, or commit to use.
+        #[serde(default = "default_git_ref")]
+        git_ref: String,
+
+        /// Path within the repo where adapters are located.
+        #[serde(default = "default_adapters_path")]
+        path: String,
+    },
+
+    /// Direct URL to a tarball or zip archive.
+    Archive {
+        /// URL to the archive file (.tar.gz, .zip, .tgz).
+        url: String,
+
+        /// Path within the archive where adapters are located.
+        #[serde(default = "default_adapters_path")]
+        path: String,
+    },
+
+    /// Local filesystem path (for development or private adapters).
+    Local {
+        /// Absolute or relative path to adapters directory.
+        path: String,
+    },
+}
+
+impl AdapterRepoSource {
+    /// Get the adapters path within the source.
+    pub fn adapters_path(&self) -> &str {
+        match self {
+            Self::Git { path, .. } => path,
+            Self::Archive { path, .. } => path,
+            Self::Local { path } => path,
+        }
+    }
+}
+
+fn default_git_ref() -> String {
+    "main".to_string()
+}
+
+fn default_adapters_path() -> String {
+    "adapters".to_string()
 }
 
 impl Default for Config {
@@ -71,6 +152,15 @@ impl Default for Config {
         Self {
             database: data_dir.join("hstry.db"),
             adapter_paths,
+            adapter_repos: vec![AdapterRepo {
+                name: "official".to_string(),
+                source: AdapterRepoSource::Git {
+                    url: DEFAULT_ADAPTER_REPO.to_string(),
+                    git_ref: "main".to_string(),
+                    path: "adapters".to_string(),
+                },
+                enabled: true,
+            }],
             js_runtime: "auto".to_string(),
             embedding_endpoint: None,
             workspaces: Vec::new(),

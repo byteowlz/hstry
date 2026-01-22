@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"test-pi-session-1","timestamp":"2023-11-14T12:00:00.000Z","cwd":"/home/test/project"}
+{"type":"model_change","id":"mc001","parentId":null,"timestamp":"2023-11-14T12:00:00.000Z","provider":"anthropic","modelId":"claude-3-5-sonnet"}
+{"type":"session_info","id":"si001","parentId":"mc001","timestamp":"2023-11-14T12:00:00.000Z","name":"Test Pi Session"}
+{"type":"message","id":"msg001","parentId":"si001","timestamp":"2023-11-14T12:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Hello Pi!"}],"timestamp":1700000001000}}
+{"type":"message","id":"msg002","parentId":"msg001","timestamp":"2023-11-14T12:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Hello! I'm Pi, your coding assistant. What can I help you build today?"}],"timestamp":1700000002000,"model":"claude-3-5-sonnet","provider":"anthropic","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":30,"cost":{"input":0.0001,"output":0.0002,"cacheRead":0,"cacheWrite":0,"total":0.0003}}}}

@@ -161,6 +161,8 @@ pub struct SearchHit {
     pub content: String,
     pub snippet: String,
     pub created_at: Option<DateTime<Utc>>,
+    pub conv_created_at: DateTime<Utc>,
+    pub conv_updated_at: Option<DateTime<Utc>>,
     pub score: f32,
     pub source_id: String,
     pub external_id: Option<String>,

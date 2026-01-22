@@ -156,11 +156,16 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
   const createdAtSec = entry.create_time ?? earliestMessageTime(messages) ?? 0;
   const createdAt = createdAtSec * 1000;
 
-  if (opts?.since && createdAt < opts.since) {
-    return null;
-  }
-
   const updatedAtSec = entry.update_time ?? latestMessageTime(messages) ?? undefined;
+  const updatedAt = updatedAtSec ? updatedAtSec * 1000 : undefined;
+
+  // Check both created and updated time so modified sessions are re-imported
+  if (opts?.since) {
+    const lastModified = updatedAt ?? createdAt;
+    if (createdAt < opts.since && lastModified < opts.since) {
+      return null;
+    }
+  }
 
   const model = deriveModel(messages);
 
@@ -168,7 +173,7 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
     externalId: entry.id,
     title: entry.title || undefined,
     createdAt,
-    updatedAt: updatedAtSec ? updatedAtSec * 1000 : undefined,
+    updatedAt,
     model,
     messages,
     metadata: {

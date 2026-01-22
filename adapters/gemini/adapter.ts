@@ -148,14 +148,19 @@ function parseConversation(
   const createdAtSec = numberOrUndefined(raw.create_time) ?? earliestMessageTime(messages);
   const createdAt = createdAtSec ? createdAtSec * 1000 : Date.now();
 
-  if (opts?.since && createdAt < opts.since) {
-    return null;
-  }
-
   const updatedAtSec =
     numberOrUndefined(raw.update_time) ??
     numberOrUndefined(raw.updated_at) ??
     latestMessageTime(messages);
+  const updatedAt = updatedAtSec ? updatedAtSec * 1000 : undefined;
+
+  // Check both created and updated time so modified sessions are re-imported
+  if (opts?.since) {
+    const lastModified = updatedAt ?? createdAt;
+    if (createdAt < opts.since && lastModified < opts.since) {
+      return null;
+    }
+  }
 
   const model = deriveModel(messages);
 
@@ -163,7 +168,7 @@ function parseConversation(
     externalId: stringOrUndefined(raw.id ?? raw.conversation_id),
     title: stringOrUndefined(raw.title ?? raw.name),
     createdAt,
-    updatedAt: updatedAtSec ? updatedAtSec * 1000 : undefined,
+    updatedAt,
     model,
     messages,
     metadata: {

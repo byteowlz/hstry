@@ -377,6 +377,8 @@ impl Database {
                 m.role AS role,
                 m.content AS content,
                 m.created_at AS created_at,
+                c.created_at AS conv_created_at,
+                c.updated_at AS conv_updated_at,
                 c.source_id AS source_id,
                 c.external_id AS external_id,
                 c.title AS title,
@@ -433,6 +435,16 @@ impl Database {
                 snippet: row.get::<String, _>("snippet"),
                 created_at: row
                     .get::<Option<i64>, _>("created_at")
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|dt| dt.with_timezone(&Utc)),
+                conv_created_at: {
+                    let ts = row.get::<i64, _>("conv_created_at");
+                    chrono::DateTime::from_timestamp(ts, 0)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(Utc::now)
+                },
+                conv_updated_at: row
+                    .get::<Option<i64>, _>("conv_updated_at")
                     .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
                     .map(|dt| dt.with_timezone(&Utc)),
                 score: row.get::<f32, _>("score"),
@@ -549,26 +561,36 @@ impl Database {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        let should_recreate = match existing {
+        let mut should_recreate = match existing {
             Some((sql,)) => !schema_ok(&sql),
             None => true,
         };
 
-        if should_recreate {
-            let mut tx = self.pool.begin().await?;
-            for trigger in trigger_names {
-                let drop_sql = format!("DROP TRIGGER IF EXISTS {trigger}");
-                sqlx::raw_sql(&drop_sql).execute(&mut *tx).await?;
+        // If the table exists and schema is OK, run a thorough integrity check.
+        // The basic integrity-check can miss corruption that the ranked version catches.
+        if !should_recreate {
+            match self.fts_integrity_check(name).await {
+                Ok(true) => {} // Healthy
+                Ok(false) => {
+                    tracing::warn!("FTS table {name} is corrupted, will rebuild");
+                    should_recreate = true;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "FTS table {name} integrity check failed ({}), will rebuild",
+                        e
+                    );
+                    should_recreate = true;
+                }
             }
-            let drop_table = format!("DROP TABLE IF EXISTS {name}");
-            sqlx::raw_sql(&drop_table).execute(&mut *tx).await?;
-            sqlx::raw_sql(create_sql).execute(&mut *tx).await?;
-            for sql in trigger_sql {
-                sqlx::raw_sql(sql).execute(&mut *tx).await?;
-            }
-            tx.commit().await?;
         }
 
+        if should_recreate {
+            self.rebuild_fts_table(name, create_sql, trigger_sql, trigger_names)
+                .await?;
+        }
+
+        // Rebuild index if table is empty but messages exist
         if messages_count > 0 {
             let row_count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {name}"))
                 .fetch_one(&self.pool)
@@ -579,6 +601,61 @@ impl Database {
             }
         }
 
+        Ok(())
+    }
+
+    /// Run a thorough FTS5 integrity check.
+    /// The `rank` parameter makes the check verify content matches the index.
+    /// Returns Ok(true) if healthy, Ok(false) if corrupted.
+    async fn fts_integrity_check(&self, name: &str) -> Result<bool> {
+        // Use a dedicated connection to avoid transaction state issues
+        let mut conn = self.pool.acquire().await?;
+
+        let check_sql = format!("INSERT INTO {name}({name}, rank) VALUES('integrity-check', 1)");
+        match sqlx::raw_sql(&check_sql).execute(&mut *conn).await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                // Check if it's a corruption error (code 267 = SQLITE_CORRUPT)
+                let err_str = e.to_string();
+                if err_str.contains("malformed") || err_str.contains("corrupt") {
+                    Ok(false)
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
+    }
+
+    /// Drop and recreate an FTS table with its triggers.
+    async fn rebuild_fts_table(
+        &self,
+        name: &str,
+        create_sql: &str,
+        trigger_sql: &[&str],
+        trigger_names: &[&str],
+    ) -> Result<()> {
+        // Use a dedicated connection for the entire rebuild to avoid lock issues
+        let mut conn = self.pool.acquire().await?;
+
+        for trigger in trigger_names {
+            let drop_sql = format!("DROP TRIGGER IF EXISTS {trigger}");
+            sqlx::raw_sql(&drop_sql).execute(&mut *conn).await?;
+        }
+
+        let drop_table = format!("DROP TABLE IF EXISTS {name}");
+        sqlx::raw_sql(&drop_table).execute(&mut *conn).await?;
+
+        sqlx::raw_sql(create_sql).execute(&mut *conn).await?;
+
+        for sql in trigger_sql {
+            sqlx::raw_sql(sql).execute(&mut *conn).await?;
+        }
+
+        // Rebuild the index from the content table
+        let rebuild = format!("INSERT INTO {name}({name}) VALUES('rebuild')");
+        sqlx::raw_sql(&rebuild).execute(&mut *conn).await?;
+
+        tracing::info!("Rebuilt FTS table {name}");
         Ok(())
     }
 }

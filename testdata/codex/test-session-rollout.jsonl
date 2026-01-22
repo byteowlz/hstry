@@ -1,0 +1,4 @@
+{"timestamp":"2023-11-14T12:00:00.000Z","type":"session_meta","payload":{"meta":{"id":"test-codex-session-1","timestamp":"2023-11-14T12:00:00.000Z","cwd":"/home/test/project","originator":"codex","cli_version":"0.1.0","source":"cli","model_provider":null}}}
+{"timestamp":"2023-11-14T12:00:01.000Z","type":"turn_context","payload":{"model":"o1-mini","approval_policy":"auto","sandbox_policy":null,"cwd":"/home/test/project"}}
+{"timestamp":"2023-11-14T12:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello Codex!"}]}}
+{"timestamp":"2023-11-14T12:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hello! I'm Codex, ready to help you with your coding tasks."}]}}

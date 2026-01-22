@@ -1,0 +1,7 @@
+{
+  "id": "prt_001",
+  "messageID": "msg_001",
+  "sessionID": "ses_test001",
+  "type": "text",
+  "text": "Hello OpenCode!"
+}

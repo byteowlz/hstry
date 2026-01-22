@@ -1,0 +1,21 @@
+[
+  {
+    "id": "test-gemini-conv-1",
+    "title": "Test Gemini Conversation",
+    "create_time": 1700000000,
+    "update_time": 1700000200,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello Gemini!",
+        "create_time": 1700000001
+      },
+      {
+        "role": "model",
+        "content": "Hello! I'm Gemini. What would you like to explore today?",
+        "create_time": 1700000002,
+        "model": "gemini-pro"
+      }
+    ]
+  }
+]

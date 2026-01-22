@@ -285,8 +285,12 @@ async function parseRolloutFile(
     ? Date.parse(sessionMeta.timestamp)
     : messages[0].createdAt ?? Date.now();
 
-  if (opts?.since && createdAt < opts.since) {
-    return null;
+  // Check both created and updated time so modified sessions are re-imported
+  if (opts?.since) {
+    const lastModified = lastTimestamp ?? createdAt;
+    if (createdAt < opts.since && lastModified < opts.since) {
+      return null;
+    }
   }
 
   const title = sessionMeta?.cwd

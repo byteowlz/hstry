@@ -148,9 +148,13 @@ const adapter: Adapter = {
             const sessionContent = await readFile(sessionPath, 'utf-8');
             const session: SessionInfo = JSON.parse(sessionContent);
 
-            // Apply filters
-            if (opts?.since && session.time.created < opts.since) {
-              continue;
+            // Apply filters - check both created and updated time
+            // so renamed/modified sessions are still re-imported
+            if (opts?.since) {
+              const lastModified = session.time.updated ?? session.time.created;
+              if (session.time.created < opts.since && lastModified < opts.since) {
+                continue;
+              }
             }
 
             // Load messages for this session

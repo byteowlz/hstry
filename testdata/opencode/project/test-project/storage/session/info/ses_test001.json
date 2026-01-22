@@ -1,0 +1,12 @@
+{
+  "id": "ses_test001",
+  "version": "1",
+  "title": "Test OpenCode Session",
+  "parentID": null,
+  "directory": "/home/test/project",
+  "projectID": "test-project",
+  "time": {
+    "created": 1700000000000,
+    "updated": 1700000200000
+  }
+}

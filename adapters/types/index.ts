@@ -146,22 +146,43 @@ export type AdapterResponse =
   | ExportResult
   | { error: string };
 
+/** Read all data from stdin */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** 
  * Main entry point for adapters.
  * Handles the request/response protocol with the Rust runtime.
  */
 export function runAdapter(adapter: Adapter): void {
-  const requestJson = process.env.HSTRY_REQUEST || Bun?.env?.HSTRY_REQUEST || Deno?.env?.get?.('HSTRY_REQUEST');
-  
-  if (!requestJson) {
-    console.error(JSON.stringify({ error: 'HSTRY_REQUEST environment variable not set' }));
-    process.exit(1);
-  }
-
-  const request: AdapterRequest = JSON.parse(requestJson);
+  const useStdin = process.env.HSTRY_REQUEST_STDIN === '1' || 
+                   Bun?.env?.HSTRY_REQUEST_STDIN === '1' ||
+                   (typeof Deno !== 'undefined' && Deno?.env?.get?.('HSTRY_REQUEST_STDIN') === '1');
 
   (async () => {
     try {
+      let requestJson: string;
+
+      if (useStdin) {
+        requestJson = await readStdin();
+      } else {
+        requestJson = process.env.HSTRY_REQUEST || 
+                      Bun?.env?.HSTRY_REQUEST || 
+                      (typeof Deno !== 'undefined' ? Deno?.env?.get?.('HSTRY_REQUEST') : undefined) || 
+                      '';
+      }
+
+      if (!requestJson) {
+        console.error(JSON.stringify({ error: 'HSTRY_REQUEST not provided' }));
+        process.exit(1);
+      }
+
+      const request: AdapterRequest = JSON.parse(requestJson);
       let response: AdapterResponse;
 
       switch (request.method) {

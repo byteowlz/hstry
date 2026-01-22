@@ -1,0 +1,38 @@
+[
+  {
+    "id": "test-chatgpt-conv-1",
+    "title": "Test ChatGPT Conversation",
+    "create_time": 1700000000,
+    "update_time": 1700000100,
+    "mapping": {
+      "root": {
+        "id": "root",
+        "children": ["msg-1"]
+      },
+      "msg-1": {
+        "id": "msg-1",
+        "parent": "root",
+        "children": ["msg-2"],
+        "message": {
+          "id": "msg-1",
+          "author": {"role": "user"},
+          "content": {"content_type": "text", "parts": ["Hello ChatGPT!"]},
+          "create_time": 1700000001
+        }
+      },
+      "msg-2": {
+        "id": "msg-2",
+        "parent": "msg-1",
+        "children": [],
+        "message": {
+          "id": "msg-2",
+          "author": {"role": "assistant"},
+          "content": {"content_type": "text", "parts": ["Hello! How can I help you today?"]},
+          "create_time": 1700000002,
+          "metadata": {"model_slug": "gpt-4"}
+        }
+      }
+    },
+    "current_node": "msg-2"
+  }
+]

@@ -1,0 +1,45 @@
+database = "/home/wismut/byteowlz/hstry/testdata/test.db"
+
+[[sources]]
+id = "test-chatgpt"
+adapter = "chatgpt"
+path = "/home/wismut/byteowlz/hstry/testdata/chatgpt/conversations.json"
+
+[[sources]]
+id = "test-claude-web"
+adapter = "claude-web"
+path = "/home/wismut/byteowlz/hstry/testdata/claude-web/claude-conversations.json"
+
+[[sources]]
+id = "test-gemini"
+adapter = "gemini"
+path = "/home/wismut/byteowlz/hstry/testdata/gemini/gemini-conversations.json"
+
+[[sources]]
+id = "test-opencode"
+adapter = "opencode"
+path = "/home/wismut/byteowlz/hstry/testdata/opencode"
+
+[[sources]]
+id = "test-codex"
+adapter = "codex"
+path = "/home/wismut/byteowlz/hstry/testdata/codex"
+
+[[sources]]
+id = "test-claude-code"
+adapter = "claude-code"
+path = "/home/wismut/byteowlz/hstry/testdata/claude-code"
+
+[[sources]]
+id = "test-pi"
+adapter = "pi"
+path = "/home/wismut/byteowlz/hstry/testdata/pi"
+
+[[sources]]
+id = "test-aider"
+adapter = "aider"
+path = "/home/wismut/byteowlz/hstry/testdata/aider"
+
+[service]
+enabled = false
+poll_interval_secs = 30

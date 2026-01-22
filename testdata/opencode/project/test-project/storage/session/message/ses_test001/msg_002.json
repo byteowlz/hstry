@@ -1,0 +1,17 @@
+{
+  "id": "msg_002",
+  "sessionID": "ses_test001",
+  "role": "assistant",
+  "time": {
+    "created": 1700000002000,
+    "completed": 1700000003000
+  },
+  "parentID": "msg_001",
+  "modelID": "claude-3-5-sonnet",
+  "providerID": "anthropic",
+  "tokens": {
+    "input": 50,
+    "output": 100
+  },
+  "cost": 0.0015
+}

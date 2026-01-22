@@ -268,6 +268,8 @@ impl AdapterRunner {
         adapter_path: &Path,
         request: AdapterRequest,
     ) -> anyhow::Result<AdapterResponse> {
+        use tokio::io::AsyncWriteExt;
+
         let request_json = serde_json::to_string(&request)?;
 
         let mut args = self
@@ -278,11 +280,32 @@ impl AdapterRunner {
             .collect::<Vec<_>>();
         args.push(adapter_path.display().to_string());
 
-        let output = AsyncCommand::new(self.runtime.binary())
-            .args(&args)
-            .env("HSTRY_REQUEST", &request_json)
-            .output()
-            .await?;
+        // Use stdin for large requests (> 100KB) to avoid env var size limits
+        let use_stdin = request_json.len() > 100_000;
+
+        let mut cmd = AsyncCommand::new(self.runtime.binary());
+        cmd.args(&args);
+
+        if use_stdin {
+            cmd.env("HSTRY_REQUEST_STDIN", "1");
+            cmd.stdin(std::process::Stdio::piped());
+        } else {
+            cmd.env("HSTRY_REQUEST", &request_json);
+        }
+
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+
+        if use_stdin {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(request_json.as_bytes()).await?;
+                stdin.shutdown().await?;
+            }
+        }
+
+        let output = child.wait_with_output().await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

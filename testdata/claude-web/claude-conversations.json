@@ -1,0 +1,21 @@
+[
+  {
+    "uuid": "test-claude-web-conv-1",
+    "name": "Test Claude Web Conversation",
+    "created_at": 1700000000,
+    "updated_at": 1700000200,
+    "chat_messages": [
+      {
+        "role": "user",
+        "content": "Hello Claude!",
+        "created_at": 1700000001
+      },
+      {
+        "role": "assistant",
+        "content": "Hello! I'm Claude, an AI assistant. How can I help you today?",
+        "created_at": 1700000002,
+        "model": "claude-3-opus"
+      }
+    ]
+  }
+]

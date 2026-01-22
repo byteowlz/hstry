@@ -9,7 +9,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use hstry_core::models::{Conversation, Message, MessageRole, Source};
 use hstry_core::{Config, Database};
-use hstry_runtime::{AdapterRunner, Runtime};
+use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
 use serde::de::DeserializeOwned;
 
 mod service;
@@ -212,6 +212,33 @@ enum Command {
     /// Scan for chat history sources
     Scan,
 
+    /// Export conversations to another format
+    Export {
+        /// Target format (pi, opencode, codex, claude-code, markdown, json)
+        #[arg(short, long)]
+        format: String,
+
+        /// Conversation IDs to export (comma-separated, or "all" for all)
+        #[arg(short, long, default_value = "all")]
+        conversations: String,
+
+        /// Filter by source
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Filter by workspace
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Output directory (for multi-file formats like pi, opencode)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Pretty print JSON output
+        #[arg(long)]
+        pretty: bool,
+    },
+
     /// Show database statistics
     Stats,
 
@@ -391,6 +418,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     // Load config
@@ -485,9 +513,53 @@ async fn main() -> Result<()> {
             }
         },
         Command::Scan => cmd_scan(&runner, &config, cli.json).await,
+        Command::Export {
+            format,
+            conversations,
+            source,
+            workspace,
+            output,
+            pretty,
+        } => {
+            cmd_export(
+                &db,
+                &runner,
+                &format,
+                &conversations,
+                source,
+                workspace,
+                output,
+                pretty,
+                cli.json,
+            )
+            .await
+        }
         Command::Stats => cmd_stats(&db, cli.json).await,
         Command::Mmry { command } => cmd_mmry(&db, command, cli.json).await,
     }
+}
+
+/// Ensure sources from config file are in the database.
+async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
+    for source in &config.sources {
+        let existing = db.get_source(&source.id).await?;
+        let entry = match existing {
+            Some(mut entry) => {
+                entry.adapter = source.adapter.clone();
+                entry.path = Some(source.path.clone());
+                entry
+            }
+            None => Source {
+                id: source.id.clone(),
+                adapter: source.adapter.clone(),
+                path: Some(source.path.clone()),
+                last_sync_at: None,
+                config: serde_json::Value::Object(Default::default()),
+            },
+        };
+        db.upsert_source(&entry).await?;
+    }
+    Ok(())
 }
 
 async fn cmd_sync(
@@ -497,6 +569,9 @@ async fn cmd_sync(
     source_filter: Option<String>,
     json: bool,
 ) -> Result<()> {
+    // Ensure sources from config are in the database
+    ensure_config_sources(db, config).await?;
+
     let sources = db.list_sources().await?;
 
     if sources.is_empty() {
@@ -604,27 +679,45 @@ async fn cmd_search(
         return Ok(());
     }
 
+    let count = messages.len();
     for msg in messages {
-        let source_path = msg
-            .source_path
+        // Header line with separator
+        println!("{}", "-".repeat(72));
+
+        // Score (negate BM25 so higher = better), role, adapter, and workspace
+        let display_score = -msg.score;
+        let workspace = msg
+            .workspace
             .as_ref()
-            .map(|path| format!(" ({path})"))
-            .unwrap_or_default();
-        let external = msg
-            .external_id
-            .as_ref()
-            .map(|id| format!(" ext:{id}"))
+            .map(|ws| format!(" | WS: {ws}"))
             .unwrap_or_default();
         println!(
-            "[{} #{} {} | {}{}{}] {}",
-            msg.conversation_id,
-            msg.message_idx,
+            "Score: {:.2} | {} | {}{}",
+            display_score,
             msg.role,
             msg.source_adapter,
-            source_path,
-            external,
-            truncate(&msg.snippet, 120)
+            workspace
         );
+
+        // Title if available
+        if let Some(title) = &msg.title {
+            println!("Title: {}", truncate(title, 68));
+        }
+
+        // Dates: created and updated
+        let created = msg.conv_created_at.format("%Y-%m-%d %H:%M");
+        let updated = msg
+            .conv_updated_at
+            .map(|dt| format!(" | Updated: {}", dt.format("%Y-%m-%d %H:%M")))
+            .unwrap_or_default();
+        println!("Date: {}{}", created, updated);
+
+        // Snippet with search highlights
+        println!("Snippet: {}", truncate(&msg.snippet, 200));
+    }
+    // Final separator
+    if count > 0 {
+        println!("{}", "-".repeat(72));
     }
 
     Ok(())
@@ -1053,6 +1146,147 @@ mod tests {
         let value = value.expect("value");
         assert_eq!(value.id, "conv-1");
     }
+}
+
+async fn cmd_export(
+    db: &Database,
+    runner: &AdapterRunner,
+    format: &str,
+    conversations_arg: &str,
+    source_filter: Option<String>,
+    workspace_filter: Option<String>,
+    output: Option<PathBuf>,
+    pretty: bool,
+    json_output: bool,
+) -> Result<()> {
+    use hstry_core::db::ListConversationsOptions;
+    use std::fs;
+
+    // Find the adapter for the target format
+    // For universal formats (markdown, json), use any available adapter
+    let adapter_path = if format == "markdown" || format == "json" {
+        // Try to use the first available adapter that supports export
+        let adapters = runner.list_adapters();
+        adapters
+            .into_iter()
+            .find_map(|name| runner.find_adapter(&name))
+            .ok_or_else(|| anyhow::anyhow!("No adapters available for export"))?
+    } else {
+        runner
+            .find_adapter(format)
+            .ok_or_else(|| anyhow::anyhow!("No adapter found for format '{}'", format))?
+    };
+
+    // Load conversations from database
+    let conversations = if conversations_arg == "all" {
+        db.list_conversations(ListConversationsOptions {
+            source_id: source_filter.clone(),
+            workspace: workspace_filter.clone(),
+            after: None,
+            limit: None,
+        })
+        .await?
+    } else {
+        let mut convs = Vec::new();
+        for id in conversations_arg.split(',') {
+            let id = id.trim();
+            if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+                if let Some(conv) = db.get_conversation(uuid).await? {
+                    convs.push(conv);
+                }
+            }
+        }
+        convs
+    };
+
+    if conversations.is_empty() {
+        if json_output {
+            return emit_json(JsonResponse::<()> {
+                ok: true,
+                result: None,
+                error: Some("No conversations found".to_string()),
+            });
+        }
+        println!("No conversations found");
+        return Ok(());
+    }
+
+    // Convert to export format
+    let mut export_convs = Vec::new();
+    for conv in &conversations {
+        let messages = db.get_messages(conv.id).await?;
+        let parsed_messages: Vec<ParsedMessage> = messages
+            .into_iter()
+            .map(|m| ParsedMessage {
+                role: m.role.to_string(),
+                content: m.content,
+                created_at: m.created_at.map(|dt| dt.timestamp_millis()),
+                model: m.model,
+                tokens: m.tokens,
+                cost_usd: m.cost_usd,
+                tool_calls: None, // TODO: load from tool_calls table
+                metadata: Some(m.metadata),
+            })
+            .collect();
+
+        export_convs.push(ExportConversation {
+            external_id: conv.external_id.clone(),
+            title: conv.title.clone(),
+            created_at: conv.created_at.timestamp_millis(),
+            updated_at: conv.updated_at.map(|dt| dt.timestamp_millis()),
+            model: conv.model.clone(),
+            workspace: conv.workspace.clone(),
+            tokens_in: conv.tokens_in,
+            tokens_out: conv.tokens_out,
+            cost_usd: conv.cost_usd,
+            messages: parsed_messages,
+            metadata: Some(conv.metadata.clone()),
+        });
+    }
+
+    let opts = ExportOptions {
+        format: format.to_string(),
+        pretty: Some(pretty),
+        include_tools: Some(true),
+        include_attachments: Some(true),
+    };
+
+    let result = runner.export(&adapter_path, export_convs, opts).await?;
+
+    if json_output {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(&result),
+            error: None,
+        });
+    }
+
+    // Handle output
+    if let Some(content) = &result.content {
+        if let Some(output_path) = output {
+            fs::write(&output_path, content)?;
+            println!("Exported {} conversations to {}", conversations.len(), output_path.display());
+        } else {
+            println!("{}", content);
+        }
+    } else if let Some(files) = &result.files {
+        let output_dir = output.unwrap_or_else(|| PathBuf::from("."));
+        for file in files {
+            let file_path = output_dir.join(&file.path);
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&file_path, &file.content)?;
+        }
+        println!(
+            "Exported {} conversations to {} files in {}",
+            conversations.len(),
+            files.len(),
+            output_dir.display()
+        );
+    }
+
+    Ok(())
 }
 
 async fn cmd_stats(db: &Database, json: bool) -> Result<()> {

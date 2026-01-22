@@ -17,6 +17,9 @@ import type {
   Message,
   ParseOptions,
   ToolCall,
+  ExportOptions,
+  ExportResult,
+  ExportFile,
 } from '../types/index.ts';
 import { runAdapter } from '../types/index.ts';
 
@@ -185,15 +188,21 @@ const adapter: Adapter = {
         : parseTimestamp(header.timestamp) ?? Date.now();
       const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
 
-      if (opts?.since && createdAt < opts.since) {
-        continue;
+      // Skip if both createdAt AND updatedAt are before the since filter
+      // This ensures we re-import sessions that were modified (e.g., renamed) after last sync
+      if (opts?.since) {
+        const lastModified = updatedAt ?? createdAt;
+        if (createdAt < opts.since && lastModified < opts.since) {
+          continue;
+        }
       }
 
-      // Get session name from session_info entry if present
-      const sessionInfo = entries.find(
-        (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e
+      // Get session name from the latest session_info entry (Pi appends new entries on rename)
+      const sessionInfoEntries = entries.filter(
+        (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e && !!e.name
       );
-      const title = sessionInfo?.name || deriveTitle(messages);
+      const latestSessionInfo = sessionInfoEntries[sessionInfoEntries.length - 1];
+      const title = latestSessionInfo?.name || deriveTitle(messages);
 
       // Calculate totals from assistant messages with usage
       const { tokensIn, tokensOut, costUsd, model } = calculateTotals(entries);
@@ -224,7 +233,212 @@ const adapter: Adapter = {
     conversations.sort((a, b) => b.createdAt - a.createdAt);
     return conversations;
   },
+
+  async export(conversations: Conversation[], opts: ExportOptions): Promise<ExportResult> {
+    if (opts.format === 'markdown') {
+      return {
+        format: 'markdown',
+        content: conversationsToMarkdown(conversations),
+        mimeType: 'text/markdown',
+      };
+    }
+
+    if (opts.format === 'json') {
+      return {
+        format: 'json',
+        content: JSON.stringify(conversations, null, opts.pretty ? 2 : 0),
+        mimeType: 'application/json',
+      };
+    }
+
+    if (opts.format !== 'pi') {
+      throw new Error(`Unsupported export format: ${opts.format}`);
+    }
+
+    const files = buildPiFiles(conversations, opts);
+    return {
+      format: 'pi',
+      files,
+      mimeType: 'application/x-ndjson',
+      metadata: {
+        root: 'sessions/',
+      },
+    };
+  },
 };
+
+function conversationsToMarkdown(conversations: Conversation[]): string {
+  const blocks: string[] = [];
+  for (const conv of conversations) {
+    const title = conv.title ?? 'Conversation';
+    blocks.push(`# ${title}`);
+    blocks.push('');
+    blocks.push(`- Created: ${new Date(conv.createdAt).toISOString()}`);
+    if (conv.updatedAt) {
+      blocks.push(`- Updated: ${new Date(conv.updatedAt).toISOString()}`);
+    }
+    if (conv.workspace) {
+      blocks.push(`- Workspace: ${conv.workspace}`);
+    }
+    if (conv.model) {
+      blocks.push(`- Model: ${conv.model}`);
+    }
+    blocks.push('');
+
+    for (const msg of conv.messages) {
+      blocks.push(`## ${msg.role}`);
+      if (msg.createdAt) {
+        blocks.push(`_at ${new Date(msg.createdAt).toISOString()}_`);
+      }
+      blocks.push('');
+      blocks.push(msg.content || '');
+      blocks.push('');
+    }
+  }
+  return blocks.join('\n').trim() + '\n';
+}
+
+function buildPiFiles(conversations: Conversation[], opts: ExportOptions): ExportFile[] {
+  const files: ExportFile[] = [];
+
+  for (const conv of conversations) {
+    const sessionId = conv.externalId ?? randomId('ses_');
+    const workspace = conv.workspace ?? process.cwd();
+    const safePath = `--${workspace.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+    const timestamp = new Date(conv.createdAt).toISOString().replace(/[:.]/g, '-');
+    const filename = `${timestamp}_${sessionId}.jsonl`;
+    const filePath = `sessions/${safePath}/${filename}`;
+
+    const lines: string[] = [];
+
+    // Session header
+    const header: SessionHeader = {
+      type: 'session',
+      version: 3,
+      id: sessionId,
+      timestamp: new Date(conv.createdAt).toISOString(),
+      cwd: workspace,
+    };
+    lines.push(JSON.stringify(header));
+
+    // Model change entry (if we have model info)
+    let lastEntryId: string | null = null;
+    if (conv.model) {
+      const modelEntry = {
+        type: 'model_change',
+        id: randomId(''),
+        parentId: lastEntryId,
+        timestamp: new Date(conv.createdAt).toISOString(),
+        provider: deriveProvider(conv.model),
+        modelId: conv.model,
+      };
+      lines.push(JSON.stringify(modelEntry));
+      lastEntryId = modelEntry.id;
+    }
+
+    // Session name (if title exists and isn't derived from first message)
+    if (conv.title) {
+      const infoEntry: SessionInfoEntry = {
+        type: 'session_info',
+        id: randomId(''),
+        parentId: lastEntryId,
+        timestamp: new Date(conv.createdAt).toISOString(),
+        name: conv.title,
+      };
+      lines.push(JSON.stringify(infoEntry));
+      lastEntryId = infoEntry.id;
+    }
+
+    // Messages
+    for (const msg of conv.messages) {
+      const msgId = randomId('msg_');
+      const msgTimestamp = msg.createdAt
+        ? new Date(msg.createdAt).toISOString()
+        : new Date(conv.createdAt).toISOString();
+
+      const contentBlocks: PiContentBlock[] = [];
+      if (msg.content) {
+        contentBlocks.push({ type: 'text', text: msg.content });
+      }
+
+      // Add tool calls if present
+      if (opts.includeTools && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          contentBlocks.push({
+            type: 'toolCall',
+            id: randomId('call_'),
+            name: tc.toolName,
+            arguments: tc.input as Record<string, unknown> | undefined,
+          });
+        }
+      }
+
+      const piMessage: PiMessage = {
+        role: mapRoleToPi(msg.role),
+        content: contentBlocks.length > 0 ? contentBlocks : undefined,
+        timestamp: msg.createdAt,
+        model: msg.model,
+        usage: msg.tokens ? {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: msg.tokens,
+          cost: msg.costUsd ? {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: msg.costUsd,
+          } : undefined as unknown as PiUsage['cost'],
+        } : undefined,
+      };
+
+      const msgEntry: MessageEntry = {
+        type: 'message',
+        id: msgId,
+        parentId: lastEntryId,
+        timestamp: msgTimestamp,
+        message: piMessage,
+      };
+      lines.push(JSON.stringify(msgEntry));
+      lastEntryId = msgId;
+    }
+
+    files.push({
+      path: filePath,
+      content: lines.join('\n') + '\n',
+    });
+  }
+
+  return files;
+}
+
+function mapRoleToPi(role: Message['role']): PiMessage['role'] {
+  switch (role) {
+    case 'user': return 'user';
+    case 'assistant': return 'assistant';
+    case 'tool': return 'toolResult';
+    case 'system': return 'custom';
+    default: return 'user';
+  }
+}
+
+function deriveProvider(model: string): string {
+  const lower = model.toLowerCase();
+  if (lower.includes('claude') || lower.includes('anthropic')) return 'anthropic';
+  if (lower.includes('gpt') || lower.includes('openai') || lower.includes('codex')) return 'openai';
+  if (lower.includes('gemini') || lower.includes('google')) return 'google';
+  if (lower.includes('llama') || lower.includes('meta')) return 'meta';
+  return 'unknown';
+}
+
+function randomId(prefix: string): string {
+  const uuid = typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}${Math.random().toString(16).slice(2)}`;
+  return `${prefix}${uuid.replace(/-/g, '').slice(0, 12)}`;
+}
 
 function extractMessages(entries: SessionEntry[], includeTools: boolean): Message[] {
   const messages: Message[] = [];

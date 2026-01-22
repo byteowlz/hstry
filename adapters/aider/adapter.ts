@@ -55,8 +55,12 @@ const adapter: Adapter = {
       const createdAt = stats?.mtimeMs ? Math.floor(stats.mtimeMs) : Date.now();
       const updatedAt = stats?.mtimeMs ? Math.floor(stats.mtimeMs) : undefined;
 
-      if (opts?.since && createdAt < opts.since) {
-        continue;
+      // Check both created and updated time so modified sessions are re-imported
+      if (opts?.since) {
+        const lastModified = updatedAt ?? createdAt;
+        if (createdAt < opts.since && lastModified < opts.since) {
+          continue;
+        }
       }
 
       conversations.push({

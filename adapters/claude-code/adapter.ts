@@ -95,8 +95,12 @@ const adapter: Adapter = {
       const createdAt = timestamps.length > 0 ? Math.min(...timestamps) : Date.now();
       const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
 
-      if (opts?.since && createdAt < opts.since) {
-        continue;
+      // Check both created and updated time so modified sessions are re-imported
+      if (opts?.since) {
+        const lastModified = updatedAt ?? createdAt;
+        if (createdAt < opts.since && lastModified < opts.since) {
+          continue;
+        }
       }
 
       const summary = entries.find(e => e.type === 'summary' && e.summary)?.summary;

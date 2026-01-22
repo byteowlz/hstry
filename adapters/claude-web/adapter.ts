@@ -169,11 +169,17 @@ function parseConversation(
     earliestMessageTime(messages) ??
     Date.now();
 
-  if (opts?.since && createdAtMs < opts.since) return null;
-
   const updatedAtMs =
     parseTimestamp(raw.updated_at ?? raw.update_time ?? raw.updatedAt ?? raw.updated) ??
     latestMessageTime(messages);
+
+  // Check both created and updated time so modified sessions are re-imported
+  if (opts?.since) {
+    const lastModified = updatedAtMs ?? createdAtMs;
+    if (createdAtMs < opts.since && lastModified < opts.since) {
+      return null;
+    }
+  }
 
   const model = deriveModel(messages) ?? stringOrUndefined(raw.model ?? raw.model_name);
 

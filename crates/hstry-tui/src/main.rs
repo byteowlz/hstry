@@ -30,7 +30,11 @@ use hstry_core::{Config, Database, db::ListConversationsOptions, models::*};
 // =============================================================================
 
 /// Render markdown content to styled ratatui Lines
-fn render_markdown(content: &str, role: &MessageRole) -> Vec<Line<'static>> {
+fn render_markdown(
+    content: &str,
+    role: &MessageRole,
+    highlight: Option<&str>,
+) -> Vec<Line<'static>> {
     // For tool output, try special formatting first
     if *role == MessageRole::Tool {
         if let Some(lines) = try_format_tool_output(content) {
@@ -205,7 +209,11 @@ fn render_markdown(content: &str, role: &MessageRole) -> Vec<Line<'static>> {
         lines.pop();
     }
 
-    lines
+    if let Some(term) = highlight.filter(|t| !t.trim().is_empty()) {
+        highlight_lines(lines, term)
+    } else {
+        lines
+    }
 }
 
 fn current_style(stack: &[Style]) -> Style {
@@ -265,6 +273,67 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+fn highlight_lines(lines: Vec<Line<'static>>, term: &str) -> Vec<Line<'static>> {
+    let needle = term.to_lowercase();
+    lines
+        .into_iter()
+        .map(|line| highlight_line(line, &needle))
+        .collect()
+}
+
+fn highlight_line(line: Line<'static>, needle: &str) -> Line<'static> {
+    if needle.is_empty() {
+        return line;
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for span in line.spans {
+        highlight_span_into(span, needle, &mut spans);
+    }
+
+    Line {
+        spans,
+        alignment: line.alignment,
+        style: line.style,
+    }
+}
+
+fn highlight_span_into(span: Span<'static>, needle: &str, out: &mut Vec<Span<'static>>) {
+    let text = span.content.as_ref();
+    let lower = text.to_lowercase();
+
+    if !lower.contains(needle) {
+        out.push(span);
+        return;
+    }
+
+    let mut rest = text;
+    let mut rest_lower = lower.as_str();
+    while let Some(idx) = rest_lower.find(needle) {
+        let (prefix, after_prefix) = rest.split_at(idx);
+        let (_, after_prefix_lower) = rest_lower.split_at(idx);
+        if !prefix.is_empty() {
+            out.push(Span::styled(prefix.to_string(), span.style));
+        }
+
+        let (matched, suffix) = after_prefix.split_at(needle.len());
+        let highlight_style = span.style.patch(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+        out.push(Span::styled(matched.to_string(), highlight_style));
+
+        rest = suffix;
+        rest_lower = &after_prefix_lower[needle.len()..];
+    }
+
+    if !rest.is_empty() {
+        out.push(Span::styled(rest.to_string(), span.style));
+    }
+}
+
 // =============================================================================
 // Tool Output Formatting
 // =============================================================================
@@ -318,7 +387,7 @@ fn try_parse_tool_json(content: &str) -> Option<Vec<Line<'static>>> {
             }
         } else {
             // Regular output - render as markdown or plain text
-            let output_lines = render_markdown(output, &MessageRole::Tool);
+            let output_lines = render_markdown(output, &MessageRole::Tool, None);
             if output_lines.len() > 25 {
                 lines.extend(output_lines.into_iter().take(20));
                 lines.push(Line::from("... (truncated)").fg(Color::DarkGray));
@@ -741,6 +810,7 @@ struct App {
     messages: Vec<Message>,
     search_results: Vec<SearchHit>,
     show_search_results: bool,
+    last_search_query: Option<String>,
 
     // Navigation items for left pane
     nav_items: Vec<NavItem>,
@@ -799,6 +869,7 @@ impl App {
             messages: Vec::new(),
             search_results: Vec::new(),
             show_search_results: false,
+            last_search_query: None,
             nav_items,
             nav_selection: Selection::default(),
             conv_selection: Selection::default(),
@@ -857,6 +928,7 @@ impl App {
         self.conv_selection.deselect_all();
         self.show_search_results = false;
         self.search_results.clear();
+        self.last_search_query = None;
     }
 
     fn apply_sort(&mut self) {
@@ -897,7 +969,11 @@ impl App {
             match rt.block_on(self.db.get_messages(conv_id)) {
                 Ok(msgs) => {
                     self.messages = msgs;
-                    self.detail_scroll = 0;
+                    self.detail_scroll = self
+                        .last_search_query
+                        .as_deref()
+                        .and_then(|q| first_match_scroll(&self.messages, q))
+                        .unwrap_or(0);
                 }
                 Err(e) => {
                     self.status_message = format!("Error loading messages: {e}");
@@ -913,6 +989,7 @@ impl App {
             if query.is_empty() {
                 self.search_results.clear();
                 self.show_search_results = false;
+                self.last_search_query = None;
                 return;
             }
 
@@ -927,6 +1004,7 @@ impl App {
                 Ok(results) => {
                     self.search_results = results;
                     self.show_search_results = !self.search_results.is_empty();
+                    self.last_search_query = Some(query.clone());
                     self.conv_selection.index = 0;
                     self.status_message = format!("Found {} results", self.search_results.len());
                 }
@@ -934,6 +1012,7 @@ impl App {
                     self.status_message = format!("Search error: {e}");
                     self.search_results.clear();
                     self.show_search_results = false;
+                    self.last_search_query = None;
                 }
             }
         }
@@ -954,6 +1033,7 @@ impl App {
                 self.apply_filters();
                 self.show_search_results = false;
                 self.search_results.clear();
+                self.last_search_query = None;
                 self.status_message = "Data refreshed".to_string();
             }
             Err(e) => self.status_message = format!("Error loading conversations: {e}"),
@@ -1090,6 +1170,7 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
             if app.show_search_results {
                 app.show_search_results = false;
                 app.search_results.clear();
+                app.last_search_query = None;
                 app.conv_selection.index = 0;
                 app.status_message = "Cleared search results".to_string();
             }
@@ -1440,7 +1521,7 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let bg = Color::Rgb(20, 24, 32);
+    let bg = Color::Black;
     let base_style = Style::default().bg(bg);
 
     // Paint a solid background so the three columns feel distinct.
@@ -1501,7 +1582,7 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let bg = Color::Rgb(18, 21, 30);
+    let bg = Color::Black;
     let base_style = Style::default().bg(bg);
 
     f.render_widget(Paragraph::new("").style(base_style), area);
@@ -1586,6 +1667,56 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+fn build_message_lines(messages: &[Message], highlight: Option<&str>) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for msg in messages {
+        let role_style = match msg.role {
+            MessageRole::User => Style::default().fg(Color::Green).bold(),
+            MessageRole::Assistant => Style::default().fg(Color::Blue).bold(),
+            MessageRole::System => Style::default().fg(Color::Yellow).bold(),
+            MessageRole::Tool => Style::default().fg(Color::Magenta).bold(),
+            MessageRole::Other => Style::default().fg(Color::Gray).bold(),
+        };
+
+        let role_label = match msg.role {
+            MessageRole::User => "USER",
+            MessageRole::Assistant => "ASSISTANT",
+            MessageRole::System => "SYSTEM",
+            MessageRole::Tool => "TOOL",
+            MessageRole::Other => "OTHER",
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("[{role_label}]"),
+            role_style,
+        )));
+
+        let content_lines = render_markdown(&msg.content, &msg.role, highlight);
+        lines.extend(content_lines);
+
+        lines.push(Line::from(""));
+    }
+    lines
+}
+
+fn first_match_scroll(messages: &[Message], query: &str) -> Option<usize> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let lines = build_message_lines(messages, None);
+    for (idx, line) in lines.iter().enumerate() {
+        if line
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref().to_lowercase().contains(&needle))
+        {
+            return Some(idx.saturating_sub(1));
+        }
+    }
+    None
+}
+
 fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.focus == FocusPane::Right;
     let border_style = if is_focused {
@@ -1593,7 +1724,7 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let bg = Color::Rgb(16, 19, 28);
+    let bg = Color::Black;
     let base_style = Style::default().bg(bg);
 
     f.render_widget(Paragraph::new("").style(base_style), area);
@@ -1641,37 +1772,12 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Render messages with smart formatting
-    let mut lines: Vec<Line> = Vec::new();
-
-    for msg in &app.messages {
-        let role_style = match msg.role {
-            MessageRole::User => Style::default().fg(Color::Green).bold(),
-            MessageRole::Assistant => Style::default().fg(Color::Blue).bold(),
-            MessageRole::System => Style::default().fg(Color::Yellow).bold(),
-            MessageRole::Tool => Style::default().fg(Color::Magenta).bold(),
-            MessageRole::Other => Style::default().fg(Color::Gray).bold(),
-        };
-
-        let role_label = match msg.role {
-            MessageRole::User => "USER",
-            MessageRole::Assistant => "ASSISTANT",
-            MessageRole::System => "SYSTEM",
-            MessageRole::Tool => "TOOL",
-            MessageRole::Other => "OTHER",
-        };
-
-        lines.push(Line::from(Span::styled(
-            format!("[{role_label}]"),
-            role_style,
-        )));
-
-        // Render content with markdown formatting
-        let content_lines = render_markdown(&msg.content, &msg.role);
-        lines.extend(content_lines);
-
-        lines.push(Line::from("")); // Separator
-    }
+    let highlight = if app.show_search_results {
+        app.last_search_query.as_deref()
+    } else {
+        None
+    };
+    let lines = build_message_lines(&app.messages, highlight);
 
     // Apply scroll offset
     let scroll_offset = app.detail_scroll.min(lines.len().saturating_sub(1));

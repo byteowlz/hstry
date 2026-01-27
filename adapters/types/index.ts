@@ -25,6 +25,7 @@ export type CanonPart =
 export interface Conversation {
   schemaVersion?: string;
   externalId?: string;
+  readableId?: string;
   title?: string;
   createdAt: number;      // Unix timestamp (ms)
   updatedAt?: number;

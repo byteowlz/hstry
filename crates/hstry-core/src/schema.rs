@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES sources(id),
     external_id TEXT,
+    readable_id TEXT,
     title TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER,
@@ -144,6 +145,7 @@ END;
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_conv_source ON conversations(source_id);
 CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conv_readable_id ON conversations(readable_id);
 CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace);
 CREATE INDEX IF NOT EXISTS idx_conv_model ON conversations(model);
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, idx);

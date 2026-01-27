@@ -41,8 +41,70 @@ impl Database {
     /// Initialize schema.
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        self.ensure_conversations_readable_id_column().await?;
         self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema().await?;
+        Ok(())
+    }
+
+    async fn ensure_conversations_readable_id_column(&self) -> Result<()> {
+        let rows = sqlx::query("PRAGMA table_info(conversations)")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let has_readable_id = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .any(|name| name == "readable_id");
+
+        if !has_readable_id {
+            sqlx::query("ALTER TABLE conversations ADD COLUMN readable_id TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        // Backfill missing readable IDs deterministically.
+        let rows = sqlx::query(
+            "SELECT id, source_id, external_id, title, metadata FROM conversations WHERE readable_id IS NULL OR readable_id = ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        for row in rows {
+            let id = Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default();
+            let source_id: String = row.get("source_id");
+            let external_id: Option<String> = row.get("external_id");
+            let title: Option<String> = row.get("title");
+            let metadata = row
+                .get::<Option<String>, _>("metadata")
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+
+            let readable_id = readable_id_from_metadata(&metadata).unwrap_or_else(|| {
+                generate_readable_id(&Conversation {
+                    id,
+                    source_id: source_id.clone(),
+                    external_id: external_id.clone(),
+                    readable_id: None,
+                    title: title.clone(),
+                    created_at: Utc::now(),
+                    updated_at: None,
+                    model: None,
+                    workspace: None,
+                    tokens_in: None,
+                    tokens_out: None,
+                    cost_usd: None,
+                    metadata: metadata.clone(),
+                })
+            });
+
+            sqlx::query("UPDATE conversations SET readable_id = ? WHERE id = ?")
+                .bind(readable_id)
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -209,11 +271,28 @@ impl Database {
 
     /// Insert a conversation (upsert by source_id + external_id).
     pub async fn upsert_conversation(&self, conv: &Conversation) -> Result<()> {
+        let readable_id = match conv.readable_id.clone() {
+            Some(id) => Some(id),
+            None => {
+                let from_meta = readable_id_from_metadata(&conv.metadata);
+                if from_meta.is_some() {
+                    from_meta
+                } else if let Some(external_id) = conv.external_id.as_deref() {
+                    self.get_conversation_readable_id(&conv.source_id, external_id)
+                        .await?
+                        .or_else(|| Some(generate_readable_id(conv)))
+                } else {
+                    Some(generate_readable_id(conv))
+                }
+            }
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO conversations (id, source_id, external_id, title, created_at, updated_at, model, workspace, tokens_in, tokens_out, cost_usd, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, workspace, tokens_in, tokens_out, cost_usd, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
+                readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,
@@ -227,6 +306,7 @@ impl Database {
         .bind(conv.id.to_string())
         .bind(&conv.source_id)
         .bind(&conv.external_id)
+        .bind(&readable_id)
         .bind(&conv.title)
         .bind(conv.created_at.timestamp())
         .bind(conv.updated_at.map(|dt| dt.timestamp()))
@@ -312,6 +392,22 @@ impl Database {
                 .await?;
 
         Ok(row.map(|row| Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default()))
+    }
+
+    async fn get_conversation_readable_id(
+        &self,
+        source_id: &str,
+        external_id: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT readable_id FROM conversations WHERE source_id = ? AND external_id = ?",
+        )
+        .bind(source_id)
+        .bind(external_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(|row| row.get::<Option<String>, _>("readable_id")))
     }
 
     /// Get conversation count.
@@ -749,6 +845,7 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Conversation> 
         id: Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default(),
         source_id: row.get("source_id"),
         external_id: row.get("external_id"),
+        readable_id: row.get("readable_id"),
         title: row.get("title"),
         created_at: chrono::DateTime::from_timestamp(row.get::<i64, _>("created_at"), 0)
             .unwrap_or_default()
@@ -802,41 +899,110 @@ fn normalize_parts_json(parts_json: &serde_json::Value) -> serde_json::Value {
 }
 
 fn project_content(content: &str, parts_json: &serde_json::Value) -> String {
-    if !content.trim().is_empty() {
-        return content.to_string();
-    }
-
     let serde_json::Value::Array(parts) = parts_json else {
-        return String::new();
+        return content.to_string();
+    };
+
+    let should_project = content.trim().is_empty() || should_project_from_parts(content, parts);
+    if !should_project {
+        return content.to_string();
     };
 
     let mut text_parts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut total_chars = 0usize;
     for part in parts {
         let serde_json::Value::Object(obj) = part else {
             continue;
         };
         let part_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-        match part_type {
-            "text" | "thinking" => {
-                if let Some(text) = obj.get("text").and_then(|v| v.as_str())
-                    && !text.trim().is_empty()
-                {
-                    text_parts.push(text.trim().to_string());
-                }
-            }
-            "status" | "error" => {
-                if let Some(text) = obj
-                    .get("message")
-                    .or_else(|| obj.get("text"))
-                    .and_then(|v| v.as_str())
-                    && !text.trim().is_empty()
-                {
-                    text_parts.push(text.trim().to_string());
-                }
-            }
-            _ => {}
+        let raw_text = match part_type {
+            "text" | "thinking" => obj.get("text").and_then(|v| v.as_str()),
+            "status" | "error" => obj
+                .get("message")
+                .or_else(|| obj.get("text"))
+                .and_then(|v| v.as_str()),
+            _ => None,
+        };
+
+        let Some(raw_text) = raw_text else { continue };
+        let sanitized = sanitize_projection_text(raw_text);
+        if sanitized.is_empty() {
+            continue;
         }
+        let key = sanitized.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        total_chars += sanitized.chars().count();
+        if total_chars > 4000 {
+            break;
+        }
+        text_parts.push(sanitized);
     }
 
-    text_parts.join("\n\n")
+    if text_parts.is_empty() {
+        content.to_string()
+    } else {
+        text_parts.join("\n\n")
+    }
+}
+
+fn should_project_from_parts(content: &str, parts: &[serde_json::Value]) -> bool {
+    if parts.is_empty() {
+        return false;
+    }
+
+    let line_count = content.lines().count();
+    let char_count = content.chars().count();
+    char_count > 2000 || line_count > 80
+}
+
+fn sanitize_projection_text(text: &str) -> String {
+    const MAX_CHARS: usize = 500;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let truncated: String = trimmed.chars().take(MAX_CHARS).collect();
+    truncated
+}
+
+fn readable_id_from_metadata(metadata: &serde_json::Value) -> Option<String> {
+    let serde_json::Value::Object(map) = metadata else {
+        return None;
+    };
+    map.get("readableId")
+        .or_else(|| map.get("readable_id"))
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+}
+
+fn generate_readable_id(conv: &Conversation) -> String {
+    // Deterministic, human-readable IDs based on stable identifiers.
+    const ADJECTIVES: &[&str] = &[
+        "amber", "brisk", "calm", "daring", "eager", "fuzzy", "gentle", "hazy", "icy", "jolly",
+        "keen", "lucky", "mellow", "nimble", "proud", "swift",
+    ];
+    const VERBS: &[&str] = &[
+        "builds", "checks", "crafts", "drives", "explores", "fixes", "guides", "helps", "joins",
+        "keeps", "learns", "moves", "patches", "routes", "shapes", "tests",
+    ];
+    const NOUNS: &[&str] = &[
+        "anchor", "beacon", "circuit", "delta", "ember", "forest", "galaxy", "harbor", "island",
+        "junction", "kernel", "ladder", "matrix", "nebula", "orchid", "pioneer",
+    ];
+
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    conv.id.hash(&mut hasher);
+    conv.source_id.hash(&mut hasher);
+    conv.external_id.hash(&mut hasher);
+    conv.title.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
+    let verb = VERBS[((hash >> 8) as usize) % VERBS.len()];
+    let noun = NOUNS[((hash >> 16) as usize) % NOUNS.len()];
+    format!("{adj}-{verb}-{noun}")
 }

@@ -49,6 +49,7 @@ pub async fn sync_source(
             id: conv_id,
             source_id: source.id.clone(),
             external_id: conv.external_id,
+            readable_id: conv.readable_id,
             title: conv.title,
             created_at: chrono::DateTime::from_timestamp_millis(conv.created_at as i64)
                 .unwrap_or_default()

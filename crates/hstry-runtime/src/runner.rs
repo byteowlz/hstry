@@ -118,6 +118,7 @@ pub struct ExportOptions {
 #[serde(rename_all = "camelCase")]
 pub struct ParsedConversation {
     pub external_id: Option<String>,
+    pub readable_id: Option<String>,
     pub title: Option<String>,
     pub created_at: i64, // Unix ms
     pub updated_at: Option<i64>,
@@ -165,6 +166,7 @@ pub struct ParsedToolCall {
 #[serde(rename_all = "camelCase")]
 pub struct ExportConversation {
     pub external_id: Option<String>,
+    pub readable_id: Option<String>,
     pub title: Option<String>,
     pub created_at: i64, // Unix ms
     pub updated_at: Option<i64>,

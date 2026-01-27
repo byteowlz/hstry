@@ -6,6 +6,7 @@ use hstry_runtime::{
 fn export_request_serializes() {
     let conv = ExportConversation {
         external_id: Some("conv-1".to_string()),
+        readable_id: None,
         title: Some("Test".to_string()),
         created_at: 1_700_000_000_000,
         updated_at: None,

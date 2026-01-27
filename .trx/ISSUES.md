@@ -2,8 +2,6 @@
 
 ## Open
 
-### [trx-qxba] Fix hstry-tui char boundary panic on box drawing (P1, bug)
-
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)
@@ -29,5 +27,8 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-x2k5] Reduce noisy search projection from tool/file outputs (closed 2026-01-27)
+- [trx-z5x5] Add readable_id adj-verb-noun IDs to conversations (closed 2026-01-27)
+- [trx-qxba] Fix hstry-tui char boundary panic on box drawing (closed 2026-01-27)
 - [trx-36t2] Test OpenCode adapter with real session data (closed 2026-01-17)
 - [trx-zp7t] Fix adapter path discovery in dev mode (closed 2026-01-17)

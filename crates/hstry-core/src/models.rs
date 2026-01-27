@@ -20,6 +20,7 @@ pub struct Conversation {
     pub id: Uuid,
     pub source_id: String,
     pub external_id: Option<String>,
+    pub readable_id: Option<String>,
     pub title: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,

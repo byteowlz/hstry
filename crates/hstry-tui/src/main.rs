@@ -21,6 +21,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
+use uuid::Uuid;
 
 use hstry_core::{Config, Database, db::ListConversationsOptions, models::*};
 
@@ -739,6 +740,7 @@ struct App {
     filtered_conversations: Vec<Conversation>,
     messages: Vec<Message>,
     search_results: Vec<SearchHit>,
+    show_search_results: bool,
 
     // Navigation items for left pane
     nav_items: Vec<NavItem>,
@@ -796,12 +798,38 @@ impl App {
             filtered_conversations,
             messages: Vec::new(),
             search_results: Vec::new(),
+            show_search_results: false,
             nav_items,
             nav_selection: Selection::default(),
             conv_selection: Selection::default(),
             detail_scroll: 0,
             status_message: "Press ? for help, q to quit".to_string(),
         }
+    }
+
+    fn active_list_len(&self) -> usize {
+        if self.show_search_results && !self.search_results.is_empty() {
+            self.search_results.len()
+        } else {
+            self.filtered_conversations.len()
+        }
+    }
+
+    fn selected_conversation_id(&self) -> Option<Uuid> {
+        if self.show_search_results && !self.search_results.is_empty() {
+            self.search_results
+                .get(self.conv_selection.index)
+                .map(|hit| hit.conversation_id)
+        } else {
+            self.filtered_conversations
+                .get(self.conv_selection.index)
+                .map(|conv| conv.id)
+        }
+    }
+
+    fn selected_conversation(&self) -> Option<&Conversation> {
+        let conv_id = self.selected_conversation_id()?;
+        self.all_conversations.iter().find(|c| c.id == conv_id)
     }
 
     fn apply_filters(&mut self) {
@@ -827,6 +855,8 @@ impl App {
         self.apply_sort();
         self.conv_selection.index = 0;
         self.conv_selection.deselect_all();
+        self.show_search_results = false;
+        self.search_results.clear();
     }
 
     fn apply_sort(&mut self) {
@@ -863,8 +893,8 @@ impl App {
     }
 
     fn load_messages(&mut self, rt: &tokio::runtime::Runtime) {
-        if let Some(conv) = self.filtered_conversations.get(self.conv_selection.index) {
-            match rt.block_on(self.db.get_messages(conv.id)) {
+        if let Some(conv_id) = self.selected_conversation_id() {
+            match rt.block_on(self.db.get_messages(conv_id)) {
                 Ok(msgs) => {
                     self.messages = msgs;
                     self.detail_scroll = 0;
@@ -882,6 +912,7 @@ impl App {
         if let AppMode::Search { ref query, .. } = self.mode {
             if query.is_empty() {
                 self.search_results.clear();
+                self.show_search_results = false;
                 return;
             }
 
@@ -895,12 +926,14 @@ impl App {
             match rt.block_on(self.db.search(query, opts)) {
                 Ok(results) => {
                     self.search_results = results;
+                    self.show_search_results = !self.search_results.is_empty();
                     self.conv_selection.index = 0;
                     self.status_message = format!("Found {} results", self.search_results.len());
                 }
                 Err(e) => {
                     self.status_message = format!("Search error: {e}");
                     self.search_results.clear();
+                    self.show_search_results = false;
                 }
             }
         }
@@ -919,6 +952,8 @@ impl App {
             Ok(convs) => {
                 self.all_conversations = convs;
                 self.apply_filters();
+                self.show_search_results = false;
+                self.search_results.clear();
                 self.status_message = "Data refreshed".to_string();
             }
             Err(e) => self.status_message = format!("Error loading conversations: {e}"),
@@ -1049,6 +1084,15 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                 cursor: 0,
             };
             app.search_results.clear();
+            app.show_search_results = false;
+        }
+        KeyAction::Char('x') => {
+            if app.show_search_results {
+                app.show_search_results = false;
+                app.search_results.clear();
+                app.conv_selection.index = 0;
+                app.status_message = "Cleared search results".to_string();
+            }
         }
         KeyAction::Char('s') => {
             app.mode = AppMode::Sort;
@@ -1111,13 +1155,12 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::ToggleSelect => {
             if app.focus == FocusPane::Middle {
                 app.conv_selection.toggle_selection();
-                app.conv_selection.next(app.filtered_conversations.len());
+                app.conv_selection.next(app.active_list_len());
             }
         }
         KeyAction::SelectAll => {
             if app.focus == FocusPane::Middle {
-                app.conv_selection
-                    .select_all(app.filtered_conversations.len());
+                app.conv_selection.select_all(app.active_list_len());
             }
         }
         KeyAction::Char('V') => {
@@ -1184,7 +1227,10 @@ fn handle_navigation(app: &mut App, direction: NavDirection, rt: &tokio::runtime
             }
         }
         FocusPane::Middle => {
-            let max = app.filtered_conversations.len();
+            let max = app.active_list_len();
+            if max == 0 {
+                return;
+            }
             let prev_index = app.conv_selection.index;
             match direction {
                 NavDirection::Up => app.conv_selection.previous(),
@@ -1231,7 +1277,6 @@ fn handle_search_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         match action {
             KeyAction::Escape => {
                 app.mode = AppMode::Normal;
-                app.search_results.clear();
             }
             KeyAction::Select => {
                 app.perform_search(rt);
@@ -1395,11 +1440,17 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let bg = Color::Rgb(20, 24, 32);
+    let base_style = Style::default().bg(bg);
+
+    // Paint a solid background so the three columns feel distinct.
+    f.render_widget(Paragraph::new("").style(base_style), area);
 
     let block = Block::default()
         .title(" Sources ")
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(base_style);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -1438,7 +1489,7 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let list = List::new(items).highlight_symbol("> ");
+    let list = List::new(items).highlight_symbol("> ").style(base_style);
     let mut state = ListState::default().with_selected(Some(app.nav_selection.index));
     f.render_stateful_widget(list, inner, &mut state);
 }
@@ -1450,8 +1501,12 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let bg = Color::Rgb(18, 21, 30);
+    let base_style = Style::default().bg(bg);
 
-    let title = if matches!(app.mode, AppMode::Search { .. }) && !app.search_results.is_empty() {
+    f.render_widget(Paragraph::new("").style(base_style), area);
+
+    let title = if app.show_search_results && !app.search_results.is_empty() {
         format!(" Search Results ({}) ", app.search_results.len())
     } else {
         format!(" Conversations ({}) ", app.filtered_conversations.len())
@@ -1460,13 +1515,14 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(base_style);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     // Render either search results or conversations
-    if matches!(app.mode, AppMode::Search { .. }) && !app.search_results.is_empty() {
+    if app.show_search_results && !app.search_results.is_empty() {
         let items: Vec<ListItem> = app
             .search_results
             .iter()
@@ -1490,7 +1546,7 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
 
-        let list = List::new(items).highlight_symbol("> ");
+        let list = List::new(items).highlight_symbol("> ").style(base_style);
         let mut state = ListState::default().with_selected(Some(app.conv_selection.index));
         f.render_stateful_widget(list, inner, &mut state);
     } else {
@@ -1524,7 +1580,7 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
             })
             .collect();
 
-        let list = List::new(items).highlight_symbol("> ");
+        let list = List::new(items).highlight_symbol("> ").style(base_style);
         let mut state = ListState::default().with_selected(Some(app.conv_selection.index));
         f.render_stateful_widget(list, inner, &mut state);
     }
@@ -1537,17 +1593,22 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let bg = Color::Rgb(16, 19, 28);
+    let base_style = Style::default().bg(bg);
+
+    f.render_widget(Paragraph::new("").style(base_style), area);
 
     let block = Block::default()
         .title(" Messages ")
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(border_style)
+        .style(base_style);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if app.messages.is_empty() {
-        if let Some(conv) = app.filtered_conversations.get(app.conv_selection.index) {
+        if let Some(conv) = app.selected_conversation() {
             let info = vec![
                 Line::from(conv.title.as_deref().unwrap_or("Untitled")).bold(),
                 Line::from(""),
@@ -1569,10 +1630,12 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
                 Line::from("No messages loaded. Press Enter to load.").fg(Color::DarkGray),
             ];
-            let paragraph = Paragraph::new(info);
+            let paragraph = Paragraph::new(info).style(base_style);
             f.render_widget(paragraph, inner);
         } else {
-            let paragraph = Paragraph::new("No conversation selected").fg(Color::DarkGray);
+            let paragraph = Paragraph::new("No conversation selected")
+                .fg(Color::DarkGray)
+                .style(base_style);
             f.render_widget(paragraph, inner);
         }
         return;
@@ -1614,6 +1677,7 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     let scroll_offset = app.detail_scroll.min(lines.len().saturating_sub(1));
 
     let paragraph = Paragraph::new(lines)
+        .style(base_style)
         .wrap(Wrap { trim: false })
         .scroll((scroll_offset as u16, 0));
     f.render_widget(paragraph, inner);
@@ -1693,8 +1757,9 @@ fn draw_help_overlay(f: &mut Frame, scroll: usize) {
         Line::from("SEARCH MODE").bold(),
         Line::from(""),
         Line::from("  Enter         Execute search"),
-        Line::from("  Esc           Cancel search"),
+        Line::from("  Esc           Exit search input (keep results)"),
         Line::from("  Up/Down       Navigate results"),
+        Line::from("  x             Clear search results"),
         Line::from(""),
         Line::from("SORT MODE").bold(),
         Line::from(""),
@@ -1761,7 +1826,7 @@ fn draw_search_overlay(f: &mut Frame, query: &str, cursor: usize) {
     f.render_widget(Clear, area);
 
     let block = Block::default()
-        .title(" Search (Enter to search, Esc to cancel) ")
+        .title(" Search (Enter to search, Esc to exit input) ")
         .borders(Borders::ALL)
         .style(Style::default().bg(Color::Black));
 

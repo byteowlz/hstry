@@ -142,6 +142,8 @@ pub struct ParsedMessage {
     pub tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     #[serde(default)]
+    pub parts: Option<serde_json::Value>,
+    #[serde(default)]
     pub tool_calls: Option<Vec<ParsedToolCall>>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,

@@ -70,12 +70,14 @@ pub async fn sync_source(
         db.upsert_conversation(&hstry_conv).await?;
 
         for (idx, msg) in conv.messages.iter().enumerate() {
+            let parts_json = msg.parts.clone().unwrap_or_else(|| serde_json::json!([]));
             let hstry_msg = hstry_core::models::Message {
                 id: uuid::Uuid::new_v4(),
                 conversation_id: hstry_conv.id,
                 idx: idx as i32,
                 role: hstry_core::models::MessageRole::from(msg.role.as_str()),
                 content: msg.content.clone(),
+                parts_json,
                 created_at: msg.created_at.and_then(|ts| {
                     chrono::DateTime::from_timestamp_millis(ts as i64)
                         .map(|dt| dt.with_timezone(&Utc))

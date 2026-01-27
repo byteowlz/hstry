@@ -132,20 +132,20 @@ impl Default for Config {
         let mut adapter_paths = vec![config_dir.join("adapters")];
 
         // Add exe-relative adapters (for development and bundled distribution)
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                // Development: target/debug/../../adapters (goes to project root)
-                let dev_adapters = exe_dir.join("../..").join("adapters");
-                if dev_adapters.exists() {
-                    if let Ok(canonical) = dev_adapters.canonicalize() {
-                        adapter_paths.push(canonical);
-                    }
-                }
-                // Bundled: exe_dir/adapters
-                let bundled_adapters = exe_dir.join("adapters");
-                if bundled_adapters.exists() {
-                    adapter_paths.push(bundled_adapters);
-                }
+        if let Ok(exe_path) = std::env::current_exe()
+            && let Some(exe_dir) = exe_path.parent()
+        {
+            // Development: target/debug/../../adapters (goes to project root)
+            let dev_adapters = exe_dir.join("../..").join("adapters");
+            if dev_adapters.exists()
+                && let Ok(canonical) = dev_adapters.canonicalize()
+            {
+                adapter_paths.push(canonical);
+            }
+            // Bundled: exe_dir/adapters
+            let bundled_adapters = exe_dir.join("adapters");
+            if bundled_adapters.exists() {
+                adapter_paths.push(bundled_adapters);
             }
         }
 

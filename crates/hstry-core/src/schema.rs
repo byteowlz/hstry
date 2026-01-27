@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS messages (
     idx INTEGER NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    parts_json JSON NOT NULL DEFAULT '[]',
     created_at INTEGER,
     model TEXT,
     tokens INTEGER,

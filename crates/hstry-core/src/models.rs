@@ -39,6 +39,7 @@ pub struct Message {
     pub idx: i32,
     pub role: MessageRole,
     pub content: String,
+    pub parts_json: serde_json::Value,
     pub created_at: Option<DateTime<Utc>>,
     pub model: Option<String>,
     pub tokens: Option<i64>,

@@ -12,3 +12,4 @@ tokio.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
+pulldown-cmark.workspace = true

@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/byteowlz/hstry"
@@ -41,6 +41,7 @@ clap_complete = "4.5"
 # TUI
 ratatui = "0.29"
 crossterm = "0.28"
+pulldown-cmark = "0.12"
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }

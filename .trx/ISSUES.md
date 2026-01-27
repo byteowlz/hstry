@@ -2,6 +2,8 @@
 
 ## Open
 
+### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
+
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)
 Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON memories (with hstry metadata) and invokes the mmry add stdin flow with store/config options.
 

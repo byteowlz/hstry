@@ -21,6 +21,7 @@ fn export_request_serializes() {
             model: None,
             tokens: None,
             cost_usd: None,
+            parts: None,
             tool_calls: None,
             metadata: None,
         }],

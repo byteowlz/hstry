@@ -41,7 +41,27 @@ impl Database {
     /// Initialize schema.
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema().await?;
+        Ok(())
+    }
+
+    async fn ensure_messages_parts_column(&self) -> Result<()> {
+        let rows = sqlx::query("PRAGMA table_info(messages)")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let has_parts_json = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .any(|name| name == "parts_json");
+
+        if !has_parts_json {
+            sqlx::query("ALTER TABLE messages ADD COLUMN parts_json JSON NOT NULL DEFAULT '[]'")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -308,13 +328,16 @@ impl Database {
 
     /// Insert a message.
     pub async fn insert_message(&self, msg: &Message) -> Result<()> {
+        let parts_json = normalize_parts_json(&msg.parts_json);
+        let content = project_content(&msg.content, &parts_json);
         sqlx::query(
             r#"
-            INSERT INTO messages (id, conversation_id, idx, role, content, created_at, model, tokens, cost_usd, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conversation_id, idx) DO UPDATE SET
                 role = excluded.role,
                 content = excluded.content,
+                parts_json = excluded.parts_json,
                 created_at = excluded.created_at,
                 model = excluded.model,
                 tokens = excluded.tokens,
@@ -326,7 +349,8 @@ impl Database {
         .bind(msg.conversation_id.to_string())
         .bind(msg.idx)
         .bind(msg.role.to_string())
-        .bind(&msg.content)
+        .bind(content)
+        .bind(parts_json.to_string())
         .bind(msg.created_at.map(|dt| dt.timestamp()))
         .bind(&msg.model)
         .bind(msg.tokens)
@@ -679,17 +703,12 @@ pub struct SearchOptions {
     pub mode: SearchMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchMode {
+    #[default]
     Auto,
     NaturalLanguage,
     Code,
-}
-
-impl Default for SearchMode {
-    fn default() -> Self {
-        SearchMode::Auto
-    }
 }
 
 impl SearchMode {
@@ -757,6 +776,10 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message> {
         idx: row.get("idx"),
         role: MessageRole::from(row.get::<&str, _>("role")),
         content: row.get("content"),
+        parts_json: row
+            .get::<Option<String>, _>("parts_json")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!([])),
         created_at: row
             .get::<Option<i64>, _>("created_at")
             .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
@@ -769,4 +792,51 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message> {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
     })
+}
+
+fn normalize_parts_json(parts_json: &serde_json::Value) -> serde_json::Value {
+    match parts_json {
+        serde_json::Value::Array(_) => parts_json.clone(),
+        _ => serde_json::json!([]),
+    }
+}
+
+fn project_content(content: &str, parts_json: &serde_json::Value) -> String {
+    if !content.trim().is_empty() {
+        return content.to_string();
+    }
+
+    let serde_json::Value::Array(parts) = parts_json else {
+        return String::new();
+    };
+
+    let mut text_parts = Vec::new();
+    for part in parts {
+        let serde_json::Value::Object(obj) = part else {
+            continue;
+        };
+        let part_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+        match part_type {
+            "text" | "thinking" => {
+                if let Some(text) = obj.get("text").and_then(|v| v.as_str())
+                    && !text.trim().is_empty()
+                {
+                    text_parts.push(text.trim().to_string());
+                }
+            }
+            "status" | "error" => {
+                if let Some(text) = obj
+                    .get("message")
+                    .or_else(|| obj.get("text"))
+                    .and_then(|v| v.as_str())
+                    && !text.trim().is_empty()
+                {
+                    text_parts.push(text.trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    text_parts.join("\n\n")
 }

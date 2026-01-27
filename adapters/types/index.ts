@@ -11,8 +11,19 @@ export type ToolStatus = 'pending' | 'success' | 'error';
 /** Attachment types */
 export type AttachmentType = 'file' | 'image' | 'code';
 
+/** Canonical part types for render-stable chat messages */
+export type CanonPart =
+  | { id: string; type: 'text'; text: string; format?: 'markdown' | 'plain'; meta?: Record<string, unknown> }
+  | { id: string; type: 'thinking'; text: string; visibility?: 'ui' | 'hidden'; meta?: Record<string, unknown> }
+  | { id: string; type: 'tool_call'; toolCallId: string; name: string; input?: unknown; meta?: Record<string, unknown> }
+  | { id: string; type: 'tool_result'; toolCallId: string; name?: string; output?: unknown; isError?: boolean; meta?: Record<string, unknown> }
+  | { id: string; type: 'file_ref'; uri: string; label?: string; range?: { startLine?: number; endLine?: number; startCol?: number; endCol?: number }; originText?: string; meta?: Record<string, unknown> }
+  | { id: string; type: 'citation'; label?: string; targetUri?: string; targetRange?: { startLine?: number; endLine?: number; startCol?: number; endCol?: number }; originText?: string; meta?: Record<string, unknown> }
+  | { id: string; type: `x-${string}`; payload?: unknown; meta?: Record<string, unknown> };
+
 /** A conversation from any source, normalized to a common format */
 export interface Conversation {
+  schemaVersion?: string;
   externalId?: string;
   title?: string;
   createdAt: number;      // Unix timestamp (ms)
@@ -30,6 +41,7 @@ export interface Conversation {
 export interface Message {
   role: MessageRole;
   content: string;
+  parts?: CanonPart[];
   createdAt?: number;     // Unix timestamp (ms)
   model?: string;
   tokens?: number;

@@ -639,8 +639,15 @@ fn is_candidate_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_temp_env<F: FnOnce()>(f: F) {
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock");
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let state_home = temp_dir.path().join("state");
         let config_home = temp_dir.path().join("config");

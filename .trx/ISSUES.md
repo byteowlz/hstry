@@ -2,6 +2,8 @@
 
 ## Open
 
+### [trx-qxba] Fix hstry-tui char boundary panic on box drawing (P1, bug)
+
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)

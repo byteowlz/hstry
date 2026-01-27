@@ -254,10 +254,13 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[S
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        let keep = max.saturating_sub(3);
+        let truncated: String = s.chars().take(keep).collect();
+        format!("{truncated}...")
     }
 }
 

@@ -42,8 +42,18 @@ impl Database {
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
         self.ensure_conversations_readable_id_column().await?;
+        self.ensure_conversations_readable_id_index().await?;
         self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema().await?;
+        Ok(())
+    }
+
+    async fn ensure_conversations_readable_id_index(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_conv_readable_id ON conversations(readable_id)",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -845,7 +855,7 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Conversation> 
         id: Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default(),
         source_id: row.get("source_id"),
         external_id: row.get("external_id"),
-        readable_id: row.get("readable_id"),
+        readable_id: row.try_get("readable_id").ok(),
         title: row.get("title"),
         created_at: chrono::DateTime::from_timestamp(row.get::<i64, _>("created_at"), 0)
             .unwrap_or_default()

@@ -1,9 +1,16 @@
 /**
  * OpenCode adapter for hstry
  * 
- * Parses OpenCode session history from ~/.local/share/opencode/project/
+ * Parses OpenCode session history from ~/.local/share/opencode/
  * 
- * Directory structure:
+ * Supports two layouts:
+ * 
+ * NEW (v1.1.25+): 
+ *   storage/session/<project-id>/<session-id>.json
+ *   storage/message/<session-id>/<msg-id>.json
+ *   storage/part/<msg-id>/<part-id>.json
+ * 
+ * OLD (legacy):
  *   project/<project-name>/storage/session/info/<session-id>.json
  *   project/<project-name>/storage/session/message/<session-id>/<msg-id>.json
  *   project/<project-name>/storage/session/part/<session-id>/<msg-id>/<part-id>.json
@@ -26,6 +33,7 @@ import { runAdapter } from '../types/index.ts';
 interface SessionInfo {
   id: string;
   version?: string;
+  slug?: string;
   title?: string;
   parentID?: string;
   directory?: string;
@@ -33,6 +41,11 @@ interface SessionInfo {
   time: {
     created: number;
     updated: number;
+  };
+  summary?: {
+    additions?: number;
+    deletions?: number;
+    files?: number;
   };
 }
 
@@ -76,160 +89,78 @@ interface PartInfo {
 
 const DEFAULT_OPENCODE_PATH = join(homedir(), '.local/share/opencode');
 
+// Detect which layout is being used
+type LayoutType = 'new' | 'old' | 'none';
+
+async function detectLayout(basePath: string): Promise<LayoutType> {
+  // Check new layout: storage/session/<project-id>/
+  const newStoragePath = join(basePath, 'storage', 'session');
+  try {
+    const stats = await stat(newStoragePath);
+    if (stats.isDirectory()) {
+      const dirs = await readdir(newStoragePath);
+      for (const dir of dirs) {
+        const projectPath = join(newStoragePath, dir);
+        const projectStats = await stat(projectPath);
+        if (projectStats.isDirectory()) {
+          const sessions = await readdir(projectPath);
+          if (sessions.some(s => s.startsWith('ses_') && s.endsWith('.json'))) {
+            return 'new';
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Check old layout: project/<name>/storage/session/info/
+  const oldProjectPath = join(basePath, 'project');
+  try {
+    const stats = await stat(oldProjectPath);
+    if (stats.isDirectory()) {
+      const projects = await readdir(oldProjectPath);
+      for (const project of projects) {
+        const infoPath = join(oldProjectPath, project, 'storage/session/info');
+        try {
+          const infoStats = await stat(infoPath);
+          if (infoStats.isDirectory()) {
+            const sessions = await readdir(infoPath);
+            if (sessions.some(s => s.startsWith('ses_') && s.endsWith('.json'))) {
+              return 'old';
+            }
+          }
+        } catch { /* continue */ }
+      }
+    }
+  } catch { /* ignore */ }
+
+  return 'none';
+}
+
 const adapter: Adapter = {
   info(): AdapterInfo {
     return {
       name: 'opencode',
       displayName: 'OpenCode',
-      version: '1.0.0',
+      version: '2.0.0',
       defaultPaths: [DEFAULT_OPENCODE_PATH],
     };
   },
 
   async detect(path: string): Promise<number | null> {
-    try {
-      // Check for project directory structure
-      const projectDir = join(path, 'project');
-      const stats = await stat(projectDir);
-      if (stats.isDirectory()) {
-        // Check if there are project directories with sessions
-        const projects = await readdir(projectDir);
-        for (const project of projects) {
-          const sessionInfoDir = join(projectDir, project, 'storage/session/info');
-          try {
-            const infoStats = await stat(sessionInfoDir);
-            if (infoStats.isDirectory()) {
-              const sessions = await readdir(sessionInfoDir);
-              if (sessions.some(s => s.startsWith('ses_') && s.endsWith('.json'))) {
-                return 0.95; // High confidence
-              }
-            }
-          } catch {
-            continue;
-          }
-        }
-      }
-      return null;
-    } catch {
-      return null;
-    }
+    const layout = await detectLayout(path);
+    return layout !== 'none' ? 0.95 : null;
   },
 
   async parse(path: string, opts?: ParseOptions): Promise<Conversation[]> {
-    const projectDir = join(path, 'project');
-    const conversations: Conversation[] = [];
-
-    try {
-      // Iterate over project directories
-      const projects = await readdir(projectDir);
-
-      for (const projectName of projects) {
-        const projectPath = join(projectDir, projectName);
-        const projectStats = await stat(projectPath);
-        if (!projectStats.isDirectory()) continue;
-
-        const sessionInfoDir = join(projectPath, 'storage/session/info');
-        const sessionMessageDir = join(projectPath, 'storage/session/message');
-        const sessionPartDir = join(projectPath, 'storage/session/part');
-
-        // Extract workspace from project name (e.g., "home-wismut-byteowlz-kittenx" -> "/home/wismut/byteowlz/kittenx")
-        const workspace = projectNameToPath(projectName);
-
-        try {
-          // Read session info files
-          const sessionFiles = await readdir(sessionInfoDir);
-
-          for (const sessionFile of sessionFiles) {
-            if (!sessionFile.startsWith('ses_') || !sessionFile.endsWith('.json')) {
-              continue;
-            }
-
-            const sessionPath = join(sessionInfoDir, sessionFile);
-            const sessionContent = await readFile(sessionPath, 'utf-8');
-            const session: SessionInfo = JSON.parse(sessionContent);
-
-            // Apply filters - check both created and updated time
-            // so renamed/modified sessions are still re-imported
-            if (opts?.since) {
-              const lastModified = session.time.updated ?? session.time.created;
-              if (session.time.created < opts.since && lastModified < opts.since) {
-                continue;
-              }
-            }
-
-            // Load messages for this session
-            const messages = await loadMessages(
-              session.id,
-              sessionMessageDir,
-              sessionPartDir,
-              opts
-            );
-
-            const conv: Conversation = {
-              externalId: session.id,
-              title: session.title || undefined,
-              createdAt: session.time.created,
-              updatedAt: session.time.updated,
-              workspace: session.directory || workspace,
-              messages,
-              metadata: {
-                version: session.version,
-                parentId: session.parentID,
-                projectId: projectName,
-              },
-            };
-
-            // Calculate totals from messages
-            let tokensIn = 0;
-            let tokensOut = 0;
-            let cost = 0;
-            let model: string | undefined;
-
-            for (const msg of messages) {
-              if (msg.tokens) {
-                if (msg.role === 'user') tokensIn += msg.tokens;
-                else tokensOut += msg.tokens;
-              }
-              if (msg.costUsd) cost += msg.costUsd;
-              if (msg.model && !model) model = msg.model;
-            }
-
-            if (tokensIn > 0) conv.tokensIn = tokensIn;
-            if (tokensOut > 0) conv.tokensOut = tokensOut;
-            if (cost > 0) conv.costUsd = cost;
-            if (model) conv.model = model;
-
-            conversations.push(conv);
-
-            // Check limit
-            if (opts?.limit && conversations.length >= opts.limit) {
-              break;
-            }
-          }
-        } catch (err) {
-          // Skip projects without session info
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            console.error(`Error reading project ${projectName}:`, err);
-          }
-          continue;
-        }
-
-        if (opts?.limit && conversations.length >= opts.limit) {
-          break;
-        }
-      }
-    } catch (err) {
-      // If project directory doesn't exist, return empty
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return [];
-      }
-      throw err;
+    const layout = await detectLayout(path);
+    
+    if (layout === 'new') {
+      return parseNewLayout(path, opts);
+    } else if (layout === 'old') {
+      return parseOldLayout(path, opts);
     }
-
-    // Sort by created_at descending (newest first)
-    conversations.sort((a, b) => b.createdAt - a.createdAt);
-
-    return conversations;
+    
+    return [];
   },
 
   supportsIncremental: true,
@@ -272,6 +203,319 @@ const adapter: Adapter = {
 };
 
 /**
+ * Parse NEW layout (v1.1.25+):
+ *   storage/session/<project-id>/<session-id>.json
+ *   storage/message/<session-id>/<msg-id>.json
+ *   storage/part/<msg-id>/<part-id>.json
+ */
+async function parseNewLayout(basePath: string, opts?: ParseOptions): Promise<Conversation[]> {
+  const conversations: Conversation[] = [];
+  const storageDir = join(basePath, 'storage');
+  const sessionDir = join(storageDir, 'session');
+  const messageDir = join(storageDir, 'message');
+  const partDir = join(storageDir, 'part');
+
+  try {
+    // Iterate over project directories in storage/session/
+    const projectIds = await readdir(sessionDir);
+
+    for (const projectId of projectIds) {
+      const projectPath = join(sessionDir, projectId);
+      const projectStats = await stat(projectPath);
+      if (!projectStats.isDirectory()) continue;
+
+      try {
+        const sessionFiles = await readdir(projectPath);
+
+        for (const sessionFile of sessionFiles) {
+          if (!sessionFile.startsWith('ses_') || !sessionFile.endsWith('.json')) {
+            continue;
+          }
+
+          const sessionPath = join(projectPath, sessionFile);
+          const sessionContent = await readFile(sessionPath, 'utf-8');
+          const session: SessionInfo = JSON.parse(sessionContent);
+
+          // Apply time filter
+          if (opts?.since) {
+            const lastModified = session.time.updated ?? session.time.created;
+            if (session.time.created < opts.since && lastModified < opts.since) {
+              continue;
+            }
+          }
+
+          // Load messages for this session (new layout)
+          const messages = await loadMessagesNew(session.id, messageDir, partDir, opts);
+
+          const conv: Conversation = {
+            externalId: session.id,
+            title: session.title || undefined,
+            createdAt: session.time.created,
+            updatedAt: session.time.updated,
+            workspace: session.directory,
+            messages,
+            metadata: {
+              version: session.version,
+              slug: session.slug,
+              parentId: session.parentID,
+              projectId: session.projectID,
+            },
+          };
+
+          // Calculate totals
+          let tokensIn = 0;
+          let tokensOut = 0;
+          let cost = 0;
+          let model: string | undefined;
+
+          for (const msg of messages) {
+            if (msg.tokens) {
+              if (msg.role === 'user') tokensIn += msg.tokens;
+              else tokensOut += msg.tokens;
+            }
+            if (msg.costUsd) cost += msg.costUsd;
+            if (msg.model && !model) model = msg.model;
+          }
+
+          if (tokensIn > 0) conv.tokensIn = tokensIn;
+          if (tokensOut > 0) conv.tokensOut = tokensOut;
+          if (cost > 0) conv.costUsd = cost;
+          if (model) conv.model = model;
+
+          conversations.push(conv);
+
+          if (opts?.limit && conversations.length >= opts.limit) {
+            break;
+          }
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error(`Error reading project ${projectId}:`, err);
+        }
+        continue;
+      }
+
+      if (opts?.limit && conversations.length >= opts.limit) {
+        break;
+      }
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  conversations.sort((a, b) => b.createdAt - a.createdAt);
+  return conversations;
+}
+
+/**
+ * Load messages for NEW layout
+ */
+async function loadMessagesNew(
+  sessionId: string,
+  messageDir: string,
+  partDir: string,
+  opts?: ParseOptions
+): Promise<Message[]> {
+  const sessionMessagePath = join(messageDir, sessionId);
+  const messages: Message[] = [];
+
+  try {
+    const messageFiles = await readdir(sessionMessagePath);
+
+    for (const messageFile of messageFiles) {
+      if (!messageFile.startsWith('msg_') || !messageFile.endsWith('.json')) {
+        continue;
+      }
+
+      const messagePath = join(sessionMessagePath, messageFile);
+      const messageContent = await readFile(messagePath, 'utf-8');
+      const msgInfo: MessageInfo = JSON.parse(messageContent);
+
+      // Load parts - in new layout: part/<msg-id>/<part-id>.json
+      const msgPartDir = join(partDir, msgInfo.id);
+      const parts = await loadPartsNew(msgPartDir, opts);
+
+      const textParts = parts.filter(p => p.type === 'text' && p.text);
+      const content = textParts.map(p => p.text).join('\n');
+
+      let toolCalls: ToolCall[] | undefined;
+      if (opts?.includeTools !== false) {
+        const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
+        if (toolParts.length > 0) {
+          toolCalls = toolParts.map(p => ({
+            toolName: p.tool!,
+            input: p.state?.input,
+            output: p.state?.output,
+            status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
+          }));
+        }
+      }
+
+      const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
+
+      messages.push({
+        role: mapRole(msgInfo.role),
+        content,
+        createdAt: msgInfo.time.created,
+        model: msgInfo.modelID || undefined,
+        tokens: tokens > 0 ? tokens : undefined,
+        costUsd: msgInfo.cost || undefined,
+        toolCalls,
+        metadata: {
+          id: msgInfo.id,
+          parentId: msgInfo.parentID,
+          provider: msgInfo.providerID,
+          agent: msgInfo.agent,
+          summaryTitle: msgInfo.summary?.title,
+        },
+      });
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  messages.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  return messages;
+}
+
+/**
+ * Load parts for NEW layout
+ */
+async function loadPartsNew(msgPartDir: string, opts?: ParseOptions): Promise<PartInfo[]> {
+  const parts: PartInfo[] = [];
+
+  try {
+    const partFiles = await readdir(msgPartDir);
+
+    for (const partFile of partFiles) {
+      if (!partFile.startsWith('prt_') || !partFile.endsWith('.json')) {
+        continue;
+      }
+
+      const partPath = join(msgPartDir, partFile);
+      const partContent = await readFile(partPath, 'utf-8');
+      const part: PartInfo = JSON.parse(partContent);
+      parts.push(part);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  parts.sort((a, b) => a.id.localeCompare(b.id));
+  return parts;
+}
+
+/**
+ * Parse OLD layout (legacy):
+ *   project/<project-name>/storage/session/info/<session-id>.json
+ */
+async function parseOldLayout(basePath: string, opts?: ParseOptions): Promise<Conversation[]> {
+  const projectDir = join(basePath, 'project');
+  const conversations: Conversation[] = [];
+
+  try {
+    const projects = await readdir(projectDir);
+
+    for (const projectName of projects) {
+      const projectPath = join(projectDir, projectName);
+      const projectStats = await stat(projectPath);
+      if (!projectStats.isDirectory()) continue;
+
+      const sessionInfoDir = join(projectPath, 'storage/session/info');
+      const sessionMessageDir = join(projectPath, 'storage/session/message');
+      const sessionPartDir = join(projectPath, 'storage/session/part');
+
+      const workspace = projectNameToPath(projectName);
+
+      try {
+        const sessionFiles = await readdir(sessionInfoDir);
+
+        for (const sessionFile of sessionFiles) {
+          if (!sessionFile.startsWith('ses_') || !sessionFile.endsWith('.json')) {
+            continue;
+          }
+
+          const sessionPath = join(sessionInfoDir, sessionFile);
+          const sessionContent = await readFile(sessionPath, 'utf-8');
+          const session: SessionInfo = JSON.parse(sessionContent);
+
+          if (opts?.since) {
+            const lastModified = session.time.updated ?? session.time.created;
+            if (session.time.created < opts.since && lastModified < opts.since) {
+              continue;
+            }
+          }
+
+          const messages = await loadMessagesOld(session.id, sessionMessageDir, sessionPartDir, opts);
+
+          const conv: Conversation = {
+            externalId: session.id,
+            title: session.title || undefined,
+            createdAt: session.time.created,
+            updatedAt: session.time.updated,
+            workspace: session.directory || workspace,
+            messages,
+            metadata: {
+              version: session.version,
+              parentId: session.parentID,
+              projectId: projectName,
+            },
+          };
+
+          let tokensIn = 0;
+          let tokensOut = 0;
+          let cost = 0;
+          let model: string | undefined;
+
+          for (const msg of messages) {
+            if (msg.tokens) {
+              if (msg.role === 'user') tokensIn += msg.tokens;
+              else tokensOut += msg.tokens;
+            }
+            if (msg.costUsd) cost += msg.costUsd;
+            if (msg.model && !model) model = msg.model;
+          }
+
+          if (tokensIn > 0) conv.tokensIn = tokensIn;
+          if (tokensOut > 0) conv.tokensOut = tokensOut;
+          if (cost > 0) conv.costUsd = cost;
+          if (model) conv.model = model;
+
+          conversations.push(conv);
+
+          if (opts?.limit && conversations.length >= opts.limit) {
+            break;
+          }
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error(`Error reading project ${projectName}:`, err);
+        }
+        continue;
+      }
+
+      if (opts?.limit && conversations.length >= opts.limit) {
+        break;
+      }
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw err;
+  }
+
+  conversations.sort((a, b) => b.createdAt - a.createdAt);
+  return conversations;
+}
+
+/**
  * Convert OpenCode project name to filesystem path
  * e.g., "home-wismut-byteowlz-kittenx" -> "/home/wismut/byteowlz/kittenx"
  */
@@ -280,7 +524,10 @@ function projectNameToPath(projectName: string): string {
   return '/' + projectName.replace(/-/g, '/');
 }
 
-async function loadMessages(
+/**
+ * Load messages for OLD layout
+ */
+async function loadMessagesOld(
   sessionId: string,
   messageDir: string,
   partDir: string,
@@ -303,7 +550,7 @@ async function loadMessages(
       const msgInfo: MessageInfo = JSON.parse(messageContent);
 
       // Load parts for this message
-      const parts = await loadParts(sessionId, msgInfo.id, sessionPartPath, opts);
+      const parts = await loadPartsOld(sessionId, msgInfo.id, sessionPartPath, opts);
 
       // Combine text parts into content
       const textParts = parts.filter(p => p.type === 'text' && p.text);
@@ -356,7 +603,7 @@ async function loadMessages(
   return messages;
 }
 
-async function loadParts(
+async function loadPartsOld(
   sessionId: string,
   messageId: string,
   sessionPartPath: string,

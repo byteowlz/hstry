@@ -181,6 +181,37 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/**
+ * Sanitize a string to remove unpaired Unicode surrogates
+ * that would cause JSON parsing errors in strict parsers.
+ */
+function sanitizeString(str: string): string {
+  // Replace unpaired high surrogates (U+D800-U+DBFF not followed by low surrogate)
+  // and unpaired low surrogates (U+DC00-U+DFFF not preceded by high surrogate)
+  // with the Unicode replacement character
+  return str.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+}
+
+/**
+ * Deep sanitize an object to fix any invalid Unicode in strings
+ */
+function sanitizeJson(obj: unknown): unknown {
+  if (typeof obj === 'string') {
+    return sanitizeString(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeJson);
+  }
+  if (obj && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = sanitizeJson(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 /** 
  * Main entry point for adapters.
  * Handles the request/response protocol with the Rust runtime.
@@ -239,7 +270,12 @@ export function runAdapter(adapter: Adapter): void {
           response = { error: `Unknown method: ${(request as any).method}` };
       }
 
-      console.log(JSON.stringify(response));
+      // JSON.stringify may create invalid escape sequences from corrupted Unicode
+      // in the source data. We stringify first, then clean up any broken surrogates.
+      let jsonStr = JSON.stringify(response);
+      // Replace lone surrogates that JSON.stringify may have created (e.g., \ud83d not followed by \uDCxx)
+      jsonStr = jsonStr.replace(/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})/gi, '\\ufffd');
+      console.log(jsonStr);
     } catch (err) {
       console.log(JSON.stringify({ error: String(err) }));
       process.exit(1);

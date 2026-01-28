@@ -2,7 +2,23 @@
 
 ## Open
 
+### [trx-bb8t] Remote sync: bidirectional merge between local and remote DBs (P1, task)
+
+### [trx-j8gj] Remote fetch: SSH pull of remote hstry DB into local cache (P1, task)
+
+### [trx-vg8v] Schema: store host_id/hostname on sessions + migrations (P1, task)
+
+### [trx-8g87] Config: define remote hosts (SSH) and optional paths (P1, task)
+
+### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
+
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
+
+### [trx-vd8h] Remote plumbing: SSH transport + temp files + atomic replace (P2, task)
+
+### [trx-fycz] Conflict policy: dedupe by message_id + session_id, prefer newest updated_at (P2, task)
+
+### [trx-gj5r] CLI: add hstry remote fetch/sync subcommands with filters (P2, task)
 
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)
 Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON memories (with hstry metadata) and invokes the mmry add stdin flow with store/config options.
@@ -12,6 +28,10 @@ Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON m
 ### [trx-dy7w] Add ChatGPT export adapter (P2, feature)
 
 ### [trx-qtxm] Add Claude Code adapter (P2, feature)
+
+### [trx-ctd3] Docs: update example config and usage for remote fetch/sync (P3, task)
+
+### [trx-bj82] Tests: config parsing + remote fetch/sync happy paths (P3, task)
 
 ### [trx-k4ts] Add MCP server for LLM access to history (P3, feature)
 Notes: added missing MCP deps, wired hstry_core::Config loading, updated MCP tool output to return service config, and aligned API deps/config loading so the workspace builds.

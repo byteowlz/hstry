@@ -31,7 +31,7 @@ pub async fn cmd_service(config_path: &Path, command: ServiceCommand) -> Result<
             let mut config = Config::ensure_at(config_path)?;
             config.service.enabled = false;
             config.save_to_path(config_path)?;
-            let _ = stop_service()?;
+            stop_service()?;
             println!("Service disabled in config.");
         }
         ServiceCommand::Start => {
@@ -41,7 +41,7 @@ pub async fn cmd_service(config_path: &Path, command: ServiceCommand) -> Result<
             run_service(config_path).await?;
         }
         ServiceCommand::Restart => {
-            let _ = stop_service()?;
+            stop_service()?;
             start_service(config_path)?;
         }
         ServiceCommand::Stop => {
@@ -235,7 +235,7 @@ impl ServiceState {
         let config_mtime = config_path.metadata().and_then(|m| m.modified()).ok();
 
         let db = Database::open(&config.database).await?;
-        let runtime = Runtime::from_str(&config.js_runtime).ok_or_else(|| {
+        let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
         let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
@@ -270,7 +270,7 @@ impl ServiceState {
         }
 
         let config = Config::load_from_path(&self.config_path)?;
-        let runtime = Runtime::from_str(&config.js_runtime).ok_or_else(|| {
+        let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
 
@@ -447,11 +447,11 @@ impl ServiceState {
             }
         }
 
-        if let Some((adapter_name, adapter_path)) = best_adapter {
-            if best_confidence >= DETECT_THRESHOLD {
-                self.detect_and_upsert(&adapter_name, &adapter_path, &path)
-                    .await?;
-            }
+        if let Some((adapter_name, adapter_path)) = best_adapter
+            && best_confidence >= DETECT_THRESHOLD
+        {
+            self.detect_and_upsert(&adapter_name, &adapter_path, &path)
+                .await?;
         }
 
         Ok(())
@@ -507,10 +507,10 @@ impl ServiceState {
             if !self.enabled_adapters.contains(&source.adapter) {
                 continue;
             }
-            if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id) {
-                if !auto_sync {
-                    continue;
-                }
+            if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id)
+                && !auto_sync
+            {
+                continue;
             }
 
             println!("Syncing {} ({})...", source.id, source.adapter);
@@ -534,10 +534,10 @@ impl ServiceState {
 fn build_watcher(event_tx: mpsc::Sender<PathBuf>) -> Result<RecommendedWatcher> {
     let watcher = RecommendedWatcher::new(
         move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                if let Some(path) = event.paths.get(0) {
-                    let _ = event_tx.blocking_send(path.clone());
-                }
+            if let Ok(event) = res
+                && let Some(path) = event.paths.first()
+            {
+                let _ = event_tx.blocking_send(path.clone());
             }
         },
         notify::Config::default(),
@@ -566,13 +566,13 @@ async fn collect_watch_paths(
         if !enabled_adapters.contains(&adapter_name) {
             continue;
         }
-        if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
-            if let Ok(info) = runner.get_info(&adapter_path).await {
-                for default_path in &info.default_paths {
-                    let expanded = Config::expand_path(default_path);
-                    if expanded.exists() {
-                        paths.push(expanded);
-                    }
+        if let Some(adapter_path) = runner.find_adapter(&adapter_name)
+            && let Ok(info) = runner.get_info(&adapter_path).await
+        {
+            for default_path in &info.default_paths {
+                let expanded = Config::expand_path(default_path);
+                if expanded.exists() {
+                    paths.push(expanded);
                 }
             }
         }
@@ -630,10 +630,10 @@ fn is_candidate_dir(path: &Path) -> bool {
 }
 
 fn is_candidate_file(path: &Path) -> bool {
-    match path.extension().and_then(|s| s.to_str()) {
-        Some("json") | Some("jsonl") => true,
-        _ => false,
-    }
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("json") | Some("jsonl")
+    )
 }
 
 #[cfg(test)]

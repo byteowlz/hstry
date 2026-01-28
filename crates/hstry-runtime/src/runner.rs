@@ -50,7 +50,7 @@ impl Runtime {
     }
 
     /// Parse runtime from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "bun" => Some(Runtime::Bun),
             "deno" => Some(Runtime::Deno),
@@ -58,6 +58,14 @@ impl Runtime {
             "auto" => Self::detect(),
             _ => None,
         }
+    }
+}
+
+impl std::str::FromStr for Runtime {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Runtime::parse(s).ok_or(())
     }
 }
 
@@ -81,6 +89,8 @@ pub enum AdapterRequest {
     Detect { path: String },
     #[serde(rename = "parse")]
     Parse { path: String, opts: ParseOptions },
+    #[serde(rename = "parseStream")]
+    ParseStream { path: String, opts: ParseOptions },
     #[serde(rename = "export")]
     Export {
         conversations: Vec<ExportConversation>,
@@ -99,6 +109,10 @@ pub struct ParseOptions {
     pub include_tools: bool,
     #[serde(default)]
     pub include_attachments: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
 }
 
 /// Export options sent to adapter.
@@ -130,6 +144,17 @@ pub struct ParsedConversation {
     pub messages: Vec<ParsedMessage>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+}
+
+/// Parsed batch response from TS adapter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParseStreamResult {
+    pub conversations: Vec<ParsedConversation>,
+    #[serde(default)]
+    pub cursor: Option<serde_json::Value>,
+    #[serde(default)]
+    pub done: Option<bool>,
 }
 
 /// Parsed message from TS adapter
@@ -212,6 +237,7 @@ pub enum AdapterResponse {
     Info(AdapterInfo),
     Detect(Option<f32>),
     Parse(Vec<ParsedConversation>),
+    ParseStream(ParseStreamResult),
     Export(ExportResult),
     Error { error: String },
 }
@@ -252,10 +278,10 @@ impl AdapterRunner {
                     let path = entry.path();
                     if path.is_dir() {
                         let adapter_file = path.join("adapter.ts");
-                        if adapter_file.exists() {
-                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                adapters.push(name.to_string());
-                            }
+                        if adapter_file.exists()
+                            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                        {
+                            adapters.push(name.to_string());
                         }
                     }
                 }
@@ -302,11 +328,9 @@ impl AdapterRunner {
 
         let mut child = cmd.spawn()?;
 
-        if use_stdin {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(request_json.as_bytes()).await?;
-                stdin.shutdown().await?;
-            }
+        if use_stdin && let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(request_json.as_bytes()).await?;
+            stdin.shutdown().await?;
         }
 
         let output = child.wait_with_output().await?;
@@ -366,6 +390,36 @@ impl AdapterRunner {
             .await?
         {
             AdapterResponse::Parse(conversations) => Ok(conversations),
+            AdapterResponse::Error { error } => anyhow::bail!("Adapter error: {error}"),
+            _ => anyhow::bail!("Unexpected response type"),
+        }
+    }
+
+    /// Parse conversations in batches with cursor/backpressure if supported.
+    pub async fn parse_stream(
+        &self,
+        adapter_path: &Path,
+        path: &str,
+        opts: ParseOptions,
+    ) -> anyhow::Result<Option<ParseStreamResult>> {
+        match self
+            .call(
+                adapter_path,
+                AdapterRequest::ParseStream {
+                    path: path.to_string(),
+                    opts,
+                },
+            )
+            .await?
+        {
+            AdapterResponse::ParseStream(result) => Ok(Some(result)),
+            AdapterResponse::Error { error }
+                if error.contains("parseStream")
+                    || error.contains("Unknown method")
+                    || error.contains("does not support") =>
+            {
+                Ok(None)
+            }
             AdapterResponse::Error { error } => anyhow::bail!("Adapter error: {error}"),
             _ => anyhow::bail!("Unexpected response type"),
         }

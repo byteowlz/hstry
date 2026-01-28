@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "order": [
+    "stat-sessions",
+    "stat-busy",
+    "stat-scheduler",
+    "stat-trx",
+    "scheduler",
+    "agents",
+    "trx",
+    "codexbar",
+    "feeds"
+  ],
+  "cards": {
+    "stat-sessions": {
+      "visible": true,
+      "span": 3
+    },
+    "stat-busy": {
+      "visible": true,
+      "span": 3
+    },
+    "stat-scheduler": {
+      "visible": true,
+      "span": 3
+    },
+    "stat-trx": {
+      "visible": true,
+      "span": 3
+    },
+    "scheduler": {
+      "visible": true,
+      "span": 6
+    },
+    "agents": {
+      "visible": true,
+      "span": 6
+    },
+    "trx": {
+      "visible": true,
+      "span": 6
+    },
+    "codexbar": {
+      "visible": true,
+      "span": 6
+    },
+    "feeds": {
+      "visible": true,
+      "span": 6
+    }
+  },
+  "feeds": []
+}

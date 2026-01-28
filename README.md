@@ -8,6 +8,7 @@ Universal AI chat history database. Aggregates conversations from multiple AI to
 - Full-text search with separate indexes for natural language and code
 - Filter by source, workspace, or time range
 - Background service for automatic syncing
+- Incremental adapter parsing with cursor-based batching
 - Export memories to mmry for semantic search
 - JSON output for scripting and MCP integration
 

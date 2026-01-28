@@ -1,16 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hstry-core",
-    "crates/hstry-runtime",
-    "crates/hstry-cli",
-    "crates/hstry-tui",
-    "crates/hstry-mcp",
-    "crates/hstry-api",
+  "crates/hstry-core",
+  "crates/hstry-runtime",
+  "crates/hstry-cli",
+  "crates/hstry-tui",
+  "crates/hstry-mcp",
+  "crates/hstry-api",
 ]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/byteowlz/hstry"
@@ -33,6 +33,10 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+# Utils
+tempfile = "3.14"
+which = "7.0"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }

@@ -41,6 +41,35 @@ pub struct Config {
 
     /// Sources configuration.
     pub sources: Vec<SourceConfig>,
+
+    /// Remote hosts for syncing history across machines.
+    pub remotes: Vec<RemoteConfig>,
+}
+
+/// Configuration for a remote host (SSH-based sync).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteConfig {
+    /// Unique name for this remote (e.g., "laptop", "server").
+    pub name: String,
+
+    /// SSH host (e.g., "user@hostname", "hostname", or SSH config alias).
+    pub host: String,
+
+    /// Path to the hstry database on the remote (defaults to standard XDG path).
+    #[serde(default)]
+    pub database_path: Option<String>,
+
+    /// SSH port (defaults to 22).
+    #[serde(default)]
+    pub port: Option<u16>,
+
+    /// Path to SSH identity file (defaults to ~/.ssh/id_rsa or agent).
+    #[serde(default)]
+    pub identity_file: Option<String>,
+
+    /// Whether this remote is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 /// Configuration for an adapter repository.
@@ -167,6 +196,7 @@ impl Default for Config {
             adapters: Vec::new(),
             service: ServiceConfig::default(),
             sources: Vec::new(),
+            remotes: Vec::new(),
         }
     }
 }

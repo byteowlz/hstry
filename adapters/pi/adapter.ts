@@ -16,6 +16,7 @@ import type {
   Conversation,
   Message,
   ParseOptions,
+  ParseStreamResult,
   ToolCall,
   ExportOptions,
   ExportResult,
@@ -152,86 +153,42 @@ const adapter: Adapter = {
     const files = await findJsonlFiles(path, { shallowOnly: false });
     if (files.length === 0) return [];
 
-    const conversations: Conversation[] = [];
-
-    for (const filePath of files) {
-      const raw = await readFile(filePath, 'utf-8');
-      const lines = raw.split(/\r?\n/).filter(line => line.trim().length > 0);
-      if (lines.length === 0) continue;
-
-      const entries: SessionEntry[] = [];
-      let header: SessionHeader | null = null;
-
-      for (const line of lines) {
-        try {
-          const entry = JSON.parse(line) as SessionEntry;
-          if (entry.type === 'session') {
-            header = entry as SessionHeader;
-          }
-          entries.push(entry);
-        } catch {
-          continue;
-        }
-      }
-
-      if (!header) continue;
-
-      const messages = extractMessages(entries, opts?.includeTools ?? true);
-      if (messages.length === 0) continue;
-
-      const timestamps = messages
-        .map(msg => msg.createdAt)
-        .filter((ts): ts is number => typeof ts === 'number');
-
-      const createdAt = timestamps.length > 0 
-        ? Math.min(...timestamps) 
-        : parseTimestamp(header.timestamp) ?? Date.now();
-      const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
-
-      // Skip if both createdAt AND updatedAt are before the since filter
-      // This ensures we re-import sessions that were modified (e.g., renamed) after last sync
-      if (opts?.since) {
-        const lastModified = updatedAt ?? createdAt;
-        if (createdAt < opts.since && lastModified < opts.since) {
-          continue;
-        }
-      }
-
-      // Get session name from the latest session_info entry (Pi appends new entries on rename)
-      const sessionInfoEntries = entries.filter(
-        (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e && !!e.name
-      );
-      const latestSessionInfo = sessionInfoEntries[sessionInfoEntries.length - 1];
-      const title = latestSessionInfo?.name || deriveTitle(messages);
-
-      // Calculate totals from assistant messages with usage
-      const { tokensIn, tokensOut, costUsd, model } = calculateTotals(entries);
-
-      conversations.push({
-        externalId: header.id,
-        title,
-        createdAt,
-        updatedAt,
-        workspace: header.cwd,
-        model,
-        tokensIn,
-        tokensOut,
-        costUsd,
-        messages,
-        metadata: {
-          file: filePath,
-          version: header.version,
-          parentSession: header.parentSession,
-        },
-      });
-
-      if (opts?.limit && conversations.length >= opts.limit) {
-        break;
-      }
-    }
-
+    const conversations = await parseFiles(files, opts);
     conversations.sort((a, b) => b.createdAt - a.createdAt);
     return conversations;
+  },
+
+  async parseStream(path: string, opts?: ParseOptions): Promise<ParseStreamResult> {
+    const files = await findJsonlFiles(path, { shallowOnly: false });
+    const cursor = normalizeCursor(opts?.cursor);
+
+    let pendingFiles = cursor.pending;
+    let fileStates = cursor.files;
+
+    if (!pendingFiles || pendingFiles.length === 0) {
+      const scan = await findChangedFiles(files, cursor.files);
+      pendingFiles = scan.pending;
+      fileStates = scan.files;
+    }
+
+    if (!pendingFiles || pendingFiles.length === 0) {
+      return {
+        conversations: [],
+        cursor: { files: fileStates, pending: [] },
+        done: true,
+      };
+    }
+
+    const batchSize = Math.max(1, opts?.batchSize ?? pendingFiles.length);
+    const batchFiles = pendingFiles.slice(0, batchSize);
+    const remaining = pendingFiles.slice(batchSize);
+
+    const conversations = await parseFiles(batchFiles, opts);
+    return {
+      conversations,
+      cursor: { files: fileStates, pending: remaining },
+      done: remaining.length === 0,
+    };
   },
 
   async export(conversations: Conversation[], opts: ExportOptions): Promise<ExportResult> {
@@ -575,6 +532,128 @@ function parseTimestamp(value?: string | number): number | undefined {
   }
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+interface PiCursorState {
+  files: Record<string, { mtimeMs: number; size: number }>;
+  pending?: string[];
+}
+
+function normalizeCursor(cursor: unknown): PiCursorState {
+  if (!cursor || typeof cursor !== 'object') {
+    return { files: {} };
+  }
+  const record = cursor as Record<string, unknown>;
+  const files = typeof record.files === 'object' && record.files
+    ? record.files as Record<string, { mtimeMs: number; size: number }>
+    : {};
+  const pending = Array.isArray(record.pending) ? record.pending.filter(p => typeof p === 'string') : undefined;
+  return { files, pending };
+}
+
+async function findChangedFiles(
+  files: string[],
+  previous: Record<string, { mtimeMs: number; size: number }>
+): Promise<{ pending: string[]; files: Record<string, { mtimeMs: number; size: number }> }> {
+  const pending: string[] = [];
+  const nextFiles: Record<string, { mtimeMs: number; size: number }> = { ...previous };
+
+  for (const file of files) {
+    const stats = await stat(file).catch(() => null);
+    if (!stats || !stats.isFile()) {
+      continue;
+    }
+    const prev = previous[file];
+    const state = { mtimeMs: stats.mtimeMs, size: stats.size };
+    nextFiles[file] = state;
+    if (!prev || prev.mtimeMs !== state.mtimeMs || prev.size !== state.size) {
+      pending.push(file);
+    }
+  }
+
+  return { pending, files: nextFiles };
+}
+
+async function parseFiles(files: string[], opts?: ParseOptions): Promise<Conversation[]> {
+  const conversations: Conversation[] = [];
+
+  for (const filePath of files) {
+    const raw = await readFile(filePath, 'utf-8');
+    const lines = raw.split(/\r?\n/).filter(line => line.trim().length > 0);
+    if (lines.length === 0) continue;
+
+    const entries: SessionEntry[] = [];
+    let header: SessionHeader | null = null;
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as SessionEntry;
+        if (entry.type === 'session') {
+          header = entry as SessionHeader;
+        }
+        entries.push(entry);
+      } catch {
+        continue;
+      }
+    }
+
+    if (!header) continue;
+
+    const messages = extractMessages(entries, opts?.includeTools ?? true);
+    if (messages.length === 0) continue;
+
+    const timestamps = messages
+      .map(msg => msg.createdAt)
+      .filter((ts): ts is number => typeof ts === 'number');
+
+    const createdAt = timestamps.length > 0 
+      ? Math.min(...timestamps) 
+      : parseTimestamp(header.timestamp) ?? Date.now();
+    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
+
+    // Skip if both createdAt AND updatedAt are before the since filter
+    // This ensures we re-import sessions that were modified (e.g., renamed) after last sync
+    if (opts?.since) {
+      const lastModified = updatedAt ?? createdAt;
+      if (createdAt < opts.since && lastModified < opts.since) {
+        continue;
+      }
+    }
+
+    // Get session name from the latest session_info entry (Pi appends new entries on rename)
+    const sessionInfoEntries = entries.filter(
+      (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e && !!e.name
+    );
+    const latestSessionInfo = sessionInfoEntries[sessionInfoEntries.length - 1];
+    const title = latestSessionInfo?.name || deriveTitle(messages);
+
+    // Calculate totals from assistant messages with usage
+    const { tokensIn, tokensOut, costUsd, model } = calculateTotals(entries);
+
+    conversations.push({
+      externalId: header.id,
+      title,
+      createdAt,
+      updatedAt,
+      workspace: header.cwd,
+      model,
+      tokensIn,
+      tokensOut,
+      costUsd,
+      messages,
+      metadata: {
+        file: filePath,
+        version: header.version,
+        parentSession: header.parentSession,
+      },
+    });
+
+    if (opts?.limit && conversations.length >= opts.limit) {
+      break;
+    }
+  }
+
+  return conversations;
 }
 
 async function findJsonlFiles(

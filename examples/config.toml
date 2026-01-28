@@ -98,6 +98,28 @@ adapter = "chatgpt"
 path = "~/Downloads/chatgpt-export"
 auto_sync = false
 
+# =============================================================================
+# Remote Sync Examples
+# =============================================================================
+# Sync history across machines via SSH.
+# Use `hstry remote add <name> <host>` to add remotes interactively.
+
+# [[remotes]]
+# name = "laptop"
+# host = "user@laptop.local"
+# # Optional: custom database path (defaults to ~/.local/share/hstry/hstry.db)
+# # database_path = "~/.local/share/hstry/hstry.db"
+# # Optional: SSH port (defaults to 22)
+# # port = 22
+# # Optional: SSH identity file
+# # identity_file = "~/.ssh/id_ed25519"
+# enabled = true
+
+# [[remotes]]
+# name = "server"
+# host = "myserver"  # Can be SSH config alias
+# enabled = true
+
 # Claude.ai: Settings > Export data
 [[sources]]
 id = "claude-web-export"

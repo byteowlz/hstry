@@ -78,6 +78,8 @@ export interface ParseOptions {
   limit?: number;         // Max conversations to parse
   includeTools?: boolean;
   includeAttachments?: boolean;
+  cursor?: unknown;       // Adapter-defined incremental cursor
+  batchSize?: number;     // Max conversations per batch
 }
 
 /** Export formats supported by adapters */
@@ -134,6 +136,9 @@ export interface Adapter {
   /** Parse conversations from path */
   parse(path: string, opts?: ParseOptions): Promise<Conversation[]>;
 
+  /** Optional: parse a batch with cursor/backpressure */
+  parseStream?(path: string, opts?: ParseOptions): Promise<ParseStreamResult>;
+
   /** Optional: supports incremental sync */
   supportsIncremental?: boolean;
   
@@ -144,11 +149,18 @@ export interface Adapter {
   export?(conversations: Conversation[], opts: ExportOptions): Promise<ExportResult>;
 }
 
+export interface ParseStreamResult {
+  conversations: Conversation[];
+  cursor?: unknown;
+  done?: boolean;
+}
+
 /** Request from hstry runtime */
 export type AdapterRequest =
   | { method: 'info' }
   | { method: 'detect'; params: { path: string } }
   | { method: 'parse'; params: { path: string; opts?: ParseOptions } }
+  | { method: 'parseStream'; params: { path: string; opts?: ParseOptions } }
   | { method: 'export'; params: { conversations: Conversation[]; opts: ExportOptions } };
 
 /** Response to hstry runtime */
@@ -156,6 +168,7 @@ export type AdapterResponse =
   | AdapterInfo
   | number | null
   | Conversation[]
+  | ParseStreamResult
   | ExportResult
   | { error: string };
 
@@ -207,6 +220,13 @@ export function runAdapter(adapter: Adapter): void {
           break;
         case 'parse':
           response = await adapter.parse(request.params.path, request.params.opts);
+          break;
+        case 'parseStream':
+          if (!adapter.parseStream) {
+            response = { error: 'Adapter does not support parseStream' };
+            break;
+          }
+          response = await adapter.parseStream(request.params.path, request.params.opts);
           break;
         case 'export':
           if (!adapter.export) {

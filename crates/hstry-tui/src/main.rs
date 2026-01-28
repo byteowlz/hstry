@@ -36,10 +36,10 @@ fn render_markdown(
     highlight: Option<&str>,
 ) -> Vec<Line<'static>> {
     // For tool output, try special formatting first
-    if *role == MessageRole::Tool {
-        if let Some(lines) = try_format_tool_output(content) {
-            return lines;
-        }
+    if *role == MessageRole::Tool
+        && let Some(lines) = try_format_tool_output(content)
+    {
+        return lines;
     }
 
     let mut lines: Vec<Line<'static>> = Vec::new();

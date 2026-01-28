@@ -23,6 +23,9 @@ pub enum Error {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Remote error: {0}")]
+    Remote(String),
+
     #[error("{0}")]
     Other(String),
 }

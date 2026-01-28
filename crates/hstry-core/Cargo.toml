@@ -18,3 +18,4 @@ chrono.workspace = true
 uuid.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+tempfile.workspace = true

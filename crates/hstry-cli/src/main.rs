@@ -266,6 +266,110 @@ enum Command {
         #[command(subcommand)]
         command: MmryCommand,
     },
+
+    /// Manage remote hosts for syncing history
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+
+    /// Show or manage configuration
+    Config {
+        #[command(subcommand)]
+        command: Option<ConfigCommand>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Show current configuration
+    Show,
+
+    /// Show config file path
+    Path,
+
+    /// Open config in editor
+    Edit,
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteCommand {
+    /// List configured remotes
+    List,
+
+    /// Add a remote host
+    Add {
+        /// Unique name for this remote
+        name: String,
+
+        /// SSH host (e.g., "user@hostname" or SSH config alias)
+        host: String,
+
+        /// Path to hstry database on remote
+        #[arg(long)]
+        database_path: Option<String>,
+
+        /// SSH port (default: 22)
+        #[arg(short, long)]
+        port: Option<u16>,
+
+        /// Path to SSH identity file
+        #[arg(short, long)]
+        identity_file: Option<String>,
+    },
+
+    /// Remove a remote host
+    Remove {
+        /// Remote name
+        name: String,
+    },
+
+    /// Test connection to a remote
+    Test {
+        /// Remote name
+        name: String,
+    },
+
+    /// Fetch remote database to local cache
+    Fetch {
+        /// Remote name (fetches all enabled remotes if not specified)
+        #[arg(short, long)]
+        remote: Option<String>,
+    },
+
+    /// Sync history with remote (fetch + merge)
+    Sync {
+        /// Remote name (syncs all enabled remotes if not specified)
+        #[arg(short, long)]
+        remote: Option<String>,
+
+        /// Sync direction
+        #[arg(short, long, value_enum, default_value = "pull")]
+        direction: SyncDirectionArg,
+    },
+
+    /// Show remote cache status
+    Status,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum SyncDirectionArg {
+    /// Pull from remote to local
+    Pull,
+    /// Push from local to remote
+    Push,
+    /// Bidirectional merge
+    Bidirectional,
+}
+
+impl From<SyncDirectionArg> for hstry_core::remote::SyncDirection {
+    fn from(value: SyncDirectionArg) -> Self {
+        match value {
+            SyncDirectionArg::Pull => hstry_core::remote::SyncDirection::Pull,
+            SyncDirectionArg::Push => hstry_core::remote::SyncDirection::Push,
+            SyncDirectionArg::Bidirectional => hstry_core::remote::SyncDirection::Bidirectional,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -532,7 +636,7 @@ async fn main() -> Result<()> {
     let db = Database::open(&config.database).await?;
 
     // Detect JS runtime
-    let runtime = Runtime::from_str(&config.js_runtime).ok_or_else(|| {
+    let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
         anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
     })?;
 
@@ -650,6 +754,10 @@ async fn main() -> Result<()> {
         }
         Command::Stats => cmd_stats(&db, cli.json).await,
         Command::Mmry { command } => cmd_mmry(&db, command, cli.json).await,
+        Command::Remote { command } => {
+            cmd_remote(&db, &config, &config_path, command, cli.json).await
+        }
+        Command::Config { command } => cmd_config(&config, &config_path, command, cli.json).await,
     }
 }
 
@@ -707,10 +815,10 @@ async fn cmd_sync(
 
     let mut stats = Vec::new();
     for source in sources {
-        if let Some(ref filter) = source_filter {
-            if &source.id != filter {
-                continue;
-            }
+        if let Some(ref filter) = source_filter
+            && &source.id != filter
+        {
+            continue;
         }
 
         if !config.adapter_enabled(&source.adapter) {
@@ -778,6 +886,7 @@ struct DetectionResult {
     confidence: f32,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_import(
     db: &Database,
     runner: &AdapterRunner,
@@ -830,21 +939,19 @@ async fn cmd_import(
                 continue;
             }
 
-            if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
-                if let Ok(Some(conf)) = runner
+            if let Some(adapter_path) = runner.find_adapter(&adapter_name)
+                && let Ok(Some(conf)) = runner
                     .detect(&adapter_path, &expanded.to_string_lossy())
                     .await
-                {
-                    if conf > 0.3 {
-                        all_matches.push(DetectionResult {
-                            adapter: adapter_name.clone(),
-                            confidence: conf,
-                        });
+                && conf > 0.3
+            {
+                all_matches.push(DetectionResult {
+                    adapter: adapter_name.clone(),
+                    confidence: conf,
+                });
 
-                        if best_match.is_none() || conf > best_match.as_ref().unwrap().1 {
-                            best_match = Some((adapter_name, conf));
-                        }
-                    }
+                if best_match.is_none() || conf > best_match.as_ref().unwrap().1 {
+                    best_match = Some((adapter_name, conf));
                 }
             }
         }
@@ -897,6 +1004,8 @@ async fn cmd_import(
         limit: None,
         include_tools: true,
         include_attachments: true,
+        cursor: None,
+        batch_size: None,
     };
 
     let conversations = runner
@@ -972,10 +1081,10 @@ async fn cmd_import(
 
     for conv in conversations {
         let mut conv_id = uuid::Uuid::new_v4();
-        if let Some(external_id) = conv.external_id.as_deref() {
-            if let Some(existing) = db.get_conversation_id(&source_id, external_id).await? {
-                conv_id = existing;
-            }
+        if let Some(external_id) = conv.external_id.as_deref()
+            && let Some(existing) = db.get_conversation_id(&source_id, external_id).await?
+        {
+            conv_id = existing;
         }
 
         let hstry_conv = hstry_core::models::Conversation {
@@ -984,17 +1093,16 @@ async fn cmd_import(
             external_id: conv.external_id,
             readable_id: conv.readable_id,
             title: conv.title,
-            created_at: chrono::DateTime::from_timestamp_millis(conv.created_at as i64)
+            created_at: chrono::DateTime::from_timestamp_millis(conv.created_at)
                 .unwrap_or_default()
                 .with_timezone(&chrono::Utc),
             updated_at: conv.updated_at.and_then(|ts| {
-                chrono::DateTime::from_timestamp_millis(ts as i64)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.with_timezone(&chrono::Utc))
             }),
             model: conv.model,
             workspace: conv.workspace,
-            tokens_in: conv.tokens_in.map(|t| t as i64),
-            tokens_out: conv.tokens_out.map(|t| t as i64),
+            tokens_in: conv.tokens_in,
+            tokens_out: conv.tokens_out,
             cost_usd: conv.cost_usd,
             metadata: conv
                 .metadata
@@ -1014,11 +1122,11 @@ async fn cmd_import(
                 content: msg.content.clone(),
                 parts_json,
                 created_at: msg.created_at.and_then(|ts| {
-                    chrono::DateTime::from_timestamp_millis(ts as i64)
+                    chrono::DateTime::from_timestamp_millis(ts)
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                 }),
                 model: msg.model.clone(),
-                tokens: msg.tokens.map(|t| t as i64),
+                tokens: msg.tokens,
                 cost_usd: msg.cost_usd,
                 metadata: serde_json::Value::Object(Default::default()),
             };
@@ -1262,14 +1370,12 @@ async fn cmd_source(
                 let mut best_confidence = 0.0f32;
 
                 for adapter_name in runner.list_adapters() {
-                    if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
-                        if let Ok(Some(confidence)) = runner.detect(&adapter_path, &path_str).await
-                        {
-                            if confidence > best_confidence {
-                                best_confidence = confidence;
-                                best_adapter = Some(adapter_name);
-                            }
-                        }
+                    if let Some(adapter_path) = runner.find_adapter(&adapter_name)
+                        && let Ok(Some(confidence)) = runner.detect(&adapter_path, &path_str).await
+                        && confidence > best_confidence
+                    {
+                        best_confidence = confidence;
+                        best_adapter = Some(adapter_name);
                     }
                 }
 
@@ -1748,33 +1854,31 @@ async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result
         if !config.adapter_enabled(&adapter_name) {
             continue;
         }
-        if let Some(adapter_path) = runner.find_adapter(&adapter_name) {
-            if let Ok(info) = runner.get_info(&adapter_path).await {
-                for default_path in &info.default_paths {
-                    let expanded = hstry_core::Config::expand_path(default_path);
-                    if expanded.exists() {
-                        if let Ok(Some(confidence)) = runner
-                            .detect(&adapter_path, &expanded.to_string_lossy())
-                            .await
-                        {
-                            if confidence > 0.5 {
-                                if json {
-                                    hits.push(ScanHit {
-                                        adapter: adapter_name.clone(),
-                                        display_name: info.display_name.clone(),
-                                        path: expanded.to_string_lossy().to_string(),
-                                        confidence,
-                                    });
-                                } else {
-                                    println!(
-                                        "  {} {} (confidence: {:.0}%)",
-                                        info.display_name,
-                                        expanded.display(),
-                                        confidence * 100.0
-                                    );
-                                }
-                            }
-                        }
+        if let Some(adapter_path) = runner.find_adapter(&adapter_name)
+            && let Ok(info) = runner.get_info(&adapter_path).await
+        {
+            for default_path in &info.default_paths {
+                let expanded = hstry_core::Config::expand_path(default_path);
+                if expanded.exists()
+                    && let Ok(Some(confidence)) = runner
+                        .detect(&adapter_path, &expanded.to_string_lossy())
+                        .await
+                    && confidence > 0.5
+                {
+                    if json {
+                        hits.push(ScanHit {
+                            adapter: adapter_name.clone(),
+                            display_name: info.display_name.clone(),
+                            path: expanded.to_string_lossy().to_string(),
+                            confidence,
+                        });
+                    } else {
+                        println!(
+                            "  {} {} (confidence: {:.0}%)",
+                            info.display_name,
+                            expanded.display(),
+                            confidence * 100.0
+                        );
                     }
                 }
             }
@@ -1838,6 +1942,7 @@ mod tests {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_export(
     db: &Database,
     runner: &AdapterRunner,
@@ -1880,10 +1985,10 @@ async fn cmd_export(
         let mut convs = Vec::new();
         for id in conversations_arg.split(',') {
             let id = id.trim();
-            if let Ok(uuid) = uuid::Uuid::parse_str(id) {
-                if let Some(conv) = db.get_conversation(uuid).await? {
-                    convs.push(conv);
-                }
+            if let Ok(uuid) = uuid::Uuid::parse_str(id)
+                && let Some(conv) = db.get_conversation(uuid).await?
+            {
+                convs.push(conv);
             }
         }
         convs
@@ -2011,6 +2116,563 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     Ok(())
 }
 
+// =============================================================================
+// Config Commands
+// =============================================================================
+
+async fn cmd_config(
+    config: &Config,
+    config_path: &Path,
+    command: Option<ConfigCommand>,
+    json: bool,
+) -> Result<()> {
+    match command.unwrap_or(ConfigCommand::Show) {
+        ConfigCommand::Show => {
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(config),
+                    error: None,
+                });
+            }
+
+            // Pretty print the config as TOML
+            let toml_str = toml::to_string_pretty(config)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+            println!("{}", toml_str);
+        }
+
+        ConfigCommand::Path => {
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({
+                        "path": config_path,
+                        "exists": config_path.exists(),
+                    })),
+                    error: None,
+                });
+            }
+
+            println!("{}", config_path.display());
+        }
+
+        ConfigCommand::Edit => {
+            // Ensure config file exists
+            if !config_path.exists() {
+                config.save_to_path(config_path)?;
+            }
+
+            // Get editor from EDITOR or VISUAL env var, fallback to common editors
+            let editor = std::env::var("EDITOR")
+                .or_else(|_| std::env::var("VISUAL"))
+                .unwrap_or_else(|_| {
+                    // Try common editors
+                    for editor in &["nano", "vim", "vi", "notepad"] {
+                        if which::which(editor).is_ok() {
+                            return editor.to_string();
+                        }
+                    }
+                    "nano".to_string()
+                });
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({
+                        "editor": editor,
+                        "path": config_path,
+                    })),
+                    error: None,
+                });
+            }
+
+            let status = std::process::Command::new(&editor)
+                .arg(config_path)
+                .status()?;
+
+            if !status.success() {
+                anyhow::bail!("Editor exited with non-zero status");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Remote Commands
+// =============================================================================
+
+#[derive(Debug, serde::Serialize)]
+struct RemoteStatus {
+    name: String,
+    host: String,
+    enabled: bool,
+    database_path: Option<String>,
+    cached: bool,
+    cache_path: Option<String>,
+    cache_size_bytes: Option<u64>,
+    cache_modified: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RemoteFetchSummary {
+    remotes: Vec<hstry_core::remote::FetchResult>,
+    total_bytes: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RemoteSyncSummary {
+    results: Vec<hstry_core::remote::SyncResult>,
+    total_conversations_added: usize,
+    total_conversations_updated: usize,
+    total_messages_added: usize,
+}
+
+async fn cmd_remote(
+    db: &Database,
+    config: &Config,
+    config_path: &Path,
+    command: RemoteCommand,
+    json: bool,
+) -> Result<()> {
+    use hstry_core::config::RemoteConfig;
+    use hstry_core::remote;
+
+    match command {
+        RemoteCommand::List => {
+            let remotes: Vec<RemoteStatus> = config
+                .remotes
+                .iter()
+                .map(|r| {
+                    let cache_path = remote::cached_db_path(&r.name);
+                    let (cached, cache_size, cache_modified) = if cache_path.exists() {
+                        let meta = std::fs::metadata(&cache_path).ok();
+                        let size = meta.as_ref().map(|m| m.len());
+                        let modified = meta.and_then(|m| m.modified().ok()).map(|t| {
+                            chrono::DateTime::<chrono::Utc>::from(t)
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string()
+                        });
+                        (true, size, modified)
+                    } else {
+                        (false, None, None)
+                    };
+
+                    RemoteStatus {
+                        name: r.name.clone(),
+                        host: r.host.clone(),
+                        enabled: r.enabled,
+                        database_path: r.database_path.clone(),
+                        cached,
+                        cache_path: if cached {
+                            Some(cache_path.to_string_lossy().to_string())
+                        } else {
+                            None
+                        },
+                        cache_size_bytes: cache_size,
+                        cache_modified,
+                    }
+                })
+                .collect();
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(&remotes),
+                    error: None,
+                });
+            }
+
+            if remotes.is_empty() {
+                println!("No remotes configured.");
+                println!("Add one with: hstry remote add <name> <host>");
+            } else {
+                println!("Configured remotes:");
+                for r in &remotes {
+                    let status = if r.enabled { "enabled" } else { "disabled" };
+                    let cache_info = if r.cached {
+                        format!(
+                            " (cached: {})",
+                            r.cache_size_bytes.map(format_bytes).unwrap_or_default()
+                        )
+                    } else {
+                        " (not cached)".to_string()
+                    };
+                    println!("  {} ({}) - {}{}", r.name, status, r.host, cache_info);
+                }
+            }
+        }
+
+        RemoteCommand::Add {
+            name,
+            host,
+            database_path,
+            port,
+            identity_file,
+        } => {
+            // Check if remote with this name already exists
+            if config.remotes.iter().any(|r| r.name == name) {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Remote '{}' already exists", name)),
+                    });
+                }
+                anyhow::bail!("Remote '{}' already exists", name);
+            }
+
+            let remote = RemoteConfig {
+                name: name.clone(),
+                host: host.clone(),
+                database_path,
+                port,
+                identity_file,
+                enabled: true,
+            };
+
+            let mut config = config.clone();
+            config.remotes.push(remote.clone());
+            config.save_to_path(config_path)?;
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(remote),
+                    error: None,
+                });
+            }
+            println!("Added remote: {} ({})", name, host);
+        }
+
+        RemoteCommand::Remove { name } => {
+            let mut config = config.clone();
+            let original_len = config.remotes.len();
+            config.remotes.retain(|r| r.name != name);
+
+            if config.remotes.len() == original_len {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some(format!("Remote '{}' not found", name)),
+                    });
+                }
+                anyhow::bail!("Remote '{}' not found", name);
+            }
+
+            config.save_to_path(config_path)?;
+
+            // Also remove cached database
+            let cache_path = remote::cached_db_path(&name);
+            if cache_path.exists() {
+                std::fs::remove_file(&cache_path)?;
+            }
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({ "removed": name })),
+                    error: None,
+                });
+            }
+            println!("Removed remote: {}", name);
+        }
+
+        RemoteCommand::Test { name } => {
+            let remote_config = config
+                .remotes
+                .iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| anyhow::anyhow!("Remote '{}' not found", name))?;
+
+            let transport = remote::SshTransport::from_config(remote_config);
+
+            match transport.test_connection() {
+                Ok(()) => {
+                    if json {
+                        return emit_json(JsonResponse {
+                            ok: true,
+                            result: Some(serde_json::json!({
+                                "name": name,
+                                "status": "connected"
+                            })),
+                            error: None,
+                        });
+                    }
+                    println!("✓ Connection to '{}' successful", name);
+                }
+                Err(e) => {
+                    if json {
+                        return emit_json(JsonResponse::<()> {
+                            ok: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                    anyhow::bail!("Connection failed: {}", e);
+                }
+            }
+        }
+
+        RemoteCommand::Fetch {
+            remote: remote_name,
+        } => {
+            let remotes_to_fetch: Vec<_> = if let Some(ref name) = remote_name {
+                config.remotes.iter().filter(|r| &r.name == name).collect()
+            } else {
+                config.remotes.iter().filter(|r| r.enabled).collect()
+            };
+
+            if remotes_to_fetch.is_empty() {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some("No matching remotes found".to_string()),
+                    });
+                }
+                println!("No matching remotes found.");
+                return Ok(());
+            }
+
+            let mut results = Vec::new();
+            let mut total_bytes = 0u64;
+
+            for remote_config in remotes_to_fetch {
+                if !json {
+                    println!("Fetching from {}...", remote_config.name);
+                }
+
+                match remote::fetch_remote(remote_config) {
+                    Ok(result) => {
+                        if !json {
+                            println!(
+                                "  Fetched {} to {}",
+                                format_bytes(result.bytes_transferred),
+                                result.local_cache_path.display()
+                            );
+                        }
+                        total_bytes += result.bytes_transferred;
+                        results.push(result);
+                    }
+                    Err(e) => {
+                        if !json {
+                            eprintln!("  Error: {}", e);
+                        }
+                    }
+                }
+            }
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(RemoteFetchSummary {
+                        remotes: results,
+                        total_bytes,
+                    }),
+                    error: None,
+                });
+            }
+        }
+
+        RemoteCommand::Sync {
+            remote: remote_name,
+            direction,
+        } => {
+            let remotes_to_sync: Vec<_> = if let Some(ref name) = remote_name {
+                config.remotes.iter().filter(|r| &r.name == name).collect()
+            } else {
+                config.remotes.iter().filter(|r| r.enabled).collect()
+            };
+
+            if remotes_to_sync.is_empty() {
+                if json {
+                    return emit_json(JsonResponse::<()> {
+                        ok: false,
+                        result: None,
+                        error: Some("No matching remotes found".to_string()),
+                    });
+                }
+                println!("No matching remotes found.");
+                return Ok(());
+            }
+
+            let direction: hstry_core::remote::SyncDirection = direction.into();
+            let mut results = Vec::new();
+            let mut total_convs_added = 0usize;
+            let mut total_convs_updated = 0usize;
+            let mut total_msgs_added = 0usize;
+
+            for remote_config in remotes_to_sync {
+                if !json {
+                    println!("Syncing with {} ({})...", remote_config.name, direction);
+                }
+
+                let result = match direction {
+                    hstry_core::remote::SyncDirection::Pull => {
+                        remote::sync_from_remote(db, remote_config)
+                            .await
+                            .map(|(_, sync)| sync)
+                    }
+                    hstry_core::remote::SyncDirection::Push => {
+                        remote::sync_to_remote(&config.database, remote_config).await
+                    }
+                    hstry_core::remote::SyncDirection::Bidirectional => {
+                        // Pull first, then push
+                        let pull_result = remote::sync_from_remote(db, remote_config).await;
+                        match pull_result {
+                            Ok((_, mut sync)) => {
+                                if let Ok(push_sync) =
+                                    remote::sync_to_remote(&config.database, remote_config).await
+                                {
+                                    sync.conversations_added += push_sync.conversations_added;
+                                    sync.conversations_updated += push_sync.conversations_updated;
+                                    sync.messages_added += push_sync.messages_added;
+                                    sync.direction =
+                                        hstry_core::remote::SyncDirection::Bidirectional;
+                                }
+                                Ok(sync)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                };
+
+                match result {
+                    Ok(sync_result) => {
+                        if !json {
+                            println!(
+                                "  Added {} conversations, updated {}, {} messages",
+                                sync_result.conversations_added,
+                                sync_result.conversations_updated,
+                                sync_result.messages_added
+                            );
+                        }
+                        total_convs_added += sync_result.conversations_added;
+                        total_convs_updated += sync_result.conversations_updated;
+                        total_msgs_added += sync_result.messages_added;
+                        results.push(sync_result);
+                    }
+                    Err(e) => {
+                        if !json {
+                            eprintln!("  Error: {}", e);
+                        }
+                    }
+                }
+            }
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(RemoteSyncSummary {
+                        results,
+                        total_conversations_added: total_convs_added,
+                        total_conversations_updated: total_convs_updated,
+                        total_messages_added: total_msgs_added,
+                    }),
+                    error: None,
+                });
+            }
+        }
+
+        RemoteCommand::Status => {
+            let cache_dir = remote::remote_cache_dir();
+            let mut statuses: Vec<RemoteStatus> = Vec::new();
+
+            for remote in &config.remotes {
+                let cache_path = remote::cached_db_path(&remote.name);
+                let (cached, cache_size, cache_modified) = if cache_path.exists() {
+                    let meta = std::fs::metadata(&cache_path).ok();
+                    let size = meta.as_ref().map(|m| m.len());
+                    let modified = meta.and_then(|m| m.modified().ok()).map(|t| {
+                        chrono::DateTime::<chrono::Utc>::from(t)
+                            .format("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    });
+                    (true, size, modified)
+                } else {
+                    (false, None, None)
+                };
+
+                statuses.push(RemoteStatus {
+                    name: remote.name.clone(),
+                    host: remote.host.clone(),
+                    enabled: remote.enabled,
+                    database_path: remote.database_path.clone(),
+                    cached,
+                    cache_path: if cached {
+                        Some(cache_path.to_string_lossy().to_string())
+                    } else {
+                        None
+                    },
+                    cache_size_bytes: cache_size,
+                    cache_modified,
+                });
+            }
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({
+                        "cache_directory": cache_dir,
+                        "remotes": statuses,
+                    })),
+                    error: None,
+                });
+            }
+
+            println!("Remote cache directory: {}", cache_dir.display());
+            if statuses.is_empty() {
+                println!("No remotes configured.");
+            } else {
+                println!();
+                for s in &statuses {
+                    let status = if s.enabled { "enabled" } else { "disabled" };
+                    println!("{} ({}):", s.name, status);
+                    println!("  Host: {}", s.host);
+                    if let Some(ref path) = s.database_path {
+                        println!("  Remote DB: {}", path);
+                    }
+                    if s.cached {
+                        println!(
+                            "  Cached: {} ({})",
+                            s.cache_path.as_deref().unwrap_or("-"),
+                            s.cache_size_bytes.map(format_bytes).unwrap_or_default()
+                        );
+                        if let Some(ref modified) = s.cache_modified {
+                            println!("  Last fetched: {}", modified);
+                        }
+                    } else {
+                        println!("  Cached: no");
+                    }
+                    println!();
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 struct MmryMemory {
     content: String,
@@ -2074,6 +2736,7 @@ async fn cmd_mmry(db: &Database, command: MmryCommand, json: bool) -> Result<()>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_mmry_extract(
     db: &Database,
     store: &str,
@@ -2226,13 +2889,15 @@ async fn cmd_mmry_extract(
 }
 
 fn role_allowed(roles: &[MmryRoleArg], role: &MessageRole) -> bool {
-    roles.iter().any(|candidate| match (candidate, role) {
-        (MmryRoleArg::User, MessageRole::User) => true,
-        (MmryRoleArg::Assistant, MessageRole::Assistant) => true,
-        (MmryRoleArg::System, MessageRole::System) => true,
-        (MmryRoleArg::Tool, MessageRole::Tool) => true,
-        (MmryRoleArg::Other, MessageRole::Other) => true,
-        _ => false,
+    roles.iter().any(|candidate| {
+        matches!(
+            (candidate, role),
+            (MmryRoleArg::User, MessageRole::User)
+                | (MmryRoleArg::Assistant, MessageRole::Assistant)
+                | (MmryRoleArg::System, MessageRole::System)
+                | (MmryRoleArg::Tool, MessageRole::Tool)
+                | (MmryRoleArg::Other, MessageRole::Other)
+        )
     })
 }
 
@@ -2320,13 +2985,13 @@ fn build_mmry_metadata(
             serde_json::Value::Number(serde_json::Number::from(tokens)),
         );
     }
-    if let Some(cost) = msg.cost_usd {
-        if let Some(value) = serde_json::Number::from_f64(cost) {
-            inner.insert(
-                "message_cost_usd".to_string(),
-                serde_json::Value::Number(value),
-            );
-        }
+    if let Some(cost) = msg.cost_usd
+        && let Some(value) = serde_json::Number::from_f64(cost)
+    {
+        inner.insert(
+            "message_cost_usd".to_string(),
+            serde_json::Value::Number(value),
+        );
     }
 
     let mut metadata = serde_json::Map::new();

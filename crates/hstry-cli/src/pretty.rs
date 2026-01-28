@@ -4,6 +4,47 @@ use chrono::{DateTime, Utc};
 use console::{style, Style, Term};
 use hstry_core::models::SearchHit;
 
+/// Icons - Nerd Font or ASCII fallback
+struct Icons {
+    folder: &'static str,
+    clock: &'static str,
+    host: &'static str,
+}
+
+impl Icons {
+    fn detect() -> Self {
+        if Self::has_nerd_font() {
+            Self {
+                folder: "\u{f07b}",  // nf-fa-folder
+                clock: "\u{f017}",   // nf-fa-clock_o  
+                host: "\u{f108}",    // nf-fa-desktop
+            }
+        } else {
+            Self {
+                folder: "",
+                clock: "",
+                host: "@",
+            }
+        }
+    }
+
+    fn has_nerd_font() -> bool {
+        if let Ok(val) = std::env::var("NERD_FONT") {
+            return val != "0" && !val.is_empty();
+        }
+        if let Ok(term_prog) = std::env::var("TERM_PROGRAM") {
+            let modern = ["WezTerm", "Alacritty", "kitty", "iTerm.app", "Hyper", "ghostty"];
+            if modern.iter().any(|t| term_prog.contains(t)) {
+                return true;
+            }
+        }
+        if std::env::var("STARSHIP_SESSION_KEY").is_ok() {
+            return true;
+        }
+        false
+    }
+}
+
 /// Terminal width for formatting, with fallback.
 fn term_width() -> usize {
     Term::stdout().size().1 as usize
@@ -29,13 +70,17 @@ fn relative_time_short(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d").to_string()
 }
 
-/// Create a compact score bar.
+/// Create a compact score bar with score embedded.
 fn score_bar(score: f32) -> String {
     let abs_score = score.abs();
     let clamped = (abs_score - 5.0).clamp(0.0, 10.0);
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let filled = ((clamped / 10.0) * 5.0) as usize; // 5 chars max
-    "█".repeat(filled) + &"░".repeat(5 - filled)
+    let filled = ((clamped / 10.0) * 8.0) as usize; // 8 chars for the bar portion
+
+    // Use thin bar characters: ▰ (filled) ▱ (empty)
+    let score_str = format!("{:>4.1}", abs_score);
+    let bar = "▰".repeat(filled) + &"▱".repeat(8 - filled);
+    format!("{} {}", bar, score_str)
 }
 
 /// Style for role.
@@ -118,6 +163,16 @@ fn short_path(path: &str, max_len: usize) -> String {
     }
 }
 
+/// Pad a line to width and add right border.
+fn pad_line(content: &str, width: usize) -> String {
+    let visible_len = console::measure_text_width(content);
+    // width includes both borders, so inner content width is width - 2
+    // but left border is already in content, so we need width - 1 for content + right border
+    let target = width - 1;
+    let padding = target.saturating_sub(visible_len);
+    format!("{}{}{}", content, " ".repeat(padding), style("│").dim())
+}
+
 /// Print search results in a compact format.
 pub fn print_search_results(hits: &[SearchHit]) {
     if hits.is_empty() {
@@ -125,7 +180,7 @@ pub fn print_search_results(hits: &[SearchHit]) {
         return;
     }
 
-    let width = term_width().min(120);
+    let width = term_width();
     let inner = width - 2;
     let header_text = format!(" Found {} result(s) ", hits.len());
     let padding = inner.saturating_sub(header_text.len());
@@ -162,37 +217,40 @@ pub fn print_search_results(hits: &[SearchHit]) {
             );
         }
 
-        // Line 1: metadata (score, role, adapter, workspace, date) - all on one line
+        // Line 1: metadata (score bar with score, role, adapter, workspace, date)
+        let icons = Icons::detect();
         let bar = score_bar(hit.score);
-        let score = hit.score.abs();
         let role_str = hit.role.to_string();
         let role = role_style(&role_str).apply_to(&role_str);
         let adapter = style(&hit.source_adapter).cyan();
         let date = relative_time_short(hit.conv_created_at);
 
+        let ws_max = width.saturating_sub(60).max(20);
         let ws = hit
             .workspace
             .as_ref()
-            .map(|w| short_path(w, 35))
+            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
             .unwrap_or_default();
 
         let host_str = hit
             .host
             .as_ref()
-            .map(|h| format!("@{h}"))
+            .map(|h| format!("{} {} ", icons.host, h))
             .unwrap_or_default();
 
-        println!(
-            "{} {} {:>4.1} {} {} {} {} {}",
+        let date_str = format!("{} {}", icons.clock, date);
+
+        let line1 = format!(
+            "{} {} {} {} {} {}{}",
             style("│").dim(),
             style(bar).yellow(),
-            style(score).dim(),
             role,
             adapter,
             style(&ws).dim(),
             style(host_str).dim(),
-            style(date).dim().italic()
+            style(date_str).dim().italic()
         );
+        println!("{}", pad_line(&line1, width));
 
         // Line 2: title (if present, truncated)
         if let Some(title) = &hit.title {
@@ -204,35 +262,48 @@ pub fn print_search_results(hits: &[SearchHit]) {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let max_title = inner.saturating_sub(5);
+            let max_title = inner.saturating_sub(2);
             let display = if clean.len() > max_title {
                 format!("{}...", &clean[..max_title - 3])
             } else {
                 clean
             };
-            println!(
-                "{}  {} {}",
-                style("│").dim(),
-                style("▶").cyan(),
-                style(display).bold()
-            );
+            let line2 = format!("{} {}", style("│").dim(), style(display).bold());
+            println!("{}", pad_line(&line2, width));
         }
 
         // Line 3: snippet (cleaned, single line, highlighted)
         let snippet = clean_snippet(&hit.snippet);
         let snippet = colorize_snippet(&snippet);
-        let max_snippet = inner.saturating_sub(5);
-        let display = if snippet.len() > max_snippet {
-            let visible_len = console::measure_text_width(&snippet);
-            if visible_len > max_snippet {
-                format!("{}...", &snippet[..max_snippet.saturating_sub(3)])
-            } else {
-                snippet
+        let max_snippet = inner.saturating_sub(2);
+        let display = if console::measure_text_width(&snippet) > max_snippet {
+            // Truncate by visible width
+            let mut truncated = String::new();
+            let mut vis_len = 0;
+            let mut in_escape = false;
+            for c in snippet.chars() {
+                if c == '\x1b' {
+                    in_escape = true;
+                }
+                if in_escape {
+                    truncated.push(c);
+                    if c == 'm' {
+                        in_escape = false;
+                    }
+                } else {
+                    if vis_len >= max_snippet - 3 {
+                        break;
+                    }
+                    truncated.push(c);
+                    vis_len += 1;
+                }
             }
+            truncated + "..."
         } else {
             snippet
         };
-        println!("{}    {}", style("│").dim(), display);
+        let line3 = format!("{} {}", style("│").dim(), display);
+        println!("{}", pad_line(&line3, width));
     }
 
     // Footer
@@ -277,8 +348,8 @@ mod tests {
     #[test]
     fn test_score_bar() {
         let bar = score_bar(10.0);
-        assert!(bar.contains('█'));
-        assert_eq!(bar.chars().count(), 5);
+        assert!(bar.contains('▰'));
+        assert!(bar.contains("10.0"));
     }
 
     #[test]

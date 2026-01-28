@@ -112,11 +112,14 @@ pub async fn sync_source(
             db.upsert_conversation(&hstry_conv).await?;
 
             for (idx, msg) in conv.messages.iter().enumerate() {
+                let Ok(idx) = i32::try_from(idx) else {
+                    continue;
+                };
                 let parts_json = msg.parts.clone().unwrap_or_else(|| serde_json::json!([]));
                 let hstry_msg = hstry_core::models::Message {
                     id: uuid::Uuid::new_v4(),
                     conversation_id: hstry_conv.id,
-                    idx: idx as i32,
+                    idx,
                     role: hstry_core::models::MessageRole::from(msg.role.as_str()),
                     content: msg.content.clone(),
                     parts_json,
@@ -126,7 +129,7 @@ pub async fn sync_source(
                     model: msg.model.clone(),
                     tokens: msg.tokens,
                     cost_usd: msg.cost_usd,
-                    metadata: serde_json::Value::Object(Default::default()),
+                    metadata: serde_json::Value::Object(serde_json::Map::default()),
                 };
                 db.insert_message(&hstry_msg).await?;
                 message_count += 1;

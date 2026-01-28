@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::{Args, Parser};
 use rmcp::{
     ServerHandler, ServiceExt,
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
     tool,
     transport::io::stdio,
 };
@@ -34,7 +34,7 @@ async fn try_main() -> Result<()> {
     server
         .serve(transport)
         .await
-        .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("MCP server error: {e}"))?;
 
     Ok(())
 }
@@ -69,18 +69,21 @@ impl McpServer {
     /// Get the current configuration profile
     #[tool(description = "Returns the active configuration profile name")]
     async fn get_profile(&self) -> String {
+        tokio::task::yield_now().await;
         "default".to_string()
     }
 
     /// Echo a message back
     #[tool(description = "Echoes the provided message back")]
     async fn echo(&self, #[tool(param)] message: String) -> String {
+        tokio::task::yield_now().await;
         format!("Echo: {message}")
     }
 
     /// Get service configuration
     #[tool(description = "Returns the service configuration (enabled and poll interval)")]
     async fn get_runtime_config(&self) -> String {
+        tokio::task::yield_now().await;
         serde_json::to_string_pretty(&self.config.service).unwrap_or_else(|_| "{}".to_string())
     }
 }
@@ -89,7 +92,7 @@ impl McpServer {
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: Default::default(),
+            protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "hstry-mcp".to_string(),

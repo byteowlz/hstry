@@ -1,11 +1,12 @@
 //! Database operations for hstry.
 
 use crate::error::{Error, Result};
-use crate::models::*;
+use crate::models::{Conversation, Message, MessageRole, SearchHit, Source};
 use crate::schema::SCHEMA;
 use chrono::Utc;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
+use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
 use uuid::Uuid;
@@ -46,6 +47,10 @@ impl Database {
         self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema().await?;
         Ok(())
+    }
+
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     async fn ensure_conversations_readable_id_index(&self) -> Result<()> {
@@ -137,11 +142,6 @@ impl Database {
         Ok(())
     }
 
-    /// Get the connection pool.
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     /// Close the database.
     pub async fn close(self) {
         self.pool.close().await;
@@ -155,7 +155,7 @@ impl Database {
     pub async fn upsert_source(&self, source: &Source) -> Result<()> {
         let last_sync = source.last_sync_at.map(|dt| dt.timestamp());
         sqlx::query(
-            r#"
+            r"
             INSERT INTO sources (id, adapter, path, last_sync_at, config)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
@@ -163,7 +163,7 @@ impl Database {
                 path = excluded.path,
                 last_sync_at = excluded.last_sync_at,
                 config = excluded.config
-            "#,
+            ",
         )
         .bind(&source.id)
         .bind(&source.adapter)
@@ -281,24 +281,23 @@ impl Database {
 
     /// Insert a conversation (upsert by source_id + external_id).
     pub async fn upsert_conversation(&self, conv: &Conversation) -> Result<()> {
-        let readable_id = match conv.readable_id.clone() {
-            Some(id) => Some(id),
-            None => {
-                let from_meta = readable_id_from_metadata(&conv.metadata);
-                if from_meta.is_some() {
-                    from_meta
-                } else if let Some(external_id) = conv.external_id.as_deref() {
-                    self.get_conversation_readable_id(&conv.source_id, external_id)
-                        .await?
-                        .or_else(|| Some(generate_readable_id(conv)))
-                } else {
-                    Some(generate_readable_id(conv))
-                }
+        let readable_id = if let Some(id) = conv.readable_id.clone() {
+            Some(id)
+        } else {
+            let from_meta = readable_id_from_metadata(&conv.metadata);
+            if from_meta.is_some() {
+                from_meta
+            } else if let Some(external_id) = conv.external_id.as_deref() {
+                self.get_conversation_readable_id(&conv.source_id, external_id)
+                    .await?
+                    .or_else(|| Some(generate_readable_id(conv)))
+            } else {
+                Some(generate_readable_id(conv))
             }
         };
 
         sqlx::query(
-            r#"
+            r"
             INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, workspace, tokens_in, tokens_out, cost_usd, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
@@ -311,7 +310,7 @@ impl Database {
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata
-            "#,
+            ",
         )
         .bind(conv.id.to_string())
         .bind(&conv.source_id)
@@ -351,7 +350,7 @@ impl Database {
         sql.push_str(" ORDER BY created_at DESC");
 
         if let Some(limit) = opts.limit {
-            sql.push_str(&format!(" LIMIT {limit}"));
+            let _ = write!(sql, " LIMIT {limit}");
         }
 
         let mut query = sqlx::query(&sql);
@@ -370,7 +369,7 @@ impl Database {
 
         let mut convs = Vec::new();
         for row in rows {
-            convs.push(conversation_from_row(&row)?);
+            convs.push(conversation_from_row(&row));
         }
         Ok(convs)
     }
@@ -383,7 +382,7 @@ impl Database {
             .await?;
 
         match row {
-            Some(row) => Ok(Some(conversation_from_row(&row)?)),
+            Some(row) => Ok(Some(conversation_from_row(&row))),
             None => Ok(None),
         }
     }
@@ -437,7 +436,7 @@ impl Database {
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
         sqlx::query(
-            r#"
+            r"
             INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conversation_id, idx) DO UPDATE SET
@@ -449,7 +448,7 @@ impl Database {
                 tokens = excluded.tokens,
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata
-            "#,
+            ",
         )
         .bind(msg.id.to_string())
         .bind(msg.conversation_id.to_string())
@@ -476,7 +475,7 @@ impl Database {
 
         let mut messages = Vec::new();
         for row in rows {
-            messages.push(message_from_row(&row)?);
+            messages.push(message_from_row(&row));
         }
         Ok(messages)
     }
@@ -490,6 +489,29 @@ impl Database {
     }
 
     // =========================================================================
+    // Search state
+    // =========================================================================
+
+    pub async fn get_search_state(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT value FROM search_state WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| row.get::<String, _>("value")))
+    }
+
+    pub async fn set_search_state(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO search_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // =========================================================================
     // Search
     // =========================================================================
 
@@ -497,9 +519,10 @@ impl Database {
     pub async fn search(&self, query: &str, opts: SearchOptions) -> Result<Vec<SearchHit>> {
         let mode = opts.mode.resolve(query);
         let table = mode.table_name();
+        let query = sanitize_fts_query(query);
 
         let mut sql = format!(
-            r#"
+            r"
             SELECT
                 m.id AS message_id,
                 m.conversation_id AS conversation_id,
@@ -522,7 +545,7 @@ impl Database {
             JOIN conversations c ON c.id = m.conversation_id
             JOIN sources s ON s.id = c.source_id
             WHERE {table} MATCH ?
-            "#
+            "
         );
 
         if opts.source_id.is_some() {
@@ -535,10 +558,10 @@ impl Database {
         sql.push_str(" ORDER BY score ASC");
 
         if let Some(limit) = opts.limit {
-            sql.push_str(&format!(" LIMIT {limit}"));
+            let _ = write!(sql, " LIMIT {limit}");
         }
         if let Some(offset) = opts.offset {
-            sql.push_str(&format!(" OFFSET {offset}"));
+            let _ = write!(sql, " OFFSET {offset}");
         }
 
         let mut query_builder = sqlx::query(&sql);
@@ -570,8 +593,7 @@ impl Database {
                 conv_created_at: {
                     let ts = row.get::<i64, _>("conv_created_at");
                     chrono::DateTime::from_timestamp(ts, 0)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(Utc::now)
+                        .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc))
                 },
                 conv_updated_at: row
                     .get::<Option<i64>, _>("conv_updated_at")
@@ -584,6 +606,7 @@ impl Database {
                 workspace: row.get("workspace"),
                 source_adapter: row.get("source_adapter"),
                 source_path: row.get("source_path"),
+                host: None,
             });
         }
 
@@ -597,7 +620,7 @@ impl Database {
 
         self.ensure_fts_table(
             "messages_fts",
-            r#"
+            r"
             CREATE VIRTUAL TABLE messages_fts USING fts5(
                 content,
                 content=messages,
@@ -605,26 +628,26 @@ impl Database {
                 tokenize = 'porter',
                 prefix = '2 3 4'
             );
-            "#,
+            ",
             &[
-                r#"
+                r"
                 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
                     INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
                 END;
-                "#,
-                r#"
+                ",
+                r"
                 CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
                     INSERT INTO messages_fts(messages_fts, rowid, content)
                     VALUES('delete', OLD.rowid, OLD.content);
                 END;
-                "#,
-                r#"
+                ",
+                r"
                 CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
                     INSERT INTO messages_fts(messages_fts, rowid, content)
                     VALUES('delete', OLD.rowid, OLD.content);
                     INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
                 END;
-                "#,
+                ",
             ],
             &["messages_ai", "messages_ad", "messages_au"],
             messages_count.0,
@@ -644,25 +667,25 @@ impl Database {
             );
             "#,
             &[
-                r#"
+                r"
                 CREATE TRIGGER messages_code_ai AFTER INSERT ON messages BEGIN
                     INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
                 END;
-                "#,
-                r#"
+                ",
+                r"
                 CREATE TRIGGER messages_code_ad AFTER DELETE ON messages BEGIN
                     INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
                     VALUES('delete', OLD.rowid, OLD.content);
                 END;
-                "#,
-                r#"
+                ",
+                r"
                 CREATE TRIGGER messages_code_au AFTER UPDATE ON messages BEGIN
                     INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
                     VALUES('delete', OLD.rowid, OLD.content);
                     INSERT INTO messages_code_fts(rowid, content)
                     VALUES (NEW.rowid, NEW.content);
                 END;
-                "#,
+                ",
             ],
             &["messages_code_ai", "messages_code_ad", "messages_code_au"],
             messages_count.0,
@@ -800,7 +823,7 @@ pub struct ListConversationsOptions {
 }
 
 /// Options for search queries.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SearchOptions {
     pub source_id: Option<String>,
     pub workspace: Option<String>,
@@ -850,8 +873,22 @@ fn detect_search_mode(query: &str) -> SearchMode {
     }
 }
 
-fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Conversation> {
-    Ok(Conversation {
+fn sanitize_fts_query(query: &str) -> String {
+    let query = query.trim();
+    if query.is_empty() {
+        return String::new();
+    }
+
+    if query.contains(':') || query.contains('"') {
+        let escaped = query.replace('"', "\"\"");
+        return format!("\"{escaped}\"");
+    }
+
+    query.to_string()
+}
+
+fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
+    Conversation {
         id: Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default(),
         source_id: row.get("source_id"),
         external_id: row.get("external_id"),
@@ -873,11 +910,11 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Conversation> 
             .get::<Option<String>, _>("metadata")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
-    })
+    }
 }
 
-fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message> {
-    Ok(Message {
+fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Message {
+    Message {
         id: Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default(),
         conversation_id: Uuid::parse_str(row.get::<&str, _>("conversation_id")).unwrap_or_default(),
         idx: row.get("idx"),
@@ -898,7 +935,7 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message> {
             .get::<Option<String>, _>("metadata")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
-    })
+    }
 }
 
 fn normalize_parts_json(parts_json: &serde_json::Value) -> serde_json::Value {
@@ -916,7 +953,7 @@ fn project_content(content: &str, parts_json: &serde_json::Value) -> String {
     let should_project = content.trim().is_empty() || should_project_from_parts(content, parts);
     if !should_project {
         return content.to_string();
-    };
+    }
 
     let mut text_parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -1011,8 +1048,11 @@ fn generate_readable_id(conv: &Conversation) -> String {
     conv.title.hash(&mut hasher);
     let hash = hasher.finish();
 
-    let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
-    let verb = VERBS[((hash >> 8) as usize) % VERBS.len()];
-    let noun = NOUNS[((hash >> 16) as usize) % NOUNS.len()];
+    let adj_index = usize::try_from(hash % ADJECTIVES.len() as u64).unwrap_or_default();
+    let verb_index = usize::try_from((hash >> 8) % VERBS.len() as u64).unwrap_or_default();
+    let noun_index = usize::try_from((hash >> 16) % NOUNS.len() as u64).unwrap_or_default();
+    let adj = ADJECTIVES[adj_index];
+    let verb = VERBS[verb_index];
+    let noun = NOUNS[noun_index];
     format!("{adj}-{verb}-{noun}")
 }

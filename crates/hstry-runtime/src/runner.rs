@@ -306,7 +306,7 @@ impl AdapterRunner {
             .runtime
             .run_args()
             .iter()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
         args.push(adapter_path.display().to_string());
 
@@ -448,3 +448,7 @@ impl AdapterRunner {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "runner_tests.rs"]
+mod tests;

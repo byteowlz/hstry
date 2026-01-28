@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "Core library for hstry - Universal AI chat history database"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
@@ -19,3 +22,9 @@ uuid.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
+tantivy.workspace = true
+tonic.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

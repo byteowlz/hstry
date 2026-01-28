@@ -172,4 +172,10 @@ pub struct SearchHit {
     pub workspace: Option<String>,
     pub source_adapter: String,
     pub source_path: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "models_tests.rs"]
+mod tests;

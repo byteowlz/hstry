@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 //! hstry CLI - Universal AI chat history
 
 use std::collections::HashMap;
@@ -8,7 +9,7 @@ use std::process::{Command as ProcessCommand, Stdio};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use hstry_core::config::{AdapterRepo, AdapterRepoSource};
-use hstry_core::models::{Conversation, Message, MessageRole, Source};
+use hstry_core::models::{Conversation, Message, MessageRole, SearchHit, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
 use serde::{Serialize, de::DeserializeOwned};
@@ -28,6 +29,8 @@ struct SearchInput {
     source: Option<String>,
     workspace: Option<String>,
     mode: Option<SearchModeArg>,
+    scope: Option<SearchScopeArg>,
+    remotes: Option<Vec<String>>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -176,9 +179,24 @@ enum Command {
         #[arg(long, value_enum, default_value = "auto")]
         mode: SearchModeArg,
 
+        /// Search scope (local, remote, all)
+        #[arg(long, value_enum, default_value = "local")]
+        scope: SearchScopeArg,
+
+        /// Remote names to query (default: all enabled)
+        #[arg(long)]
+        remote: Vec<String>,
+
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Build or refresh the search index
+    Index {
+        /// Rebuild the index from scratch
+        #[arg(long)]
+        rebuild: bool,
     },
 
     /// List conversations
@@ -665,10 +683,12 @@ async fn main() -> Result<()> {
             source,
             workspace,
             mode,
+            scope,
+            remote,
             input,
         } => {
             let input = read_input::<SearchInput>(input)?;
-            let query = input.as_ref().map(|v| v.query.clone()).unwrap_or(query);
+            let query = input.as_ref().map_or(query, |v| v.query.clone());
             let limit = input.as_ref().and_then(|v| v.limit).unwrap_or(limit);
             let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
             let workspace = input
@@ -676,8 +696,17 @@ async fn main() -> Result<()> {
                 .and_then(|v| v.workspace.clone())
                 .or(workspace);
             let mode = input.as_ref().and_then(|v| v.mode).unwrap_or(mode);
-            cmd_search(&db, &query, limit, source, workspace, mode, cli.json).await
+            let scope = input.as_ref().and_then(|v| v.scope).unwrap_or(scope);
+            let remotes = input
+                .as_ref()
+                .and_then(|v| v.remotes.clone())
+                .unwrap_or(remote);
+            cmd_search(
+                &config, &db, &query, limit, source, workspace, mode, scope, remotes, cli.json,
+            )
+            .await
         }
+        Command::Index { rebuild } => cmd_index(&config, &db, rebuild, cli.json).await,
         Command::List {
             source,
             workspace,
@@ -695,7 +724,7 @@ async fn main() -> Result<()> {
         }
         Command::Show { id, input } => {
             let input = read_input::<ShowInput>(input)?;
-            let id = input.as_ref().map(|v| v.id.clone()).unwrap_or(id);
+            let id = input.as_ref().map_or(id, |v| v.id.clone());
             cmd_show(&db, &id, cli.json).await
         }
         Command::Source { command } => cmd_source(&db, &runner, command, cli.json).await,
@@ -757,7 +786,7 @@ async fn main() -> Result<()> {
         Command::Remote { command } => {
             cmd_remote(&db, &config, &config_path, command, cli.json).await
         }
-        Command::Config { command } => cmd_config(&config, &config_path, command, cli.json).await,
+        Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
     }
 }
 
@@ -767,7 +796,7 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
         let existing = db.get_source(&source.id).await?;
         let entry = match existing {
             Some(mut entry) => {
-                entry.adapter = source.adapter.clone();
+                entry.adapter.clone_from(&source.adapter);
                 entry.path = Some(source.path.clone());
                 entry
             }
@@ -776,7 +805,7 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
                 adapter: source.adapter.clone(),
                 path: Some(source.path.clone()),
                 last_sync_at: None,
-                config: serde_json::Value::Object(Default::default()),
+                config: serde_json::Value::Object(serde_json::Map::default()),
             },
         };
         db.upsert_source(&entry).await?;
@@ -823,20 +852,31 @@ async fn cmd_sync(
 
         if !config.adapter_enabled(&source.adapter) {
             if !json {
-                println!("Syncing {} ({})...", source.id, source.adapter);
+                println!(
+                    "Syncing {id} ({adapter})...",
+                    id = source.id,
+                    adapter = source.adapter
+                );
                 println!("  Adapter disabled in config, skipping");
             }
             continue;
         }
 
         if !json {
-            println!("Syncing {} ({})...", source.id, source.adapter);
+            println!(
+                "Syncing {id} ({adapter})...",
+                id = source.id,
+                adapter = source.adapter
+            );
         }
         match sync::sync_source(db, runner, &source).await {
             Ok(result) => {
                 if !json {
                     if result.conversations > 0 {
-                        println!("  Synced {} conversations", result.conversations);
+                        println!(
+                            "  Synced {count} conversations",
+                            count = result.conversations
+                        );
                     } else {
                         println!("  No new conversations");
                     }
@@ -845,7 +885,7 @@ async fn cmd_sync(
             }
             Err(err) => {
                 if !json {
-                    eprintln!("  Error: {}", err);
+                    eprintln!("  Error: {err}");
                 }
             }
         }
@@ -886,7 +926,7 @@ struct DetectionResult {
     confidence: f32,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn cmd_import(
     db: &Database,
     runner: &AdapterRunner,
@@ -905,10 +945,10 @@ async fn cmd_import(
             return emit_json(JsonResponse::<()> {
                 ok: false,
                 result: None,
-                error: Some(format!("Path not found: {}", expanded.display())),
+                error: Some(format!("Path not found: {path}", path = expanded.display())),
             });
         }
-        anyhow::bail!("Path not found: {}", expanded.display());
+        anyhow::bail!("Path not found: {path}", path = expanded.display());
     }
 
     // Detect or use specified adapter
@@ -919,16 +959,16 @@ async fn cmd_import(
                 return emit_json(JsonResponse::<()> {
                     ok: false,
                     result: None,
-                    error: Some(format!("Adapter '{}' not found", name)),
+                    error: Some(format!("Adapter '{name}' not found")),
                 });
             }
-            anyhow::bail!("Adapter '{}' not found", name);
+            anyhow::bail!("Adapter '{name}' not found");
         }
         (name, 1.0f32)
     } else {
         // Auto-detect adapter
         if !json {
-            println!("Detecting format for {}...", expanded.display());
+            println!("Detecting format for {path}...", path = expanded.display());
         }
 
         let mut best_match: Option<(String, f32)> = None;
@@ -950,7 +990,10 @@ async fn cmd_import(
                     confidence: conf,
                 });
 
-                if best_match.is_none() || conf > best_match.as_ref().unwrap().1 {
+                if best_match
+                    .as_ref()
+                    .is_none_or(|(_, best_conf)| conf > *best_conf)
+                {
                     best_match = Some((adapter_name, conf));
                 }
             }
@@ -966,37 +1009,41 @@ async fn cmd_import(
         if !json && all_matches.len() > 1 {
             println!("Detected formats:");
             for m in &all_matches {
-                println!("  {} ({:.0}%)", m.adapter, m.confidence * 100.0);
-            }
-        }
-
-        match best_match {
-            Some((name, conf)) => {
-                if !json {
-                    println!("Using adapter: {} (confidence: {:.0}%)", name, conf * 100.0);
-                }
-                (name, conf)
-            }
-            None => {
-                if json {
-                    return emit_json(JsonResponse::<()> {
-                        ok: false,
-                        result: None,
-                        error: Some(
-                            "Could not detect format. Use --adapter to specify.".to_string(),
-                        ),
-                    });
-                }
-                anyhow::bail!(
-                    "Could not detect format for {}. Use --adapter to specify.",
-                    expanded.display()
+                println!(
+                    "  {adapter} ({confidence:.0}%)",
+                    adapter = m.adapter,
+                    confidence = m.confidence * 100.0
                 );
             }
         }
+
+        if let Some((name, conf)) = best_match {
+            if !json {
+                println!(
+                    "Using adapter: {name} (confidence: {confidence:.0}%)",
+                    confidence = conf * 100.0
+                );
+            }
+            (name, conf)
+        } else {
+            if json {
+                return emit_json(JsonResponse::<()> {
+                    ok: false,
+                    result: None,
+                    error: Some("Could not detect format. Use --adapter to specify.".to_string()),
+                });
+            }
+            anyhow::bail!(
+                "Could not detect format for {path}. Use --adapter to specify.",
+                path = expanded.display()
+            );
+        }
     };
 
-    let adapter_path = runner.find_adapter(&adapter_name).unwrap();
-    let source_id = source_id.unwrap_or_else(|| format!("import-{}", adapter_name));
+    let Some(adapter_path) = runner.find_adapter(&adapter_name) else {
+        anyhow::bail!("Adapter '{adapter_name}' not found");
+    };
+    let source_id = source_id.unwrap_or_else(|| format!("import-{adapter_name}"));
 
     // Parse conversations
     let parse_opts = hstry_runtime::runner::ParseOptions {
@@ -1049,14 +1096,11 @@ async fn cmd_import(
                 error: None,
             });
         }
-        println!(
-            "Dry run: would import {} conversations ({} messages)",
-            conv_count, msg_count
-        );
+        println!("Dry run: would import {conv_count} conversations ({msg_count} messages)");
         for conv in &conversations {
             let title = conv.title.as_deref().unwrap_or("Untitled");
             let msg_cnt = conv.messages.len();
-            println!("  - {} ({} messages)", title, msg_cnt);
+            println!("  - {title} ({msg_cnt} messages)");
         }
         return Ok(());
     }
@@ -1073,7 +1117,7 @@ async fn cmd_import(
 
     // Import conversations
     if !json {
-        println!("Importing {} conversations...", conv_count);
+        println!("Importing {conv_count} conversations...");
     }
 
     let mut imported_convs = 0usize;
@@ -1113,11 +1157,14 @@ async fn cmd_import(
         db.upsert_conversation(&hstry_conv).await?;
 
         for (idx, msg) in conv.messages.iter().enumerate() {
+            let Ok(idx) = i32::try_from(idx) else {
+                continue;
+            };
             let parts_json = msg.parts.clone().unwrap_or_else(|| serde_json::json!([]));
             let hstry_msg = hstry_core::models::Message {
                 id: uuid::Uuid::new_v4(),
                 conversation_id: hstry_conv.id,
-                idx: idx as i32,
+                idx,
                 role: hstry_core::models::MessageRole::from(msg.role.as_str()),
                 content: msg.content.clone(),
                 parts_json,
@@ -1128,7 +1175,7 @@ async fn cmd_import(
                 model: msg.model.clone(),
                 tokens: msg.tokens,
                 cost_usd: msg.cost_usd,
-                metadata: serde_json::Value::Object(Default::default()),
+                metadata: serde_json::Value::Object(serde_json::Map::default()),
             };
             db.insert_message(&hstry_msg).await?;
             imported_msgs += 1;
@@ -1157,20 +1204,21 @@ async fn cmd_import(
         });
     }
 
-    println!(
-        "Imported {} conversations ({} messages)",
-        imported_convs, imported_msgs
-    );
+    println!("Imported {imported_convs} conversations ({imported_msgs} messages)");
     Ok(())
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn cmd_search(
+    config: &Config,
     db: &Database,
     query: &str,
     limit: i64,
     source: Option<String>,
     workspace: Option<String>,
     mode: SearchModeArg,
+    scope: SearchScopeArg,
+    remotes: Vec<String>,
     json: bool,
 ) -> Result<()> {
     let opts = hstry_core::db::SearchOptions {
@@ -1180,7 +1228,43 @@ async fn cmd_search(
         offset: None,
         mode: mode.into(),
     };
-    let messages = db.search(query, opts).await?;
+    let mut messages = Vec::new();
+
+    if scope != SearchScopeArg::Remote {
+        let local = if let Some(results) =
+            hstry_core::service::try_service_search(query, &opts).await?
+        {
+            results
+        } else if let Some(results) = try_api_search(query, &opts, mode).await? {
+            results
+        } else {
+            let index_path = config.search_index_path();
+            hstry_core::search_tantivy::search_with_fallback(db, &index_path, query, &opts).await?
+        };
+        messages.extend(local);
+    }
+
+    if scope != SearchScopeArg::Local {
+        let remote_list = if remotes.is_empty() {
+            config.remotes.clone()
+        } else {
+            config
+                .remotes
+                .iter()
+                .filter(|remote| remotes.contains(&remote.name))
+                .cloned()
+                .collect()
+        };
+
+        let remote_hits = hstry_core::remote::search_remotes(&remote_list, query, &opts).await?;
+        messages.extend(remote_hits);
+    }
+
+    messages.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     if json {
         return emit_json(JsonResponse {
@@ -1198,7 +1282,8 @@ async fn cmd_search(
     let count = messages.len();
     for msg in messages {
         // Header line with separator
-        println!("{}", "-".repeat(72));
+        let separator = "-".repeat(72);
+        println!("{separator}");
 
         // Score (negate BM25 so higher = better), role, adapter, and workspace
         let display_score = -msg.score;
@@ -1207,34 +1292,94 @@ async fn cmd_search(
             .as_ref()
             .map(|ws| format!(" | WS: {ws}"))
             .unwrap_or_default();
+        let host = msg
+            .host
+            .as_ref()
+            .map(|h| format!(" | Host: {h}"))
+            .unwrap_or_default();
         println!(
-            "Score: {:.2} | {} | {}{}",
-            display_score, msg.role, msg.source_adapter, workspace
+            "Score: {score:.2} | {role} | {adapter}{workspace}{host}",
+            score = display_score,
+            role = msg.role,
+            adapter = msg.source_adapter
         );
 
         // Title if available
         if let Some(title) = &msg.title {
-            println!("Title: {}", truncate(title, 68));
+            let title = truncate(title, 68);
+            println!("Title: {title}");
         }
 
         // Dates: created and updated
         let created = msg.conv_created_at.format("%Y-%m-%d %H:%M");
         let updated = msg
             .conv_updated_at
-            .map(|dt| format!(" | Updated: {}", dt.format("%Y-%m-%d %H:%M")))
+            .map(|dt| {
+                format!(
+                    " | Updated: {updated}",
+                    updated = dt.format("%Y-%m-%d %H:%M")
+                )
+            })
             .unwrap_or_default();
-        println!("Date: {}{}", created, updated);
+        println!("Date: {created}{updated}");
 
         // Snippet with search highlights (colorized for TTY)
         let snippet = truncate(&msg.snippet, 200);
-        println!("Snippet: {}", colorize_highlights(&snippet));
+        let snippet = colorize_highlights(&snippet);
+        println!("Snippet: {snippet}");
     }
     // Final separator
     if count > 0 {
-        println!("{}", "-".repeat(72));
+        let separator = "-".repeat(72);
+        println!("{separator}");
     }
 
     Ok(())
+}
+
+#[derive(Serialize)]
+struct SearchApiQuery<'a> {
+    query: &'a str,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    source: Option<&'a str>,
+    workspace: Option<&'a str>,
+    mode: SearchModeArg,
+}
+
+async fn try_api_search(
+    query: &str,
+    opts: &hstry_core::db::SearchOptions,
+    mode: SearchModeArg,
+) -> Result<Option<Vec<SearchHit>>> {
+    if std::env::var("HSTRY_NO_API").is_ok() {
+        return Ok(None);
+    }
+
+    let api_url =
+        std::env::var("HSTRY_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+    let url = format!("{base}/search", base = api_url.trim_end_matches('/'));
+
+    let query_params = SearchApiQuery {
+        query,
+        limit: opts.limit,
+        offset: opts.offset,
+        source: opts.source_id.as_deref(),
+        workspace: opts.workspace.as_deref(),
+        mode,
+    };
+
+    let client = reqwest::Client::new();
+    let Ok(response) = client.get(url).query(&query_params).send().await else {
+        return Ok(None);
+    };
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let results = response.json::<Vec<SearchHit>>().await?;
+    Ok(Some(results))
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]
@@ -1253,6 +1398,16 @@ impl From<SearchModeArg> for hstry_core::db::SearchMode {
             SearchModeArg::Code => hstry_core::db::SearchMode::Code,
         }
     }
+}
+
+#[derive(
+    Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize, PartialEq, Eq,
+)]
+#[serde(rename_all = "lowercase")]
+enum SearchScopeArg {
+    Local,
+    Remote,
+    All,
 }
 
 async fn cmd_list(
@@ -1287,7 +1442,7 @@ async fn cmd_list(
     for conv in conversations {
         let title = conv.title.as_deref().unwrap_or("(untitled)");
         let date = conv.created_at.format("%Y-%m-%d %H:%M");
-        println!("{} | {} | {}", conv.id, date, title);
+        println!("{id} | {date} | {title}", id = conv.id);
     }
 
     Ok(())
@@ -1320,17 +1475,18 @@ async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
         });
     }
 
-    println!("Title: {}", conv.title.as_deref().unwrap_or("(untitled)"));
-    println!("Created: {}", conv.created_at);
-    println!("Source: {}", conv.source_id);
+    let title = conv.title.as_deref().unwrap_or("(untitled)");
+    println!("Title: {title}");
+    println!("Created: {created}", created = conv.created_at);
+    println!("Source: {source}", source = conv.source_id);
     if let Some(ws) = &conv.workspace {
-        println!("Workspace: {}", ws);
+        println!("Workspace: {ws}");
     }
     println!();
 
     for msg in messages {
-        println!("--- {} ---", msg.role);
-        println!("{}", msg.content);
+        println!("--- {role} ---", role = msg.role);
+        println!("{content}", content = msg.content);
         println!();
     }
 
@@ -1353,12 +1509,10 @@ async fn cmd_source(
             let input = read_input::<SourceAddInput>(input)?;
             let path_str = input
                 .as_ref()
-                .map(|v| v.path.clone())
-                .unwrap_or_else(|| path.to_string_lossy().to_string());
+                .map_or_else(|| path.to_string_lossy().to_string(), |v| v.path.clone());
             let (input_adapter, input_id) = input
                 .as_ref()
-                .map(|v| (v.adapter.clone(), v.id.clone()))
-                .unwrap_or((None, None));
+                .map_or((None, None), |v| (v.adapter.clone(), v.id.clone()));
             let adapter = input_adapter.or(adapter);
             let id = input_id.or(id);
 
@@ -1380,16 +1534,14 @@ async fn cmd_source(
                 }
 
                 best_adapter.ok_or_else(|| {
-                    anyhow::anyhow!("Could not auto-detect adapter for path: {}", path_str)
+                    anyhow::anyhow!("Could not auto-detect adapter for path: {path_str}")
                 })?
             };
 
             let source_id = id.unwrap_or_else(|| {
-                format!(
-                    "{}-{}",
-                    adapter_name,
-                    uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
-                )
+                let uuid = uuid::Uuid::new_v4().to_string();
+                let short = uuid.split('-').next().unwrap_or(uuid.as_str());
+                format!("{adapter_name}-{short}")
             });
 
             let source = hstry_core::models::Source {
@@ -1397,7 +1549,7 @@ async fn cmd_source(
                 adapter: adapter_name.clone(),
                 path: Some(path_str),
                 last_sync_at: None,
-                config: serde_json::Value::Object(Default::default()),
+                config: serde_json::Value::Object(serde_json::Map::default()),
             };
 
             db.upsert_source(&source).await?;
@@ -1408,7 +1560,7 @@ async fn cmd_source(
                     error: None,
                 });
             }
-            println!("Added source: {} ({})", source_id, adapter_name);
+            println!("Added source: {source_id} ({adapter_name})");
         }
         SourceCommand::List => {
             let sources = db.list_sources().await?;
@@ -1423,18 +1575,18 @@ async fn cmd_source(
                 println!("No sources configured.");
             } else {
                 for source in sources {
+                    let path = source.path.as_deref().unwrap_or("-");
                     println!(
-                        "{} | {} | {}",
-                        source.id,
-                        source.adapter,
-                        source.path.as_deref().unwrap_or("-")
+                        "{id} | {adapter} | {path}",
+                        id = source.id,
+                        adapter = source.adapter
                     );
                 }
             }
         }
         SourceCommand::Remove { id, input } => {
             let input = read_input::<SourceRemoveInput>(input)?;
-            let id = input.as_ref().map(|v| v.id.clone()).unwrap_or(id);
+            let id = input.as_ref().map_or(id, |v| v.id.clone());
             db.remove_source(&id).await?;
             if json {
                 return emit_json(JsonResponse {
@@ -1443,7 +1595,7 @@ async fn cmd_source(
                     error: None,
                 });
             }
-            println!("Removed source: {}", id);
+            println!("Removed source: {id}");
         }
     }
     Ok(())
@@ -1484,7 +1636,7 @@ fn cmd_adapters(
                     } else {
                         "disabled"
                     };
-                    println!("  {} ({})", adapter.name, status);
+                    println!("  {name} ({status})", name = adapter.name);
                 }
             }
         }
@@ -1523,7 +1675,7 @@ fn cmd_adapters(
         }
         AdapterCommand::Enable { name, input } => {
             let input = read_input::<AdapterToggleInput>(input)?;
-            let name = input.as_ref().map(|v| v.name.clone()).unwrap_or(name);
+            let name = input.as_ref().map_or(name, |v| v.name.clone());
             upsert_adapter_config(&mut config, &name, true);
             config.save_to_path(config_path)?;
             if json {
@@ -1536,11 +1688,11 @@ fn cmd_adapters(
                     error: None,
                 });
             }
-            println!("Enabled adapter: {}", name);
+            println!("Enabled adapter: {name}");
         }
         AdapterCommand::Disable { name, input } => {
             let input = read_input::<AdapterToggleInput>(input)?;
-            let name = input.as_ref().map(|v| v.name.clone()).unwrap_or(name);
+            let name = input.as_ref().map_or(name, |v| v.name.clone());
             upsert_adapter_config(&mut config, &name, false);
             config.save_to_path(config_path)?;
             if json {
@@ -1553,7 +1705,7 @@ fn cmd_adapters(
                     error: None,
                 });
             }
-            println!("Disabled adapter: {}", name);
+            println!("Disabled adapter: {name}");
         }
         AdapterCommand::Update {
             adapter,
@@ -1605,19 +1757,15 @@ fn cmd_adapters(
             for r in &repos_to_update {
                 let source_info = match &r.source {
                     AdapterRepoSource::Git { url, git_ref, .. } => {
-                        format!("git: {} ({})", url, git_ref)
+                        format!("git: {url} ({git_ref})")
                     }
-                    AdapterRepoSource::Archive { url, .. } => {
-                        format!("archive: {}", url)
-                    }
-                    AdapterRepoSource::Local { path } => {
-                        format!("local: {}", path)
-                    }
+                    AdapterRepoSource::Archive { url, .. } => format!("archive: {url}"),
+                    AdapterRepoSource::Local { path } => format!("local: {path}"),
                 };
-                println!("  {} - {}", r.name, source_info);
+                println!("  {name} - {source_info}", name = r.name);
             }
             if let Some(adapter_name) = &adapter {
-                println!("Filtering for adapter: {}", adapter_name);
+                println!("Filtering for adapter: {adapter_name}");
             }
             if force {
                 println!("Force update enabled");
@@ -1655,16 +1803,14 @@ fn cmd_adapter_repo(
                     let status = if repo.enabled { "enabled" } else { "disabled" };
                     let source_info = match &repo.source {
                         AdapterRepoSource::Git { url, git_ref, path } => {
-                            format!("git {} ({}) path={}", url, git_ref, path)
+                            format!("git {url} ({git_ref}) path={path}")
                         }
                         AdapterRepoSource::Archive { url, path } => {
-                            format!("archive {} path={}", url, path)
+                            format!("archive {url} path={path}")
                         }
-                        AdapterRepoSource::Local { path } => {
-                            format!("local {}", path)
-                        }
+                        AdapterRepoSource::Local { path } => format!("local {path}"),
                     };
-                    println!("  {} ({}) - {}", repo.name, status, source_info);
+                    println!("  {name} ({status}) - {source_info}", name = repo.name);
                 }
             }
         }
@@ -1680,10 +1826,10 @@ fn cmd_adapter_repo(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' already exists", name)),
+                        error: Some(format!("Repository '{name}' already exists")),
                     });
                 }
-                anyhow::bail!("Repository '{}' already exists", name);
+                anyhow::bail!("Repository '{name}' already exists");
             }
 
             let repo = AdapterRepo {
@@ -1701,7 +1847,7 @@ fn cmd_adapter_repo(
                     error: None,
                 });
             }
-            println!("Added git repository: {}", name);
+            println!("Added git repository: {name}");
         }
         AdapterRepoCommand::AddArchive { name, url, path } => {
             if config.adapter_repos.iter().any(|r| r.name == name) {
@@ -1709,10 +1855,10 @@ fn cmd_adapter_repo(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' already exists", name)),
+                        error: Some(format!("Repository '{name}' already exists")),
                     });
                 }
-                anyhow::bail!("Repository '{}' already exists", name);
+                anyhow::bail!("Repository '{name}' already exists");
             }
 
             let repo = AdapterRepo {
@@ -1730,7 +1876,7 @@ fn cmd_adapter_repo(
                     error: None,
                 });
             }
-            println!("Added archive repository: {}", name);
+            println!("Added archive repository: {name}");
         }
         AdapterRepoCommand::AddLocal { name, path } => {
             if config.adapter_repos.iter().any(|r| r.name == name) {
@@ -1738,10 +1884,10 @@ fn cmd_adapter_repo(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' already exists", name)),
+                        error: Some(format!("Repository '{name}' already exists")),
                     });
                 }
-                anyhow::bail!("Repository '{}' already exists", name);
+                anyhow::bail!("Repository '{name}' already exists");
             }
 
             let repo = AdapterRepo {
@@ -1761,7 +1907,7 @@ fn cmd_adapter_repo(
                     error: None,
                 });
             }
-            println!("Added local repository: {}", name);
+            println!("Added local repository: {name}");
         }
         AdapterRepoCommand::Remove { name } => {
             let original_len = config.adapter_repos.len();
@@ -1772,10 +1918,10 @@ fn cmd_adapter_repo(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' not found", name)),
+                        error: Some(format!("Repository '{name}' not found")),
                     });
                 }
-                anyhow::bail!("Repository '{}' not found", name);
+                anyhow::bail!("Repository '{name}' not found");
             }
 
             config.save_to_path(config_path)?;
@@ -1787,7 +1933,7 @@ fn cmd_adapter_repo(
                     error: None,
                 });
             }
-            println!("Removed repository: {}", name);
+            println!("Removed repository: {name}");
         }
         AdapterRepoCommand::Enable { name } => {
             let repo = config.adapter_repos.iter_mut().find(|r| r.name == name);
@@ -1802,16 +1948,16 @@ fn cmd_adapter_repo(
                         error: None,
                     });
                 }
-                println!("Enabled repository: {}", name);
+                println!("Enabled repository: {name}");
             } else {
                 if json {
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' not found", name)),
+                        error: Some(format!("Repository '{name}' not found")),
                     });
                 }
-                anyhow::bail!("Repository '{}' not found", name);
+                anyhow::bail!("Repository '{name}' not found");
             }
         }
         AdapterRepoCommand::Disable { name } => {
@@ -1827,16 +1973,16 @@ fn cmd_adapter_repo(
                         error: None,
                     });
                 }
-                println!("Disabled repository: {}", name);
+                println!("Disabled repository: {name}");
             } else {
                 if json {
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Repository '{}' not found", name)),
+                        error: Some(format!("Repository '{name}' not found")),
                     });
                 }
-                anyhow::bail!("Repository '{}' not found", name);
+                anyhow::bail!("Repository '{name}' not found");
             }
         }
     }
@@ -1923,7 +2069,8 @@ fn read_input<T: DeserializeOwned>(input: Option<PathBuf>) -> Result<Option<T>> 
 }
 
 fn emit_json<T: serde::Serialize>(value: T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    let pretty = serde_json::to_string_pretty(&value)?;
+    println!("{pretty}");
     Ok(())
 }
 
@@ -1942,7 +2089,7 @@ mod tests {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn cmd_export(
     db: &Database,
     runner: &AdapterRunner,
@@ -1969,7 +2116,7 @@ async fn cmd_export(
     } else {
         runner
             .find_adapter(format)
-            .ok_or_else(|| anyhow::anyhow!("No adapter found for format '{}'", format))?
+            .ok_or_else(|| anyhow::anyhow!("No adapter found for format '{format}'"))?
     };
 
     // Load conversations from database
@@ -2068,7 +2215,7 @@ async fn cmd_export(
                 output_path.display()
             );
         } else {
-            println!("{}", content);
+            println!("{content}");
         }
     } else if let Some(files) = &result.files {
         let output_dir = output.unwrap_or_else(|| PathBuf::from("."));
@@ -2090,16 +2237,55 @@ async fn cmd_export(
     Ok(())
 }
 
+async fn cmd_index(config: &Config, db: &Database, rebuild: bool, json: bool) -> Result<()> {
+    let index_path = config.search_index_path();
+    if rebuild {
+        hstry_core::search_tantivy::reset_index(db, &index_path).await?;
+    }
+
+    let mut total = 0usize;
+    let batch_size = config.search.index_batch_size;
+    loop {
+        let indexed =
+            hstry_core::search_tantivy::index_new_messages(db, &index_path, batch_size).await?;
+        total += indexed;
+        if indexed < batch_size {
+            break;
+        }
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(serde_json::json!({
+                "indexed": total,
+                "rebuild": rebuild,
+                "index_path": index_path,
+            })),
+            error: None,
+        });
+    }
+
+    if rebuild {
+        println!("Rebuilt search index ({total} messages).");
+    } else {
+        println!("Indexed {total} messages.");
+    }
+
+    Ok(())
+}
+
 async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     let sources = db.list_sources().await?;
     let conv_count = db.count_conversations().await?;
     let msg_count = db.count_messages().await?;
+    let sources_count = i64::try_from(sources.len()).unwrap_or(i64::MAX);
 
     if json {
         return emit_json(JsonResponse {
             ok: true,
             result: Some(StatsSummary {
-                sources: sources.len() as i64,
+                sources: sources_count,
                 conversations: conv_count,
                 messages: msg_count,
             }),
@@ -2109,9 +2295,10 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
 
     println!("Database Statistics");
     println!("-------------------");
-    println!("Sources:       {}", sources.len());
-    println!("Conversations: {}", conv_count);
-    println!("Messages:      {}", msg_count);
+    let sources_len = sources.len();
+    println!("Sources:       {sources_len}");
+    println!("Conversations: {conv_count}");
+    println!("Messages:      {msg_count}");
 
     Ok(())
 }
@@ -2120,7 +2307,7 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
 // Config Commands
 // =============================================================================
 
-async fn cmd_config(
+fn cmd_config(
     config: &Config,
     config_path: &Path,
     command: Option<ConfigCommand>,
@@ -2138,8 +2325,8 @@ async fn cmd_config(
 
             // Pretty print the config as TOML
             let toml_str = toml::to_string_pretty(config)
-                .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
-            println!("{}", toml_str);
+                .map_err(|e| anyhow::anyhow!("Failed to serialize config: {e}"))?;
+            println!("{toml_str}");
         }
 
         ConfigCommand::Path => {
@@ -2154,7 +2341,8 @@ async fn cmd_config(
                 });
             }
 
-            println!("{}", config_path.display());
+            let config_path_display = config_path.display();
+            println!("{config_path_display}");
         }
 
         ConfigCommand::Edit => {
@@ -2249,7 +2437,7 @@ async fn cmd_remote(
                     let cache_path = remote::cached_db_path(&r.name);
                     let (cached, cache_size, cache_modified) = if cache_path.exists() {
                         let meta = std::fs::metadata(&cache_path).ok();
-                        let size = meta.as_ref().map(|m| m.len());
+                        let size = meta.as_ref().map(std::fs::Metadata::len);
                         let modified = meta.and_then(|m| m.modified().ok()).map(|t| {
                             chrono::DateTime::<chrono::Utc>::from(t)
                                 .format("%Y-%m-%d %H:%M:%S")
@@ -2294,13 +2482,17 @@ async fn cmd_remote(
                     let status = if r.enabled { "enabled" } else { "disabled" };
                     let cache_info = if r.cached {
                         format!(
-                            " (cached: {})",
-                            r.cache_size_bytes.map(format_bytes).unwrap_or_default()
+                            " (cached: {size})",
+                            size = r.cache_size_bytes.map(format_bytes).unwrap_or_default()
                         )
                     } else {
                         " (not cached)".to_string()
                     };
-                    println!("  {} ({}) - {}{}", r.name, status, r.host, cache_info);
+                    println!(
+                        "  {name} ({status}) - {host}{cache_info}",
+                        name = r.name,
+                        host = r.host
+                    );
                 }
             }
         }
@@ -2318,10 +2510,10 @@ async fn cmd_remote(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Remote '{}' already exists", name)),
+                        error: Some(format!("Remote '{name}' already exists")),
                     });
                 }
-                anyhow::bail!("Remote '{}' already exists", name);
+                anyhow::bail!("Remote '{name}' already exists");
             }
 
             let remote = RemoteConfig {
@@ -2344,7 +2536,7 @@ async fn cmd_remote(
                     error: None,
                 });
             }
-            println!("Added remote: {} ({})", name, host);
+            println!("Added remote: {name} ({host})");
         }
 
         RemoteCommand::Remove { name } => {
@@ -2357,10 +2549,10 @@ async fn cmd_remote(
                     return emit_json(JsonResponse::<()> {
                         ok: false,
                         result: None,
-                        error: Some(format!("Remote '{}' not found", name)),
+                        error: Some(format!("Remote '{name}' not found")),
                     });
                 }
-                anyhow::bail!("Remote '{}' not found", name);
+                anyhow::bail!("Remote '{name}' not found");
             }
 
             config.save_to_path(config_path)?;
@@ -2378,7 +2570,7 @@ async fn cmd_remote(
                     error: None,
                 });
             }
-            println!("Removed remote: {}", name);
+            println!("Removed remote: {name}");
         }
 
         RemoteCommand::Test { name } => {
@@ -2386,7 +2578,7 @@ async fn cmd_remote(
                 .remotes
                 .iter()
                 .find(|r| r.name == name)
-                .ok_or_else(|| anyhow::anyhow!("Remote '{}' not found", name))?;
+                .ok_or_else(|| anyhow::anyhow!("Remote '{name}' not found"))?;
 
             let transport = remote::SshTransport::from_config(remote_config);
 
@@ -2402,7 +2594,7 @@ async fn cmd_remote(
                             error: None,
                         });
                     }
-                    println!("✓ Connection to '{}' successful", name);
+                    println!("✓ Connection to '{name}' successful");
                 }
                 Err(e) => {
                     if json {
@@ -2412,7 +2604,7 @@ async fn cmd_remote(
                             error: Some(e.to_string()),
                         });
                     }
-                    anyhow::bail!("Connection failed: {}", e);
+                    anyhow::bail!("Connection failed: {e}");
                 }
             }
         }
@@ -2443,24 +2635,23 @@ async fn cmd_remote(
 
             for remote_config in remotes_to_fetch {
                 if !json {
-                    println!("Fetching from {}...", remote_config.name);
+                    let name = &remote_config.name;
+                    println!("Fetching from {name}...");
                 }
 
                 match remote::fetch_remote(remote_config) {
                     Ok(result) => {
                         if !json {
-                            println!(
-                                "  Fetched {} to {}",
-                                format_bytes(result.bytes_transferred),
-                                result.local_cache_path.display()
-                            );
+                            let size = format_bytes(result.bytes_transferred);
+                            let path = result.local_cache_path.display();
+                            println!("  Fetched {size} to {path}");
                         }
                         total_bytes += result.bytes_transferred;
                         results.push(result);
                     }
                     Err(e) => {
                         if !json {
-                            eprintln!("  Error: {}", e);
+                            eprintln!("  Error: {e}");
                         }
                     }
                 }
@@ -2508,7 +2699,8 @@ async fn cmd_remote(
 
             for remote_config in remotes_to_sync {
                 if !json {
-                    println!("Syncing with {} ({})...", remote_config.name, direction);
+                    let name = &remote_config.name;
+                    println!("Syncing with {name} ({direction})...");
                 }
 
                 let result = match direction {
@@ -2544,11 +2736,11 @@ async fn cmd_remote(
                 match result {
                     Ok(sync_result) => {
                         if !json {
+                            let added = sync_result.conversations_added;
+                            let updated = sync_result.conversations_updated;
+                            let messages = sync_result.messages_added;
                             println!(
-                                "  Added {} conversations, updated {}, {} messages",
-                                sync_result.conversations_added,
-                                sync_result.conversations_updated,
-                                sync_result.messages_added
+                                "  Added {added} conversations, updated {updated}, {messages} messages"
                             );
                         }
                         total_convs_added += sync_result.conversations_added;
@@ -2558,7 +2750,7 @@ async fn cmd_remote(
                     }
                     Err(e) => {
                         if !json {
-                            eprintln!("  Error: {}", e);
+                            eprintln!("  Error: {e}");
                         }
                     }
                 }
@@ -2586,7 +2778,7 @@ async fn cmd_remote(
                 let cache_path = remote::cached_db_path(&remote.name);
                 let (cached, cache_size, cache_modified) = if cache_path.exists() {
                     let meta = std::fs::metadata(&cache_path).ok();
-                    let size = meta.as_ref().map(|m| m.len());
+                    let size = meta.as_ref().map(std::fs::Metadata::len);
                     let modified = meta.and_then(|m| m.modified().ok()).map(|t| {
                         chrono::DateTime::<chrono::Utc>::from(t)
                             .format("%Y-%m-%d %H:%M:%S")
@@ -2624,26 +2816,27 @@ async fn cmd_remote(
                 });
             }
 
-            println!("Remote cache directory: {}", cache_dir.display());
+            let cache_dir_display = cache_dir.display();
+            println!("Remote cache directory: {cache_dir_display}");
             if statuses.is_empty() {
                 println!("No remotes configured.");
             } else {
                 println!();
                 for s in &statuses {
                     let status = if s.enabled { "enabled" } else { "disabled" };
-                    println!("{} ({}):", s.name, status);
-                    println!("  Host: {}", s.host);
+                    let name = &s.name;
+                    let host = &s.host;
+                    println!("{name} ({status}):");
+                    println!("  Host: {host}");
                     if let Some(ref path) = s.database_path {
-                        println!("  Remote DB: {}", path);
+                        println!("  Remote DB: {path}");
                     }
                     if s.cached {
-                        println!(
-                            "  Cached: {} ({})",
-                            s.cache_path.as_deref().unwrap_or("-"),
-                            s.cache_size_bytes.map(format_bytes).unwrap_or_default()
-                        );
+                        let cache_path = s.cache_path.as_deref().unwrap_or("-");
+                        let cache_size = s.cache_size_bytes.map(format_bytes).unwrap_or_default();
+                        println!("  Cached: {cache_path} ({cache_size})");
                         if let Some(ref modified) = s.cache_modified {
-                            println!("  Last fetched: {}", modified);
+                            println!("  Last fetched: {modified}");
                         }
                     } else {
                         println!("  Cached: no");
@@ -2661,15 +2854,23 @@ fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
+    #[expect(clippy::cast_precision_loss)]
+    let bytes_f = bytes as f64;
+    #[expect(clippy::cast_precision_loss)]
+    let kb_f = KB as f64;
+    #[expect(clippy::cast_precision_loss)]
+    let mb_f = MB as f64;
+    #[expect(clippy::cast_precision_loss)]
+    let gb_f = GB as f64;
 
     if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
+        format!("{:.2} GB", bytes_f / gb_f)
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
+        format!("{:.2} MB", bytes_f / mb_f)
     } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
+        format!("{:.2} KB", bytes_f / kb_f)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -2736,7 +2937,7 @@ async fn cmd_mmry(db: &Database, command: MmryCommand, json: bool) -> Result<()>
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn cmd_mmry_extract(
     db: &Database,
     store: &str,
@@ -2803,8 +3004,8 @@ async fn cmd_mmry_extract(
                 .unwrap_or_else(|| "hstry".to_string());
             let mut tags = vec![
                 "hstry".to_string(),
-                format!("role:{}", msg.role),
-                format!("source:{}", conv.source_id),
+                format!("role:{role}", role = msg.role),
+                format!("source:{source}", source = conv.source_id),
             ];
             if let Some(adapter) = source.map(|s| s.adapter.as_str()) {
                 tags.push(format!("adapter:{adapter}"));
@@ -2862,7 +3063,8 @@ async fn cmd_mmry_extract(
                 error: None,
             });
         }
-        println!("{}", serde_json::to_string_pretty(&memories)?);
+        let pretty = serde_json::to_string_pretty(&memories)?;
+        println!("{pretty}");
         return Ok(());
     }
 
@@ -2917,7 +3119,7 @@ fn build_mmry_metadata(
     );
     inner.insert(
         "message_index".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(msg.idx as i64)),
+        serde_json::Value::Number(serde_json::Number::from(i64::from(msg.idx))),
     );
     inner.insert(
         "role".to_string(),
@@ -3044,7 +3246,7 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s
     } else {
-        format!("{}...", &s[..max_len])
+        format!("{snippet}...", snippet = &s[..max_len])
     }
 }
 
@@ -3052,6 +3254,10 @@ fn truncate(s: &str, max_len: usize) -> String {
 /// Falls back to brackets if not a TTY or NO_COLOR is set.
 fn colorize_highlights(s: &str) -> String {
     use std::io::IsTerminal;
+
+    // ANSI codes: bold yellow for highlights
+    const HIGHLIGHT_START: &str = "\x1b[1;33m"; // Bold yellow
+    const HIGHLIGHT_END: &str = "\x1b[0m"; // Reset
 
     // Check if we should use colors
     let use_color = std::io::stdout().is_terminal()
@@ -3061,10 +3267,6 @@ fn colorize_highlights(s: &str) -> String {
     if !use_color {
         return s.to_string();
     }
-
-    // ANSI codes: bold yellow for highlights
-    const HIGHLIGHT_START: &str = "\x1b[1;33m"; // Bold yellow
-    const HIGHLIGHT_END: &str = "\x1b[0m"; // Reset
 
     s.replace('[', HIGHLIGHT_START).replace(']', HIGHLIGHT_END)
 }

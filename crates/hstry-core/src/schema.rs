@@ -113,6 +113,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_code_fts USING fts5(
     prefix = '2 3 4'
 );
 
+-- Search state for external indexes (e.g., Tantivy)
+CREATE TABLE IF NOT EXISTS search_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Triggers to keep FTS in sync
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);

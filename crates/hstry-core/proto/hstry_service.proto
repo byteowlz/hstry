@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package hstry.service;
+
+service SearchService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+enum SearchMode {
+  SEARCH_MODE_AUTO = 0;
+  SEARCH_MODE_NATURAL = 1;
+  SEARCH_MODE_CODE = 2;
+}
+
+message SearchRequest {
+  string query = 1;
+  int64 limit = 2;
+  int64 offset = 3;
+  string source = 4;
+  string workspace = 5;
+  SearchMode mode = 6;
+}
+
+message SearchHit {
+  string message_id = 1;
+  string conversation_id = 2;
+  int32 message_idx = 3;
+  string role = 4;
+  string content = 5;
+  string snippet = 6;
+  int64 created_at_ms = 7;
+  int64 conv_created_at_ms = 8;
+  int64 conv_updated_at_ms = 9;
+  float score = 10;
+  string source_id = 11;
+  string external_id = 12;
+  string title = 13;
+  string workspace = 14;
+  string source_adapter = 15;
+  string source_path = 16;
+  string host = 17;
+}
+
+message SearchResponse {
+  repeated SearchHit hits = 1;
+}

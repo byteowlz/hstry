@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/byteowlz/hstry"
@@ -30,6 +30,10 @@ dirs = "5.0"
 shellexpand = "3.1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
+tantivy = "0.22"
+tonic = "0.12"
+prost = "0.13"
+tonic-build = "0.12"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
@@ -49,6 +53,7 @@ pulldown-cmark = "0.12"
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }
+tokio-stream = "0.1"
 
 # API/HTTP
 axum = "0.8"
@@ -64,3 +69,48 @@ rmcp = { version = "0.1", features = ["server", "transport-io"] }
 # Internal crates
 hstry-core = { path = "crates/hstry-core" }
 hstry-runtime = { path = "crates/hstry-runtime" }
+
+# ============================================
+# STANDARD PRESET - rust-magic-linter
+# ============================================
+# The viral tweet config enhanced with async safety
+# Recommended for most projects
+#
+# Based on @notnotstorm's tweet + OpenAgentsInc additions
+
+[workspace.lints.clippy]
+# Enable pedantic group for comprehensive checks
+pedantic = { level = "warn", priority = -1 }
+
+# === THE GUARDRAILS (Critical for AI Agents) ===
+# Panic safety - agents must handle errors, not crash
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+
+# The "no cheating" rule
+allow_attributes = "deny"
+
+# Code hygiene - no debug leftovers
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# === ASYNC SAFETY ===
+await_holding_lock = "deny"       # Prevents deadlocks
+
+# === PROCESS SAFETY ===
+exit = "deny"                     # Libraries shouldn't exit
+
+# === PEDANTIC RELAXATIONS ===
+# These are too noisy for most projects
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+too_many_lines = "allow"

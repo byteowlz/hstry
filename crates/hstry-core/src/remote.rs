@@ -2,20 +2,44 @@
 //!
 //! Provides fetching and bidirectional merging of hstry databases across machines.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::config::RemoteConfig;
-use crate::db::Database;
+use crate::db::{Database, SearchOptions};
 use crate::error::{Error, Result};
-use crate::models::{Conversation, Message};
+use crate::models::{Conversation, ConversationWithMessages, Message, SearchHit};
 
 /// Default remote database path (XDG standard).
 pub const DEFAULT_REMOTE_DB_PATH: &str = "~/.local/share/hstry/hstry.db";
+
+#[derive(Debug, Deserialize)]
+struct JsonResponse<T> {
+    ok: bool,
+    result: Option<T>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RemoteSearchInput {
+    query: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    source: Option<String>,
+    workspace: Option<String>,
+    mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RemoteShowInput {
+    id: String,
+}
 
 /// Result of a fetch operation.
 #[derive(Debug, Clone, Serialize)]
@@ -92,8 +116,7 @@ impl SshTransport {
 
         if let Some(ref identity) = self.identity_file {
             let expanded = shellexpand::full(identity)
-                .map(|v| v.into_owned())
-                .unwrap_or_else(|_| identity.clone());
+                .map_or_else(|_| identity.clone(), std::borrow::Cow::into_owned);
             cmd.arg("-i").arg(expanded);
         }
 
@@ -117,8 +140,7 @@ impl SshTransport {
 
         if let Some(ref identity) = self.identity_file {
             let expanded = shellexpand::full(identity)
-                .map(|v| v.into_owned())
-                .unwrap_or_else(|_| identity.clone());
+                .map_or_else(|_| identity.clone(), std::borrow::Cow::into_owned);
             cmd.arg("-i").arg(expanded);
         }
 
@@ -219,14 +241,14 @@ impl SshTransport {
 
     /// Check if a file exists on the remote.
     pub fn file_exists(&self, remote_path: &str) -> Result<bool> {
-        let cmd = format!("test -f {} && echo yes || echo no", remote_path);
+        let cmd = format!("test -f {remote_path} && echo yes || echo no");
         let output = self.exec(&cmd)?;
         Ok(output.trim() == "yes")
     }
 
     /// Get the expanded path on the remote (resolves ~ and env vars).
     pub fn expand_remote_path(&self, path: &str) -> Result<String> {
-        let cmd = format!("echo {}", path);
+        let cmd = format!("echo {path}");
         let output = self.exec(&cmd)?;
         Ok(output.trim().to_string())
     }
@@ -242,7 +264,7 @@ pub fn remote_cache_dir() -> PathBuf {
 
 /// Get the cached database path for a remote.
 pub fn cached_db_path(remote_name: &str) -> PathBuf {
-    remote_cache_dir().join(format!("{}.db", remote_name))
+    remote_cache_dir().join(format!("{remote_name}.db"))
 }
 
 /// Fetch a remote database to local cache.
@@ -264,8 +286,7 @@ pub fn fetch_remote(config: &RemoteConfig) -> Result<FetchResult> {
     // Check if remote database exists
     if !transport.file_exists(&expanded_path)? {
         return Err(Error::Remote(format!(
-            "Remote database not found at: {}",
-            expanded_path
+            "Remote database not found at: {expanded_path}",
         )));
     }
 
@@ -329,32 +350,29 @@ pub async fn merge_databases(
             None
         };
 
-        let (should_insert, conv_id) = match existing_id {
-            Some(existing_uuid) => {
-                // Conversation exists, check if we should update
-                if let Some(existing_conv) = target.get_conversation(existing_uuid).await? {
-                    // Compare updated_at timestamps (newer wins)
-                    let should_update = match (conv.updated_at, existing_conv.updated_at) {
-                        (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
-                        (Some(_), None) => true,
-                        (None, Some(_)) => false,
-                        (None, None) => conv.created_at > existing_conv.created_at,
-                    };
-                    if should_update {
-                        conversations_updated += 1;
-                        (true, existing_uuid)
-                    } else {
-                        (false, existing_uuid)
-                    }
-                } else {
+        let (should_insert, conv_id) = if let Some(existing_uuid) = existing_id {
+            // Conversation exists, check if we should update
+            if let Some(existing_conv) = target.get_conversation(existing_uuid).await? {
+                // Compare updated_at timestamps (newer wins)
+                let should_update = match (conv.updated_at, existing_conv.updated_at) {
+                    (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (None, None) => conv.created_at > existing_conv.created_at,
+                };
+                if should_update {
+                    conversations_updated += 1;
                     (true, existing_uuid)
+                } else {
+                    (false, existing_uuid)
                 }
+            } else {
+                (true, existing_uuid)
             }
-            None => {
-                // New conversation
-                conversations_added += 1;
-                (true, Uuid::new_v4())
-            }
+        } else {
+            // New conversation
+            conversations_added += 1;
+            (true, Uuid::new_v4())
         };
 
         if should_insert {
@@ -468,6 +486,176 @@ pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Resu
         sources_added: sync_result.sources_added,
         direction: SyncDirection::Push,
     })
+}
+
+pub async fn search_remote(
+    config: &RemoteConfig,
+    query: &str,
+    opts: &SearchOptions,
+) -> Result<Vec<SearchHit>> {
+    let transport = SshTransport::from_config(config);
+    let input = RemoteSearchInput {
+        query: query.to_string(),
+        limit: opts.limit,
+        offset: opts.offset,
+        source: opts.source_id.clone(),
+        workspace: opts.workspace.clone(),
+        mode: Some(
+            match opts.mode {
+                crate::db::SearchMode::Auto => "auto",
+                crate::db::SearchMode::NaturalLanguage => "natural",
+                crate::db::SearchMode::Code => "code",
+            }
+            .to_string(),
+        ),
+    };
+    let payload = serde_json::to_vec(&input)?;
+    let host_name = config.name.clone();
+    let host = config.host.clone();
+
+    let hits = tokio::task::spawn_blocking(move || {
+        let mut cmd = transport.ssh_command();
+        cmd.arg(host)
+            .arg("hstry")
+            .arg("search")
+            .arg("--json")
+            .arg("--input")
+            .arg("-");
+
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Remote(format!("Failed to start ssh: {e}")))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(&payload)
+                .map_err(|e| Error::Remote(format!("Failed writing stdin: {e}")))?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .map_err(|e| Error::Remote(format!("SSH failed: {e}")))?;
+
+        if !output.status.success() {
+            return Err(Error::Remote(format!(
+                "Remote search failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let response: JsonResponse<Vec<SearchHit>> = serde_json::from_slice(&output.stdout)
+            .map_err(|e| Error::Remote(format!("Failed parsing remote response: {e}")))?;
+
+        if !response.ok {
+            return Err(Error::Remote(
+                response
+                    .error
+                    .unwrap_or_else(|| "Remote search error".to_string()),
+            ));
+        }
+
+        Ok(response.result.unwrap_or_default())
+    })
+    .await
+    .map_err(|e| Error::Remote(format!("Remote search join error: {e}")))??;
+
+    Ok(hits
+        .into_iter()
+        .map(|mut hit| {
+            hit.host = Some(host_name.clone());
+            hit
+        })
+        .collect())
+}
+
+pub async fn search_remotes(
+    remotes: &[RemoteConfig],
+    query: &str,
+    opts: &SearchOptions,
+) -> Result<Vec<SearchHit>> {
+    let mut set = JoinSet::new();
+    for remote in remotes.iter().filter(|r| r.enabled) {
+        let remote = remote.clone();
+        let query = query.to_string();
+        let opts = opts.clone();
+        set.spawn(async move { search_remote(&remote, &query, &opts).await });
+    }
+
+    let mut hits = Vec::new();
+    while let Some(result) = set.join_next().await {
+        match result {
+            Ok(Ok(remote_hits)) => hits.extend(remote_hits),
+            Ok(Err(err)) => return Err(err),
+            Err(err) => return Err(Error::Remote(format!("Remote search task failed: {err}"))),
+        }
+    }
+
+    Ok(hits)
+}
+
+pub async fn show_remote(
+    config: &RemoteConfig,
+    conversation_id: &str,
+) -> Result<ConversationWithMessages> {
+    let transport = SshTransport::from_config(config);
+    let input = RemoteShowInput {
+        id: conversation_id.to_string(),
+    };
+    let payload = serde_json::to_vec(&input)?;
+    let host = config.host.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = transport.ssh_command();
+        cmd.arg(host)
+            .arg("hstry")
+            .arg("show")
+            .arg("--json")
+            .arg("--input")
+            .arg("-");
+
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Remote(format!("Failed to start ssh: {e}")))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(&payload)
+                .map_err(|e| Error::Remote(format!("Failed writing stdin: {e}")))?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .map_err(|e| Error::Remote(format!("SSH failed: {e}")))?;
+
+        if !output.status.success() {
+            return Err(Error::Remote(format!(
+                "Remote show failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+
+        let response: JsonResponse<ConversationWithMessages> =
+            serde_json::from_slice(&output.stdout)
+                .map_err(|e| Error::Remote(format!("Failed parsing remote response: {e}")))?;
+
+        if !response.ok {
+            return Err(Error::Remote(
+                response
+                    .error
+                    .unwrap_or_else(|| "Remote show error".to_string()),
+            ));
+        }
+
+        response
+            .result
+            .ok_or_else(|| Error::Remote("Remote show returned no result".to_string()))
+    })
+    .await
+    .map_err(|e| Error::Remote(format!("Remote show join error: {e}")))?
 }
 
 #[cfg(test)]

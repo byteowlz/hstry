@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -23,7 +25,11 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use hstry_core::{Config, Database, db::ListConversationsOptions, models::*};
+use hstry_core::{
+    Config, Database,
+    db::ListConversationsOptions,
+    models::{Conversation, Message, MessageRole, SearchHit, Source},
+};
 
 // =============================================================================
 // Markdown Rendering
@@ -68,9 +74,6 @@ fn render_markdown(
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(style);
-                }
-                Tag::Paragraph => {
-                    // Just continue, will add newline at end
                 }
                 Tag::CodeBlock(kind) => {
                     flush_line(&mut lines, &mut current_spans);
@@ -171,7 +174,7 @@ fn render_markdown(
                     if in_heading && current_spans.is_empty() {
                         let prefix = "#".repeat(heading_level);
                         current_spans.push(Span::styled(
-                            format!("{} ", prefix),
+                            format!("{prefix} "),
                             Style::default().fg(Color::DarkGray),
                         ));
                     }
@@ -181,7 +184,7 @@ fn render_markdown(
             MdEvent::Code(code) => {
                 // Inline code
                 current_spans.push(Span::styled(
-                    format!("`{}`", code),
+                    format!("`{code}`"),
                     Style::default().fg(Color::Yellow),
                 ));
             }
@@ -251,7 +254,7 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[S
         }
     } else {
         // Show full code block
-        lines.push(Line::from(format!("```{}", display_lang)).fg(Color::DarkGray));
+        lines.push(Line::from(format!("```{display_lang}")).fg(Color::DarkGray));
         for line in code_lines {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
@@ -399,17 +402,17 @@ fn try_parse_tool_json(content: &str) -> Option<Vec<Line<'static>>> {
 
     // Add error header if non-zero exit
     if let Some(meta) = parsed.get("metadata")
-        && let Some(exit_code) = meta.get("exit_code").and_then(|v| v.as_i64())
+        && let Some(exit_code) = meta.get("exit_code").and_then(serde_json::Value::as_i64)
         && exit_code != 0
     {
         let time_str = meta
             .get("duration_seconds")
-            .and_then(|v| v.as_f64())
-            .map(|d| format!(" ({:.1}s)", d))
+            .and_then(serde_json::Value::as_f64)
+            .map(|d| format!(" ({d:.1}s)"))
             .unwrap_or_default();
         lines.insert(
             0,
-            Line::from(format!("Exit: {}{}", exit_code, time_str)).fg(Color::Red),
+            Line::from(format!("Exit: {exit_code}{time_str}")).fg(Color::Red),
         );
     }
 
@@ -444,8 +447,8 @@ fn format_exit_code_output(content: &str) -> Vec<Line<'static>> {
 
     // Show header for non-zero exit
     if exit_code != 0 {
-        let time_str = wall_time.map(|t| format!(" ({})", t)).unwrap_or_default();
-        lines.push(Line::from(format!("Exit: {}{}", exit_code, time_str)).fg(Color::Red));
+        let time_str = wall_time.map(|t| format!(" ({t})")).unwrap_or_default();
+        lines.push(Line::from(format!("Exit: {exit_code}{time_str}")).fg(Color::Red));
     }
 
     // Process output
@@ -487,15 +490,7 @@ fn looks_like_file_listing_lines(lines: &[&str]) -> bool {
         .iter()
         .filter(|l| {
             l.contains('/')
-                && (l.ends_with(".rs")
-                    || l.ends_with(".ts")
-                    || l.ends_with(".py")
-                    || l.ends_with(".go")
-                    || l.ends_with(".js")
-                    || l.ends_with(".tsx")
-                    || l.ends_with(".json")
-                    || l.ends_with(".toml")
-                    || l.ends_with(".md")
+                && (path_has_known_extension(l)
                     || l.contains(':') && l.split(':').next().is_some_and(|p| p.contains('/')))
         })
         .count();
@@ -503,17 +498,34 @@ fn looks_like_file_listing_lines(lines: &[&str]) -> bool {
     path_like > lines.len() / 2
 }
 
+fn path_has_known_extension(line: &str) -> bool {
+    let path_part = line.split(':').next().unwrap_or(line);
+    let Some(ext) = std::path::Path::new(path_part)
+        .extension()
+        .and_then(|value| value.to_str())
+    else {
+        return false;
+    };
+
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "rs" | "ts" | "py" | "go" | "js" | "tsx" | "json" | "toml" | "md"
+    )
+}
+
 fn format_file_listing(content: &str) -> Vec<Line<'static>> {
     let file_lines: Vec<&str> = content.lines().collect();
     let total = file_lines.len();
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(Line::from(format!("Files ({}):", total)).fg(Color::Cyan));
+    lines.push(Line::from(format!("Files ({total}):")).fg(Color::Cyan));
     for f in file_lines.iter().take(8) {
-        lines.push(Line::from(format!("  {}", shorten_path(f))).fg(Color::DarkGray));
+        let short = shorten_path(f);
+        lines.push(Line::from(format!("  {short}")).fg(Color::DarkGray));
     }
     if total > 8 {
-        lines.push(Line::from(format!("  ... and {} more", total - 8)).fg(Color::DarkGray));
+        let remaining = total - 8;
+        lines.push(Line::from(format!("  ... and {remaining} more")).fg(Color::DarkGray));
     }
 
     lines
@@ -667,7 +679,7 @@ enum SortOrder {
 }
 
 impl SortOrder {
-    fn label(&self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             SortOrder::DateDesc => "Date (newest first)",
             SortOrder::DateAsc => "Date (oldest first)",
@@ -685,6 +697,35 @@ impl SortOrder {
             SortOrder::TitleDesc,
             SortOrder::SourceAsc,
         ]
+    }
+}
+
+// =============================================================================
+// Search Scope
+// =============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchScope {
+    Local,
+    Remote,
+    All,
+}
+
+impl SearchScope {
+    fn label(self) -> &'static str {
+        match self {
+            SearchScope::Local => "local",
+            SearchScope::Remote => "remote",
+            SearchScope::All => "all",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            SearchScope::Local => SearchScope::All,
+            SearchScope::All => SearchScope::Remote,
+            SearchScope::Remote => SearchScope::Local,
+        }
     }
 }
 
@@ -793,7 +834,6 @@ impl NavItem {
 // =============================================================================
 
 struct App {
-    #[expect(dead_code)] // Reserved for future use (e.g., config-based theming)
     config: Config,
     db: Database,
     mode: AppMode,
@@ -811,6 +851,7 @@ struct App {
     search_results: Vec<SearchHit>,
     show_search_results: bool,
     last_search_query: Option<String>,
+    search_scope: SearchScope,
 
     // Navigation items for left pane
     nav_items: Vec<NavItem>,
@@ -870,6 +911,7 @@ impl App {
             search_results: Vec::new(),
             show_search_results: false,
             last_search_query: None,
+            search_scope: SearchScope::Local,
             nav_items,
             nav_selection: Selection::default(),
             conv_selection: Selection::default(),
@@ -965,6 +1007,32 @@ impl App {
     }
 
     fn load_messages(&mut self, rt: &tokio::runtime::Runtime) {
+        if self.show_search_results
+            && let Some(hit) = self.search_results.get(self.conv_selection.index)
+            && let Some(host) = &hit.host
+        {
+            if let Some(remote) = self.config.remotes.iter().find(|r| r.name == *host) {
+                match rt.block_on(hstry_core::remote::show_remote(
+                    remote,
+                    &hit.conversation_id.to_string(),
+                )) {
+                    Ok(details) => {
+                        self.messages = details.messages.into_iter().map(|m| m.message).collect();
+                        self.detail_scroll = 0;
+                        return;
+                    }
+                    Err(e) => {
+                        self.status_message = format!("Remote load error: {e}");
+                        self.messages.clear();
+                        return;
+                    }
+                }
+            }
+            self.status_message = format!("Remote '{host}' not found in config");
+            self.messages.clear();
+            return;
+        }
+
         if let Some(conv_id) = self.selected_conversation_id() {
             match rt.block_on(self.db.get_messages(conv_id)) {
                 Ok(msgs) => {
@@ -999,14 +1067,58 @@ impl App {
                 workspace: self.filter.workspace_filter.clone(),
                 ..Default::default()
             };
+            let search_scope = self.search_scope;
+            let config = &self.config;
+            let db = &self.db;
+            let query = query.clone();
+            let query_for_closure = query.clone();
 
-            match rt.block_on(self.db.search(query, opts)) {
+            let search = async move {
+                let query = query_for_closure;
+                let mut results = Vec::new();
+                if search_scope != SearchScope::Remote {
+                    let local = if let Some(hits) =
+                        hstry_core::service::try_service_search(&query, &opts).await?
+                    {
+                        hits
+                    } else {
+                        let index_path = config.search_index_path();
+                        hstry_core::search_tantivy::search_with_fallback(
+                            db,
+                            &index_path,
+                            &query,
+                            &opts,
+                        )
+                        .await?
+                    };
+                    results.extend(local);
+                }
+
+                if search_scope != SearchScope::Local {
+                    let remote_hits =
+                        hstry_core::remote::search_remotes(&config.remotes, &query, &opts).await?;
+                    results.extend(remote_hits);
+                }
+
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                Ok::<_, hstry_core::Error>(results)
+            };
+
+            match rt.block_on(search) {
                 Ok(results) => {
                     self.search_results = results;
                     self.show_search_results = !self.search_results.is_empty();
                     self.last_search_query = Some(query.clone());
                     self.conv_selection.index = 0;
-                    self.status_message = format!("Found {} results", self.search_results.len());
+                    self.status_message = format!(
+                        "Found {} results ({})",
+                        self.search_results.len(),
+                        self.search_scope.label()
+                    );
                 }
                 Err(e) => {
                     self.status_message = format!("Search error: {e}");
@@ -1045,7 +1157,7 @@ impl App {
 // Key Action
 // =============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum KeyAction {
     Quit,
     Up,
@@ -1158,7 +1270,7 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::Char('?') => {
             app.mode = AppMode::Help { scroll: 0 };
         }
-        KeyAction::Char('/') | KeyAction::Char(':') => {
+        KeyAction::Char('/' | ':') => {
             app.mode = AppMode::Search {
                 query: String::new(),
                 cursor: 0,
@@ -1185,10 +1297,8 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::Char('d') => {
             let count = if app.conv_selection.has_selections() {
                 app.conv_selection.selected_indices.len()
-            } else if !app.filtered_conversations.is_empty() {
-                1
             } else {
-                0
+                usize::from(!app.filtered_conversations.is_empty())
             };
             if count > 0 {
                 app.mode = AppMode::Delete { count };
@@ -1389,6 +1499,10 @@ fn handle_search_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                 query.insert(*cursor, c);
                 *cursor += 1;
             }
+            KeyAction::Tab => {
+                app.search_scope = app.search_scope.next();
+                app.status_message = format!("Search scope: {}", app.search_scope.label());
+            }
             KeyAction::Down => {
                 // Navigate search results
                 let max = app.search_results.len();
@@ -1405,7 +1519,7 @@ fn handle_search_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
 fn handle_help_mode(app: &mut App, action: KeyAction) {
     if let AppMode::Help { ref mut scroll } = app.mode {
         match action {
-            KeyAction::Escape | KeyAction::Char('q') | KeyAction::Char('?') => {
+            KeyAction::Escape | KeyAction::Char('q' | '?') => {
                 app.mode = AppMode::Normal;
             }
             KeyAction::Down | KeyAction::Char('j') => {
@@ -1451,12 +1565,14 @@ fn handle_sort_mode(app: &mut App, action: KeyAction) {
             app.status_message = format!("Sorted by: {}", app.sort_order.label());
         }
         KeyAction::Char(c) if c.is_ascii_digit() => {
-            let idx = c.to_digit(10).unwrap() as usize;
-            if idx > 0 && idx <= SortOrder::all().len() {
-                app.sort_order = SortOrder::all()[idx - 1];
-                app.apply_sort();
-                app.mode = AppMode::Normal;
-                app.status_message = format!("Sorted by: {}", app.sort_order.label());
+            if let Some(idx) = c.to_digit(10) {
+                let idx = idx as usize;
+                if idx > 0 && idx <= SortOrder::all().len() {
+                    app.sort_order = SortOrder::all()[idx - 1];
+                    app.apply_sort();
+                    app.mode = AppMode::Normal;
+                    app.status_message = format!("Sorted by: {}", app.sort_order.label());
+                }
             }
         }
         _ => {}
@@ -1508,7 +1624,9 @@ fn ui(f: &mut Frame, app: &App) {
     match &app.mode {
         AppMode::Help { scroll } => draw_help_overlay(f, *scroll),
         AppMode::Sort => draw_sort_overlay(f, app),
-        AppMode::Search { query, cursor } => draw_search_overlay(f, query, *cursor),
+        AppMode::Search { query, cursor } => {
+            draw_search_overlay(f, query, *cursor, app.search_scope);
+        }
         AppMode::Delete { count } => draw_delete_overlay(f, *count),
         AppMode::Normal => {}
     }
@@ -1562,8 +1680,7 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
 
             let prefix = match item {
                 NavItem::All => " * ",
-                NavItem::Source(_, _) => "   ",
-                NavItem::Workspace(_) => "   ",
+                NavItem::Source(_, _) | NavItem::Workspace(_) => "   ",
             };
 
             ListItem::new(format!("{}{}", prefix, item.label())).style(style)
@@ -1620,9 +1737,11 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
 
                 let title = hit.title.as_deref().unwrap_or("Untitled");
                 let snippet = &hit.snippet;
+                let host = hit.host.as_deref().unwrap_or("local");
+                let source = &hit.source_adapter;
                 ListItem::new(vec![
                     Line::from(title).style(style),
-                    Line::from(format!("  {snippet}")).fg(Color::DarkGray),
+                    Line::from(format!("  {source} | {host} | {snippet}")).fg(Color::DarkGray),
                 ])
             })
             .collect();
@@ -1782,10 +1901,11 @@ fn draw_right_pane(f: &mut Frame, app: &App, area: Rect) {
     // Apply scroll offset
     let scroll_offset = app.detail_scroll.min(lines.len().saturating_sub(1));
 
+    let scroll = u16::try_from(scroll_offset).unwrap_or(u16::MAX);
     let paragraph = Paragraph::new(lines)
         .style(base_style)
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset as u16, 0));
+        .scroll((scroll, 0));
     f.render_widget(paragraph, inner);
 }
 
@@ -1864,6 +1984,7 @@ fn draw_help_overlay(f: &mut Frame, scroll: usize) {
         Line::from(""),
         Line::from("  Enter         Execute search"),
         Line::from("  Esc           Exit search input (keep results)"),
+        Line::from("  Tab           Toggle search scope"),
         Line::from("  Up/Down       Navigate results"),
         Line::from("  x             Clear search results"),
         Line::from(""),
@@ -1878,7 +1999,8 @@ fn draw_help_overlay(f: &mut Frame, scroll: usize) {
     let max_scroll = help_text.len().saturating_sub(inner.height as usize);
     let actual_scroll = scroll.min(max_scroll);
 
-    let paragraph = Paragraph::new(help_text).scroll((actual_scroll as u16, 0));
+    let scroll = u16::try_from(actual_scroll).unwrap_or(u16::MAX);
+    let paragraph = Paragraph::new(help_text).scroll((scroll, 0));
     f.render_widget(paragraph, inner);
 }
 
@@ -1921,7 +2043,7 @@ fn draw_sort_overlay(f: &mut Frame, app: &App) {
     f.render_widget(list, inner);
 }
 
-fn draw_search_overlay(f: &mut Frame, query: &str, cursor: usize) {
+fn draw_search_overlay(f: &mut Frame, query: &str, cursor: usize, scope: SearchScope) {
     let area = Rect {
         x: f.area().x,
         y: f.area().height.saturating_sub(3),
@@ -1932,7 +2054,10 @@ fn draw_search_overlay(f: &mut Frame, query: &str, cursor: usize) {
     f.render_widget(Clear, area);
 
     let block = Block::default()
-        .title(" Search (Enter to search, Esc to exit input) ")
+        .title(format!(
+            " Search (scope: {}, Enter to search, Esc to exit input) ",
+            scope.label()
+        ))
         .borders(Borders::ALL)
         .style(Style::default().bg(Color::Black));
 
@@ -1977,7 +2102,7 @@ fn draw_delete_overlay(f: &mut Frame, count: usize) {
 
     let text = vec![
         Line::from(""),
-        Line::from(format!("Delete {} conversation(s)?", count)).bold(),
+        Line::from(format!("Delete {count} conversation(s)?")).bold(),
         Line::from(""),
         Line::from("This action cannot be undone.").fg(Color::DarkGray),
         Line::from(""),

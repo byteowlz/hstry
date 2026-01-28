@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "TypeScript adapter runtime for hstry"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
@@ -12,3 +15,6 @@ serde_json.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 hstry-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

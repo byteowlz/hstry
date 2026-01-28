@@ -53,6 +53,7 @@ hstry show <conversation-id>
 | `scan` | Detect chat history sources on the system |
 | `sync` | Import conversations from all configured sources |
 | `search <query>` | Full-text search across all messages |
+| `index` | Build or refresh the search index |
 | `list` | List conversations with optional filters |
 | `show <id>` | Display a conversation with all messages |
 | `source add/list/remove` | Manage import sources |
@@ -86,9 +87,26 @@ enabled = true
 [service]
 enabled = false
 poll_interval_secs = 30
+search_api = true
+# search_port = 3000
+
+[search]
+# index_path = "~/.local/share/hstry/search"
+index_batch_size = 500
 ```
 
 See `examples/config.toml` for all options.
+
+## Service + API
+
+`hstry service` runs a local daemon that keeps the search index warm and exposes a
+local-only gRPC search endpoint. The CLI prefers the service when it is running.
+
+The optional `hstry-api` binary serves a local HTTP API (default `http://127.0.0.1:3000`)
+for external integrations (e.g., Octo).
+
+Override service usage with `HSTRY_NO_SERVICE=1`. Override the API URL with
+`HSTRY_API_URL` or disable API usage with `HSTRY_NO_API=1`.
 
 ## Supported Sources
 

@@ -3,6 +3,10 @@ name = "hstry-tui"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
+
 [dependencies]
 hstry-core.workspace = true
 anyhow.workspace = true

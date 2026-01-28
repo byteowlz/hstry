@@ -2,22 +2,65 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
+use tokio_stream::wrappers::TcpListenerStream;
 use walkdir::WalkDir;
 
 use crate::ServiceCommand;
 use crate::sync;
-use hstry_core::{Config, Database, models::Source};
+use hstry_core::models::Source;
+use hstry_core::search_tantivy::SearchIndex;
+use hstry_core::service::{
+    SearchService, SearchServiceServer, hit_to_proto, search_request_to_opts,
+};
+use hstry_core::{Config, Database, search_tantivy};
 use hstry_runtime::{AdapterRunner, Runtime};
 
 const DETECT_THRESHOLD: f32 = 0.5;
+
+#[derive(Clone)]
+struct SearchServerState {
+    db: Arc<Database>,
+    index: Arc<SearchIndex>,
+}
+
+#[tonic::async_trait]
+impl SearchService for SearchServerState {
+    async fn search(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::SearchRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::SearchResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        let opts = search_request_to_opts(&request);
+        let query = request.query.clone();
+
+        let hits = match self.index.search(&query, &opts) {
+            Ok(hits) => hits,
+            Err(_) => self
+                .db
+                .search(&query, opts)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("Search failed: {e}")))?,
+        };
+
+        let response = hstry_core::service::proto::SearchResponse {
+            hits: hits.iter().map(hit_to_proto).collect(),
+        };
+        Ok(tonic::Response::new(response))
+    }
+}
 
 pub async fn cmd_service(config_path: &Path, command: ServiceCommand) -> Result<()> {
     match command {
@@ -75,9 +118,8 @@ fn start_service(config_path: &Path) -> Result<()> {
     if let Some(pid) = read_pid_file().unwrap_or(None) {
         if is_process_running(pid) {
             anyhow::bail!("Service already running with pid {pid}");
-        } else {
-            let _ = std::fs::remove_file(pid_file_path());
         }
+        let _ = std::fs::remove_file(pid_file_path());
     }
 
     let exe = std::env::current_exe().context("Failed to locate current executable")?;
@@ -105,25 +147,27 @@ fn start_service(config_path: &Path) -> Result<()> {
     }
 
     let child = cmd.spawn().context("Failed to start service process")?;
-    write_pid_file(child.id())?;
-    println!("Service started (pid {}).", child.id());
+    let pid = child.id();
+    write_pid_file(pid)?;
+    println!("Service started (pid {pid}).");
     Ok(())
 }
 
 fn stop_service() -> Result<()> {
-    let pid = match read_pid_file()? {
-        Some(pid) => pid,
-        None => {
-            println!("Service not running.");
-            return Ok(());
-        }
+    let Some(pid) = read_pid_file()? else {
+        println!("Service not running.");
+        return Ok(());
     };
 
     if is_process_running(pid) {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
+        if let Ok(pid_i32) = i32::try_from(pid) {
+            unsafe {
+                libc::kill(pid_i32, libc::SIGTERM);
+            }
+            println!("Sent SIGTERM to service (pid {pid}).");
+        } else {
+            println!("Service not running.");
         }
-        println!("Sent SIGTERM to service (pid {}).", pid);
     } else {
         println!("Service not running.");
     }
@@ -133,13 +177,15 @@ fn stop_service() -> Result<()> {
 }
 
 fn is_process_running(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    i32::try_from(pid)
+        .map(|pid_i32| unsafe { libc::kill(pid_i32, 0) == 0 })
+        .unwrap_or(false)
 }
 
 pub fn get_service_status(config_path: &Path) -> Result<ServiceStatus> {
     let config = Config::ensure_at(config_path)?;
     let pid = read_pid_file()?;
-    let running = pid.map(is_process_running).unwrap_or(false);
+    let running = pid.is_some_and(is_process_running);
     Ok(ServiceStatus {
         enabled: config.service.enabled,
         running,
@@ -197,6 +243,19 @@ async fn run_service(config_path: &Path) -> Result<()> {
     let mut state = ServiceState::load(config_path).await?;
     state.sync_all().await?;
 
+    let server_handle = if state.config.service.search_api {
+        Some(
+            start_search_server(
+                state.config.service.search_port,
+                state.search_index.clone(),
+                state.db.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
     let mut tick = interval(Duration::from_secs(state.config.service.poll_interval_secs));
 
     loop {
@@ -214,14 +273,53 @@ async fn run_service(config_path: &Path) -> Result<()> {
         }
     }
 
+    if let Some(handle) = server_handle {
+        handle.abort();
+    }
+
     Ok(())
+}
+
+async fn start_search_server(
+    port: Option<u16>,
+    search_index: Arc<SearchIndex>,
+    db: Arc<Database>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port.unwrap_or(0)));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+
+    let port_path = hstry_core::paths::service_port_path();
+    if let Some(parent) = port_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&port_path, local_addr.port().to_string())?;
+
+    println!("Search service listening on {local_addr}");
+
+    let server = SearchServerState {
+        db,
+        index: search_index,
+    };
+    let handle = tokio::spawn(async move {
+        if let Err(err) = tonic::transport::Server::builder()
+            .add_service(SearchServiceServer::new(server))
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+        {
+            eprintln!("Search service error: {err}");
+        }
+    });
+
+    Ok(handle)
 }
 
 struct ServiceState {
     config_path: PathBuf,
     config: Config,
     config_mtime: Option<SystemTime>,
-    db: Database,
+    db: Arc<Database>,
+    search_index: Arc<SearchIndex>,
     runner: AdapterRunner,
     enabled_adapters: HashSet<String>,
     auto_sync_by_id: HashMap<String, bool>,
@@ -234,7 +332,9 @@ impl ServiceState {
         let config = Config::ensure_at(config_path)?;
         let config_mtime = config_path.metadata().and_then(|m| m.modified()).ok();
 
-        let db = Database::open(&config.database).await?;
+        let db = Arc::new(Database::open(&config.database).await?);
+        let index_path = config.search_index_path();
+        let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
@@ -251,6 +351,7 @@ impl ServiceState {
             config,
             config_mtime,
             db,
+            search_index,
             runner,
             enabled_adapters,
             auto_sync_by_id,
@@ -274,12 +375,15 @@ impl ServiceState {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
 
-        let db = Database::open(&config.database).await?;
+        let db = Arc::new(Database::open(&config.database).await?);
+        let index_path = config.search_index_path();
+        let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
 
         self.config = config;
         self.config_mtime = mtime;
         self.db = db;
+        self.search_index = search_index;
         self.runner = runner;
         self.enabled_adapters = enabled_adapters(&self.config, &self.runner);
         self.auto_sync_by_id = auto_sync_map(&self.config);
@@ -301,7 +405,7 @@ impl ServiceState {
         .await;
 
         self.watcher.unwatch(&self.config_path).ok();
-        for path in watch_paths.iter() {
+        for path in &watch_paths {
             let _ = self.watcher.unwatch(path);
         }
 
@@ -338,7 +442,7 @@ impl ServiceState {
             let existing = self.db.get_source(&source.id).await?;
             let entry = match existing {
                 Some(mut entry) => {
-                    entry.adapter = source.adapter.clone();
+                    entry.adapter.clone_from(&source.adapter);
                     entry.path = Some(source.path.clone());
                     entry
                 }
@@ -347,7 +451,7 @@ impl ServiceState {
                     adapter: source.adapter.clone(),
                     path: Some(source.path.clone()),
                     last_sync_at: None,
-                    config: serde_json::Value::Object(Default::default()),
+                    config: serde_json::Value::Object(serde_json::Map::default()),
                 },
             };
             self.db.upsert_source(&entry).await?;
@@ -361,13 +465,11 @@ impl ServiceState {
                 continue;
             }
 
-            let adapter_path = match self.runner.find_adapter(&adapter_name) {
-                Some(path) => path,
-                None => continue,
+            let Some(adapter_path) = self.runner.find_adapter(&adapter_name) else {
+                continue;
             };
-            let info = match self.runner.get_info(&adapter_path).await {
-                Ok(info) => info,
-                Err(_) => continue,
+            let Ok(info) = self.runner.get_info(&adapter_path).await else {
+                continue;
             };
 
             for default_path in &info.default_paths {
@@ -401,9 +503,8 @@ impl ServiceState {
             .into_iter()
             .filter_entry(|entry| !should_skip(entry))
         {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => continue,
+            let Ok(entry) = entry else {
+                continue;
             };
 
             let path = entry.path();
@@ -430,9 +531,8 @@ impl ServiceState {
             if !self.enabled_adapters.contains(&adapter_name) {
                 continue;
             }
-            let adapter_path = match self.runner.find_adapter(&adapter_name) {
-                Some(path) => path,
-                None => continue,
+            let Some(adapter_path) = self.runner.find_adapter(&adapter_name) else {
+                continue;
             };
             let confidence = self
                 .runner
@@ -483,21 +583,19 @@ impl ServiceState {
             return Ok(());
         }
 
-        let source_id = format!(
-            "{}-{}",
-            adapter_name,
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
-        );
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let short = uuid.split('-').next().unwrap_or(uuid.as_str());
+        let source_id = format!("{adapter_name}-{short}");
 
         let source = Source {
             id: source_id.clone(),
             adapter: adapter_name.to_string(),
             path: Some(path_str),
             last_sync_at: None,
-            config: serde_json::Value::Object(Default::default()),
+            config: serde_json::Value::Object(serde_json::Map::default()),
         };
         self.db.upsert_source(&source).await?;
-        println!("Discovered source: {} ({})", source_id, adapter_name);
+        println!("Discovered source: {source_id} ({adapter_name})");
         Ok(())
     }
 
@@ -513,19 +611,41 @@ impl ServiceState {
                 continue;
             }
 
-            println!("Syncing {} ({})...", source.id, source.adapter);
+            println!(
+                "Syncing {id} ({adapter})...",
+                id = source.id,
+                adapter = source.adapter
+            );
             match sync::sync_source(&self.db, &self.runner, &source).await {
                 Ok(result) => {
                     if result.conversations > 0 {
-                        println!("  Synced {} conversations", result.conversations);
+                        println!(
+                            "  Synced {count} conversations",
+                            count = result.conversations
+                        );
                     } else {
                         println!("  No new conversations");
                     }
                 }
                 Err(err) => {
-                    eprintln!("  Error: {}", err);
+                    eprintln!("  Error: {err}");
                 }
             }
+        }
+        let index_path = self.config.search_index_path();
+        let batch_size = self.config.search.index_batch_size;
+        let mut total_indexed = 0usize;
+        loop {
+            let indexed = search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
+                .await
+                .context("Indexing new messages for search")?;
+            total_indexed += indexed;
+            if indexed < batch_size {
+                break;
+            }
+        }
+        if total_indexed > 0 {
+            println!("Indexed {total_indexed} messages for search.");
         }
         Ok(())
     }
@@ -632,7 +752,7 @@ fn is_candidate_dir(path: &Path) -> bool {
 fn is_candidate_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()),
-        Some("json") | Some("jsonl")
+        Some("json" | "jsonl")
     )
 }
 

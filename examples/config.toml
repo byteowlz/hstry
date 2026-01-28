@@ -25,10 +25,17 @@ enabled = true
 name = "claude-web"
 enabled = false
 
+# Search index settings (Tantivy)
+[search]
+# index_path = "~/.local/share/hstry/search"
+index_batch_size = 500
+
 # Service settings
 [service]
 enabled = false
 poll_interval_secs = 30
+search_api = true
+# search_port = 3000
 
 # =============================================================================
 # Source Examples

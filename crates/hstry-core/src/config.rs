@@ -44,6 +44,25 @@ pub struct Config {
 
     /// Remote hosts for syncing history across machines.
     pub remotes: Vec<RemoteConfig>,
+
+    /// Search configuration.
+    pub search: SearchConfig,
+}
+
+/// Search configuration for indexing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfig {
+    /// Optional path to the Tantivy index directory.
+    #[serde(default)]
+    pub index_path: Option<PathBuf>,
+
+    /// Batch size for background indexing.
+    #[serde(default = "default_index_batch_size")]
+    pub index_batch_size: usize,
+}
+
+fn default_index_batch_size() -> usize {
+    500
 }
 
 /// Configuration for a remote host (SSH-based sync).
@@ -131,9 +150,7 @@ impl AdapterRepoSource {
     /// Get the adapters path within the source.
     pub fn adapters_path(&self) -> &str {
         match self {
-            Self::Git { path, .. } => path,
-            Self::Archive { path, .. } => path,
-            Self::Local { path } => path,
+            Self::Git { path, .. } | Self::Archive { path, .. } | Self::Local { path } => path,
         }
     }
 }
@@ -197,7 +214,29 @@ impl Default for Config {
             service: ServiceConfig::default(),
             sources: Vec::new(),
             remotes: Vec::new(),
+            search: SearchConfig::default(),
         }
+    }
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            index_path: None,
+            index_batch_size: default_index_batch_size(),
+        }
+    }
+}
+
+impl Config {
+    /// Resolve Tantivy index path from config.
+    pub fn search_index_path(&self) -> PathBuf {
+        if let Some(path) = &self.search.index_path {
+            return path.clone();
+        }
+
+        let base_dir = self.database.parent().unwrap_or_else(|| Path::new("."));
+        base_dir.join("index").join("tantivy")
     }
 }
 
@@ -217,7 +256,7 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let mut config: Config = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("Failed to parse config: {e}")))?;
-        config.expand_paths()?;
+        config.expand_paths();
         Ok(config)
     }
 
@@ -245,7 +284,7 @@ impl Config {
             Self::load_from_path(path)
         } else {
             let mut config = Self::default();
-            config.expand_paths()?;
+            config.expand_paths();
             config.save_to_path(path)?;
             Ok(config)
         }
@@ -253,13 +292,12 @@ impl Config {
 
     /// Expand a path, replacing ~ with home directory.
     pub fn expand_path(path: &str) -> PathBuf {
-        let expanded = shellexpand::full(path)
-            .map(|v| v.into_owned())
-            .unwrap_or_else(|_| path.to_string());
+        let expanded =
+            shellexpand::full(path).map_or_else(|_| path.to_string(), std::borrow::Cow::into_owned);
         PathBuf::from(expanded)
     }
 
-    fn expand_paths(&mut self) -> Result<()> {
+    fn expand_paths(&mut self) {
         self.database = Self::expand_path(&self.database.to_string_lossy());
         self.adapter_paths = self
             .adapter_paths
@@ -283,7 +321,6 @@ impl Config {
                 auto_sync: source.auto_sync,
             })
             .collect();
-        Ok(())
     }
 
     /// Check whether a given adapter is enabled.
@@ -333,6 +370,14 @@ pub struct ServiceConfig {
 
     /// Poll interval in seconds (fallback when filesystem events are missed).
     pub poll_interval_secs: u64,
+
+    /// Expose local search API (localhost only).
+    #[serde(default = "default_true")]
+    pub search_api: bool,
+
+    /// Optional port for search API (defaults to dynamic if unset).
+    #[serde(default)]
+    pub search_port: Option<u16>,
 }
 
 impl Default for ServiceConfig {
@@ -340,6 +385,8 @@ impl Default for ServiceConfig {
         Self {
             enabled: false,
             poll_interval_secs: 30,
+            search_api: true,
+            search_port: None,
         }
     }
 }
@@ -347,3 +394,7 @@ impl Default for ServiceConfig {
 fn default_true() -> bool {
     true
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;

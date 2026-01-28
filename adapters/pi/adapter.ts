@@ -518,37 +518,11 @@ function calculateTotals(entries: SessionEntry[]): {
 
 function deriveTitle(messages: Message[]): string | undefined {
   // Use first user message as title, truncated
-  // Skip messages that are AGENTS.md content
-  const firstUser = messages.find(m => m.role === 'user' && !isAgentsMdContent(m.content));
+  const firstUser = messages.find(m => m.role === 'user');
   if (!firstUser?.content) return undefined;
   
   const text = firstUser.content.slice(0, 100);
   return text.length < firstUser.content.length ? `${text}...` : text;
-}
-
-/** Detect if content is an AGENTS.md file or similar config content. */
-function isAgentsMdContent(content?: string): boolean {
-  if (!content) return false;
-  
-  const strongMarkers = [
-    '# AGENTS.md',
-    '# Agent Configuration',
-    '<available_skills>',
-    'Guidance for coding agents',
-  ];
-
-  for (const marker of strongMarkers) {
-    if (content.includes(marker)) {
-      return true;
-    }
-  }
-
-  // Check for filename reference with context
-  if (content.includes('AGENTS.md') && content.includes('instructions')) {
-    return true;
-  }
-
-  return false;
 }
 
 function parseTimestamp(value?: string | number): number | undefined {

@@ -437,8 +437,7 @@ function buildTitle(cwd: string, createdAt: number, firstUserMessage?: string): 
   const date = new Date(createdAt);
   const dateStr = date.toISOString().slice(0, 10);
 
-  // Skip AGENTS.md content for titles
-  if (!firstUserMessage || isAgentsMdContent(firstUserMessage)) {
+  if (!firstUserMessage) {
     const time = date.toISOString().slice(11, 16);
     return `${project} - ${dateStr} - ${time}`;
   }
@@ -449,29 +448,6 @@ function buildTitle(cwd: string, createdAt: number, firstUserMessage?: string): 
   }
 
   return `${project} - ${dateStr} - ${msg}`;
-}
-
-/** Detect if content is an AGENTS.md file or similar config content. */
-function isAgentsMdContent(content: string): boolean {
-  const strongMarkers = [
-    '# AGENTS.md',
-    '# Agent Configuration',
-    '<available_skills>',
-    'Guidance for coding agents',
-  ];
-
-  for (const marker of strongMarkers) {
-    if (content.includes(marker)) {
-      return true;
-    }
-  }
-
-  // Check for filename reference with context
-  if (content.includes('AGENTS.md') && content.includes('instructions')) {
-    return true;
-  }
-
-  return false;
 }
 
 function safeParseJson(value?: string): unknown {

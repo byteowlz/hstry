@@ -2074,6 +2074,50 @@ mod tests {
         let value = value.expect("value");
         assert_eq!(value.id, "conv-1");
     }
+
+    #[test]
+    fn is_agents_md_detects_config_content() {
+        let agents_md = r#"# AGENTS.md
+
+## Core Principles
+
+- Never publish artifacts
+- Follow Clippy best practices
+
+## Rust Workflow
+
+Run cargo fmt after changes.
+"#;
+        assert!(is_agents_md_content(agents_md));
+    }
+
+    #[test]
+    fn is_agents_md_ignores_normal_messages() {
+        let normal = "Can you help me fix this bug in my Rust code?";
+        assert!(!is_agents_md_content(normal));
+
+        let longer = "I'm working on a project and need help with the database schema. \
+                      The current implementation uses SQLite but I want to add support \
+                      for PostgreSQL as well. Here's my current code...";
+        assert!(!is_agents_md_content(longer));
+    }
+
+    #[test]
+    fn is_agents_md_detects_embedded_paths() {
+        let embedded = r#"Some context here
+
+## /home/user/project/AGENTS.md
+
+# Agent Configuration
+
+More instructions for the agent...
+
+<available_skills>
+  <skill>something</skill>
+</available_skills>
+"#;
+        assert!(is_agents_md_content(embedded));
+    }
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2983,6 +3027,10 @@ async fn cmd_mmry_extract(
             if !role_allowed(&active_roles, &msg.role) {
                 continue;
             }
+            // Skip AGENTS.md content - these are config files, not useful memories
+            if is_agents_md_content(&msg.content) {
+                continue;
+            }
             message_count += 1;
             let source = source_map.get(&conv.source_id);
             let category = conv
@@ -3088,6 +3136,49 @@ fn role_allowed(roles: &[MmryRoleArg], role: &MessageRole) -> bool {
                 | (MmryRoleArg::Other, MessageRole::Other)
         )
     })
+}
+
+/// Detect if content is an AGENTS.md file or similar config content.
+/// These are project configuration files, not useful as memories.
+fn is_agents_md_content(content: &str) -> bool {
+    // Strong markers - if any of these are present, it's almost certainly AGENTS.md
+    let strong_markers = [
+        "# AGENTS.md",
+        "# Agent Configuration",
+        "<available_skills>",
+        "Guidance for coding agents",
+    ];
+
+    for marker in &strong_markers {
+        if content.contains(marker) {
+            return true;
+        }
+    }
+
+    // Weaker markers - need multiple to trigger
+    let weak_markers = [
+        "## /home/",          // Embedded file paths in AGENTS.md
+        "## Core Principles", // Common AGENTS.md section
+        "## Rust Workflow",   // Common AGENTS.md section
+        "## CLI Expectations",
+        "## House Rules",
+        "coding agent",
+    ];
+
+    let weak_count = weak_markers
+        .iter()
+        .filter(|m| content.contains(*m))
+        .count();
+    if weak_count >= 2 {
+        return true;
+    }
+
+    // Also check for the explicit filename reference with context
+    if content.contains("AGENTS.md") && content.contains("instructions") {
+        return true;
+    }
+
+    false
 }
 
 fn build_mmry_metadata(

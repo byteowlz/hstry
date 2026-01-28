@@ -126,32 +126,40 @@ pub fn print_search_results(hits: &[SearchHit]) {
     }
 
     let width = term_width().min(120);
+    let inner = width - 2;
+    let header_text = format!(" Found {} result(s) ", hits.len());
+    let padding = inner.saturating_sub(header_text.len());
 
     // Header
     println!(
         "{}{}{}",
         style("╭").dim(),
-        style("─".repeat(width - 2)).dim(),
+        style("─".repeat(inner)).dim(),
         style("╮").dim()
     );
     println!(
-        "{} {} {}",
+        "{}{}{}{}",
         style("│").dim(),
-        style(format!("Found {} result(s)", hits.len())).bold(),
-        " ".repeat(width.saturating_sub(18 + hits.len().to_string().len()))
-            + &style("│").dim().to_string()
+        style(&header_text).bold(),
+        " ".repeat(padding),
+        style("│").dim()
     );
     println!(
         "{}{}{}",
-        style("╰").dim(),
-        style("─".repeat(width - 2)).dim(),
-        style("╯").dim()
+        style("├").dim(),
+        style("─".repeat(inner)).dim(),
+        style("┤").dim()
     );
 
     for (i, hit) in hits.iter().enumerate() {
         // Separator between items
         if i > 0 {
-            println!("{}", style("├".to_string() + &"─".repeat(width - 1)).dim());
+            println!(
+                "{}{}{}",
+                style("├").dim(),
+                style("─".repeat(inner)).dim(),
+                style("┤").dim()
+            );
         }
 
         // Line 1: metadata (score, role, adapter, workspace, date) - all on one line
@@ -175,7 +183,8 @@ pub fn print_search_results(hits: &[SearchHit]) {
             .unwrap_or_default();
 
         println!(
-            "{} {:>4.1} {} {} {} {} {}",
+            "{} {} {:>4.1} {} {} {} {} {}",
+            style("│").dim(),
             style(bar).yellow(),
             style(score).dim(),
             role,
@@ -195,19 +204,24 @@ pub fn print_search_results(hits: &[SearchHit]) {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let max_title = width.saturating_sub(4);
+            let max_title = inner.saturating_sub(5);
             let display = if clean.len() > max_title {
                 format!("{}...", &clean[..max_title - 3])
             } else {
                 clean
             };
-            println!("  {} {}", style("▶").cyan(), style(display).bold());
+            println!(
+                "{}  {} {}",
+                style("│").dim(),
+                style("▶").cyan(),
+                style(display).bold()
+            );
         }
 
         // Line 3: snippet (cleaned, single line, highlighted)
         let snippet = clean_snippet(&hit.snippet);
         let snippet = colorize_snippet(&snippet);
-        let max_snippet = width.saturating_sub(4);
+        let max_snippet = inner.saturating_sub(5);
         let display = if snippet.len() > max_snippet {
             let visible_len = console::measure_text_width(&snippet);
             if visible_len > max_snippet {
@@ -218,13 +232,15 @@ pub fn print_search_results(hits: &[SearchHit]) {
         } else {
             snippet
         };
-        println!("    {}", display);
+        println!("{}    {}", style("│").dim(), display);
     }
 
     // Footer
     println!(
-        "{}",
-        style("└".to_string() + &"─".repeat(width - 1)).dim()
+        "{}{}{}",
+        style("╰").dim(),
+        style("─".repeat(inner)).dim(),
+        style("╯").dim()
     );
 }
 

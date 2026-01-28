@@ -37,6 +37,9 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-ca4j] Core: remote search/show helpers + host field (closed 2026-01-28)
+- [trx-cmew] CLI/TUI: service-first search + remote SSH search (closed 2026-01-28)
+- [trx-pbj8] Service: add gRPC search endpoint for warm queries (closed 2026-01-28)
 - [trx-fddq] Docs: add API search usage notes (closed 2026-01-28)
 - [trx-t23b] CLI: use hstry-api for search when available (closed 2026-01-28)
 - [trx-whve] API: serve Tantivy-backed search endpoint (closed 2026-01-28)

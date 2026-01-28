@@ -196,6 +196,10 @@ enum Command {
         #[arg(long)]
         no_tools: bool,
 
+        /// Deduplicate similar results (by content hash)
+        #[arg(long)]
+        dedup: bool,
+
         /// Include system context (AGENTS.md, etc.) in results
         #[arg(long)]
         include_system: bool,
@@ -291,6 +295,17 @@ enum Command {
 
     /// Show database statistics
     Stats,
+
+    /// Deduplicate conversations in the database
+    Dedup {
+        /// Only show what would be deleted (don't actually delete)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Filter by source
+        #[arg(long)]
+        source: Option<String>,
+    },
 
     /// Integrate with mmry
     Mmry {
@@ -674,6 +689,7 @@ async fn main() -> Result<()> {
             remote,
             role,
             no_tools,
+            dedup,
             include_system,
             input,
         } => {
@@ -702,6 +718,7 @@ async fn main() -> Result<()> {
                 remotes,
                 role,
                 no_tools,
+                dedup,
                 include_system,
                 cli.json,
             )
@@ -838,6 +855,10 @@ async fn main() -> Result<()> {
         Command::Stats => {
             let db = Database::open(&config.database).await?;
             cmd_stats(&db, cli.json).await
+        }
+        Command::Dedup { dry_run, source } => {
+            let db = Database::open(&config.database).await?;
+            cmd_dedup(&db, dry_run, source, cli.json).await
         }
         Command::Mmry { command } => {
             let db = Database::open(&config.database).await?;
@@ -1281,12 +1302,13 @@ async fn cmd_search_fast(
     remotes: Vec<String>,
     roles: Vec<SearchRoleArg>,
     no_tools: bool,
+    dedup: bool,
     include_system: bool,
     json: bool,
 ) -> Result<()> {
     // Request more results than needed if we're filtering, to ensure we get enough after filtering
-    let has_filters = !include_system || !roles.is_empty() || no_tools;
-    let fetch_limit = if has_filters { limit * 3 } else { limit };
+    let has_filters = !include_system || !roles.is_empty() || no_tools || dedup;
+    let fetch_limit = if has_filters { limit * 4 } else { limit };
     let opts = hstry_core::db::SearchOptions {
         source_id: source,
         workspace,
@@ -1360,6 +1382,20 @@ async fn cmd_search_fast(
                 SearchRoleArg::System => hit.role == MessageRole::System,
                 SearchRoleArg::Tool => hit.role == MessageRole::Tool,
             })
+        });
+    }
+
+    // Deduplicate by content hash if requested
+    if dedup {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut seen = std::collections::HashSet::new();
+        messages.retain(|hit| {
+            let mut hasher = DefaultHasher::new();
+            hit.content.hash(&mut hasher);
+            let hash = hasher.finish();
+            seen.insert(hash)
         });
     }
 
@@ -2393,6 +2429,128 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     println!("Sources:       {sources_len}");
     println!("Conversations: {conv_count}");
     println!("Messages:      {msg_count}");
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct DedupResult {
+    duplicates_found: usize,
+    conversations_removed: usize,
+    messages_removed: usize,
+    dry_run: bool,
+}
+
+async fn cmd_dedup(
+    db: &Database,
+    dry_run: bool,
+    source_filter: Option<String>,
+    json: bool,
+) -> Result<()> {
+    use std::collections::HashMap;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let opts = hstry_core::db::ListConversationsOptions {
+        source_id: source_filter,
+        workspace: None,
+        after: None,
+        limit: None,
+    };
+
+    let conversations = db.list_conversations(opts).await?;
+
+    if !json {
+        println!("Scanning {} conversations for duplicates...", conversations.len());
+    }
+
+    // Group conversations by a hash of their full content
+    let mut groups: HashMap<u64, Vec<Conversation>> = HashMap::new();
+
+    for conv in conversations {
+        let messages = db.get_messages(conv.id).await?;
+        
+        // Hash all message content for accurate dedup
+        let mut hasher = DefaultHasher::new();
+        conv.source_id.hash(&mut hasher);
+        for msg in &messages {
+            msg.role.to_string().hash(&mut hasher);
+            msg.content.hash(&mut hasher);
+        }
+        let hash = hasher.finish();
+
+        groups.entry(hash).or_default().push(conv);
+    }
+
+    // Find groups with duplicates
+    let mut duplicates_found = 0usize;
+    let mut to_remove: Vec<uuid::Uuid> = Vec::new();
+
+    for (_key, mut convs) in groups {
+        if convs.len() > 1 {
+            duplicates_found += convs.len() - 1;
+            // Sort by updated_at descending, keep the most recent
+            convs.sort_by(|a, b| {
+                let a_time = a.updated_at.unwrap_or(a.created_at);
+                let b_time = b.updated_at.unwrap_or(b.created_at);
+                b_time.cmp(&a_time)
+            });
+            // Keep first (most recent), mark rest for removal
+            for conv in convs.into_iter().skip(1) {
+                to_remove.push(conv.id);
+            }
+        }
+    }
+
+    if !json && !to_remove.is_empty() {
+        println!("Found {} duplicate conversations", duplicates_found);
+    }
+
+    let mut messages_removed = 0usize;
+
+    if !dry_run && !to_remove.is_empty() {
+        for conv_id in &to_remove {
+            let msg_count = db.get_messages(*conv_id).await?.len();
+            messages_removed += msg_count;
+            db.delete_conversation(*conv_id).await?;
+        }
+    } else if dry_run && !to_remove.is_empty() {
+        // Count messages that would be removed
+        for conv_id in &to_remove {
+            let msg_count = db.get_messages(*conv_id).await?.len();
+            messages_removed += msg_count;
+        }
+    }
+
+    let result = DedupResult {
+        duplicates_found,
+        conversations_removed: to_remove.len(),
+        messages_removed,
+        dry_run,
+    };
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(result),
+            error: None,
+        });
+    }
+
+    if to_remove.is_empty() {
+        println!("No duplicates found.");
+    } else if dry_run {
+        println!(
+            "Would remove {} conversations ({} messages)",
+            result.conversations_removed, result.messages_removed
+        );
+        println!("Run without --dry-run to actually remove them.");
+    } else {
+        println!(
+            "Removed {} duplicate conversations ({} messages)",
+            result.conversations_removed, result.messages_removed
+        );
+    }
 
     Ok(())
 }

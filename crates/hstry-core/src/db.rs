@@ -427,6 +427,22 @@ impl Database {
         Ok(count.0)
     }
 
+    /// Delete a conversation and all its messages.
+    pub async fn delete_conversation(&self, id: Uuid) -> Result<()> {
+        let id_str = id.to_string();
+        // Delete messages first (foreign key)
+        sqlx::query("DELETE FROM messages WHERE conversation_id = ?")
+            .bind(&id_str)
+            .execute(&self.pool)
+            .await?;
+        // Delete conversation
+        sqlx::query("DELETE FROM conversations WHERE id = ?")
+            .bind(&id_str)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // =========================================================================
     // Messages
     // =========================================================================

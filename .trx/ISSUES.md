@@ -37,6 +37,9 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-fddq] Docs: add API search usage notes (closed 2026-01-28)
+- [trx-t23b] CLI: use hstry-api for search when available (closed 2026-01-28)
+- [trx-whve] API: serve Tantivy-backed search endpoint (closed 2026-01-28)
 - [trx-4w8c] Docs: document search index config and command (closed 2026-01-28)
 - [trx-h51w] CLI: add hstry index command for rebuild (closed 2026-01-28)
 - [trx-stz0] Search: make Tantivy default and add background indexing (closed 2026-01-28)

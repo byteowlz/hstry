@@ -37,6 +37,9 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-4w8c] Docs: document search index config and command (closed 2026-01-28)
+- [trx-h51w] CLI: add hstry index command for rebuild (closed 2026-01-28)
+- [trx-stz0] Search: make Tantivy default and add background indexing (closed 2026-01-28)
 - [trx-gj5r] CLI: add hstry remote fetch/sync subcommands with filters (closed 2026-01-28)
 - [trx-vd8h] Remote plumbing: SSH transport + temp files + atomic replace (closed 2026-01-28)
 - [trx-bb8t] Remote sync: bidirectional merge between local and remote DBs (closed 2026-01-28)

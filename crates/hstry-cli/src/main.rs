@@ -188,6 +188,14 @@ enum Command {
         #[arg(long)]
         remote: Vec<String>,
 
+        /// Filter by message role (user, assistant, system, tool)
+        #[arg(long, short = 'r', value_enum)]
+        role: Vec<SearchRoleArg>,
+
+        /// Exclude tool calls and tool results from results
+        #[arg(long)]
+        no_tools: bool,
+
         /// Include system context (AGENTS.md, etc.) in results
         #[arg(long)]
         include_system: bool,
@@ -664,6 +672,8 @@ async fn main() -> Result<()> {
             mode,
             scope,
             remote,
+            role,
+            no_tools,
             include_system,
             input,
         } => {
@@ -690,6 +700,8 @@ async fn main() -> Result<()> {
                 mode,
                 scope,
                 remotes,
+                role,
+                no_tools,
                 include_system,
                 cli.json,
             )
@@ -1267,11 +1279,14 @@ async fn cmd_search_fast(
     mode: SearchModeArg,
     scope: SearchScopeArg,
     remotes: Vec<String>,
+    roles: Vec<SearchRoleArg>,
+    no_tools: bool,
     include_system: bool,
     json: bool,
 ) -> Result<()> {
     // Request more results than needed if we're filtering, to ensure we get enough after filtering
-    let fetch_limit = if include_system { limit } else { limit * 2 };
+    let has_filters = !include_system || !roles.is_empty() || no_tools;
+    let fetch_limit = if has_filters { limit * 3 } else { limit };
     let opts = hstry_core::db::SearchOptions {
         source_id: source,
         workspace,
@@ -1329,6 +1344,23 @@ async fn cmd_search_fast(
     // Filter out system context (AGENTS.md, etc.) unless explicitly requested
     if !include_system {
         messages.retain(|hit| !is_system_context(&hit.content));
+    }
+
+    // Filter out tool messages if requested
+    if no_tools {
+        messages.retain(|hit| hit.role != MessageRole::Tool);
+    }
+
+    // Filter by role if specified
+    if !roles.is_empty() {
+        messages.retain(|hit| {
+            roles.iter().any(|r| match r {
+                SearchRoleArg::User => hit.role == MessageRole::User,
+                SearchRoleArg::Assistant => hit.role == MessageRole::Assistant,
+                SearchRoleArg::System => hit.role == MessageRole::System,
+                SearchRoleArg::Tool => hit.role == MessageRole::Tool,
+            })
+        });
     }
 
     // Apply the original limit after filtering
@@ -1447,6 +1479,15 @@ enum SearchScopeArg {
     Local,
     Remote,
     All,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum SearchRoleArg {
+    User,
+    Assistant,
+    System,
+    Tool,
 }
 
 async fn cmd_list(

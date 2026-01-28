@@ -650,33 +650,7 @@ async fn main() -> Result<()> {
     let config_path = cli.config.unwrap_or_else(Config::default_config_path);
     let config = Config::ensure_at(&config_path)?;
 
-    // Open database
-    let db = Database::open(&config.database).await?;
-
-    // Detect JS runtime
-    let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
-        anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
-    })?;
-
-    let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
-
     match cli.command {
-        Command::Sync { source, input } => {
-            let input = read_input::<SyncInput>(input)?;
-            let source = input.and_then(|v| v.source).or(source);
-            cmd_sync(&db, &runner, &config, source, cli.json).await
-        }
-        Command::Import {
-            path,
-            adapter,
-            source_id,
-            dry_run,
-        } => {
-            cmd_import(
-                &db, &runner, &config, path, adapter, source_id, dry_run, cli.json,
-            )
-            .await
-        }
         Command::Search {
             query,
             limit,
@@ -701,18 +675,48 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .and_then(|v| v.remotes.clone())
                 .unwrap_or(remote);
-            cmd_search(
-                &config, &db, &query, limit, source, workspace, mode, scope, remotes, cli.json,
+            cmd_search_fast(
+                &config, &query, limit, source, workspace, mode, scope, remotes, cli.json,
             )
             .await
         }
-        Command::Index { rebuild } => cmd_index(&config, &db, rebuild, cli.json).await,
+        Command::Sync { source, input } => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            let input = read_input::<SyncInput>(input)?;
+            let source = input.and_then(|v| v.source).or(source);
+            cmd_sync(&db, &runner, &config, source, cli.json).await
+        }
+        Command::Import {
+            path,
+            adapter,
+            source_id,
+            dry_run,
+        } => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_import(
+                &db, &runner, &config, path, adapter, source_id, dry_run, cli.json,
+            )
+            .await
+        }
+        Command::Index { rebuild } => {
+            let db = Database::open(&config.database).await?;
+            cmd_index(&config, &db, rebuild, cli.json).await
+        }
         Command::List {
             source,
             workspace,
             limit,
             input,
         } => {
+            let db = Database::open(&config.database).await?;
             let input = read_input::<ListInput>(input)?;
             let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
             let workspace = input
@@ -723,12 +727,24 @@ async fn main() -> Result<()> {
             cmd_list(&db, source, workspace, limit, cli.json).await
         }
         Command::Show { id, input } => {
+            let db = Database::open(&config.database).await?;
             let input = read_input::<ShowInput>(input)?;
             let id = input.as_ref().map_or(id, |v| v.id.clone());
             cmd_show(&db, &id, cli.json).await
         }
-        Command::Source { command } => cmd_source(&db, &runner, command, cli.json).await,
+        Command::Source { command } => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_source(&db, &runner, command, cli.json).await
+        }
         Command::Adapters { command } => {
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_adapters(&runner, &config, &config_path, command, cli.json)
         }
         Command::Service { command } => match command {
@@ -759,7 +775,13 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Command::Scan => cmd_scan(&runner, &config, cli.json).await,
+        Command::Scan => {
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_scan(&runner, &config, cli.json).await
+        }
         Command::Export {
             format,
             conversations,
@@ -768,6 +790,11 @@ async fn main() -> Result<()> {
             output,
             pretty,
         } => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_export(
                 &db,
                 &runner,
@@ -781,9 +808,16 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Command::Stats => cmd_stats(&db, cli.json).await,
-        Command::Mmry { command } => cmd_mmry(&db, command, cli.json).await,
+        Command::Stats => {
+            let db = Database::open(&config.database).await?;
+            cmd_stats(&db, cli.json).await
+        }
+        Command::Mmry { command } => {
+            let db = Database::open(&config.database).await?;
+            cmd_mmry(&db, command, cli.json).await
+        }
         Command::Remote { command } => {
+            let db = Database::open(&config.database).await?;
             cmd_remote(&db, &config, &config_path, command, cli.json).await
         }
         Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
@@ -1209,9 +1243,8 @@ async fn cmd_import(
 }
 
 #[expect(clippy::too_many_arguments)]
-async fn cmd_search(
+async fn cmd_search_fast(
     config: &Config,
-    db: &Database,
     query: &str,
     limit: i64,
     source: Option<String>,
@@ -1231,15 +1264,24 @@ async fn cmd_search(
     let mut messages = Vec::new();
 
     if scope != SearchScopeArg::Remote {
-        let local = if let Some(results) =
-            hstry_core::service::try_service_search(query, &opts).await?
-        {
-            results
+        let service_expected = std::env::var("HSTRY_NO_SERVICE").is_err()
+            && config.service.enabled
+            && config.service.search_api;
+
+        let local = if service_expected {
+            if let Some(results) = hstry_core::service::try_service_search(query, &opts).await? {
+                results
+            } else {
+                anyhow::bail!(
+                    "Search service unavailable. Run `hstry service start` or set HSTRY_NO_SERVICE=1 to use local search."
+                );
+            }
         } else if let Some(results) = try_api_search(query, &opts, mode).await? {
             results
         } else {
+            let db = Database::open(&config.database).await?;
             let index_path = config.search_index_path();
-            hstry_core::search_tantivy::search_with_fallback(db, &index_path, query, &opts).await?
+            hstry_core::search_tantivy::search_with_fallback(&db, &index_path, query, &opts).await?
         };
         messages.extend(local);
     }
@@ -1378,8 +1420,11 @@ async fn try_api_search(
         return Ok(None);
     }
 
-    let results = response.json::<Vec<SearchHit>>().await?;
-    Ok(Some(results))
+    let body = response.text().await?;
+    match serde_json::from_str::<Vec<SearchHit>>(&body) {
+        Ok(results) => Ok(Some(results)),
+        Err(_) => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]

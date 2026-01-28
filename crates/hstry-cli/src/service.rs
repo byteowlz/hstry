@@ -241,8 +241,6 @@ fn write_pid_file(pid: u32) -> Result<()> {
 
 async fn run_service(config_path: &Path) -> Result<()> {
     let mut state = ServiceState::load(config_path).await?;
-    state.sync_all().await?;
-
     let server_handle = if state.config.service.search_api {
         Some(
             start_search_server(
@@ -255,6 +253,8 @@ async fn run_service(config_path: &Path) -> Result<()> {
     } else {
         None
     };
+
+    state.sync_all().await?;
 
     let mut tick = interval(Duration::from_secs(state.config.service.poll_interval_secs));
 

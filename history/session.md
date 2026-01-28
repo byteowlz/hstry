@@ -7,6 +7,13 @@
 
 ---
 
+## 2026-01-28: CLI Search Resilience
+- CLI search now ignores non-JSON API responses and falls back to local search.
+- CLI search now fails fast when the search service should be available, to avoid slow local fallbacks.
+- CLI search now treats the service as required whenever it is enabled in config.
+- CLI search now avoids opening the DB unless a local fallback is required.
+- Service now starts the search API before the initial sync to make searches available immediately.
+
 ## Message 1: Assistant
 **Timestamp:** 16:23:40
 
@@ -26494,4 +26501,3 @@ Wrote file successfully.
 ### Step-Start Part
 
 ---
-

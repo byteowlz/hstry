@@ -2,23 +2,13 @@
 
 ## Open
 
-### [trx-bb8t] Remote sync: bidirectional merge between local and remote DBs (P1, task)
-
-### [trx-j8gj] Remote fetch: SSH pull of remote hstry DB into local cache (P1, task)
-
 ### [trx-vg8v] Schema: store host_id/hostname on sessions + migrations (P1, task)
-
-### [trx-8g87] Config: define remote hosts (SSH) and optional paths (P1, task)
 
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
-### [trx-vd8h] Remote plumbing: SSH transport + temp files + atomic replace (P2, task)
-
 ### [trx-fycz] Conflict policy: dedupe by message_id + session_id, prefer newest updated_at (P2, task)
-
-### [trx-gj5r] CLI: add hstry remote fetch/sync subcommands with filters (P2, task)
 
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)
 Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON memories (with hstry metadata) and invokes the mmry add stdin flow with store/config options.
@@ -47,6 +37,11 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-gj5r] CLI: add hstry remote fetch/sync subcommands with filters (closed 2026-01-28)
+- [trx-vd8h] Remote plumbing: SSH transport + temp files + atomic replace (closed 2026-01-28)
+- [trx-bb8t] Remote sync: bidirectional merge between local and remote DBs (closed 2026-01-28)
+- [trx-j8gj] Remote fetch: SSH pull of remote hstry DB into local cache (closed 2026-01-28)
+- [trx-8g87] Config: define remote hosts (SSH) and optional paths (closed 2026-01-28)
 - [trx-x2k5] Reduce noisy search projection from tool/file outputs (closed 2026-01-27)
 - [trx-z5x5] Add readable_id adj-verb-noun IDs to conversations (closed 2026-01-27)
 - [trx-qxba] Fix hstry-tui char boundary panic on box drawing (closed 2026-01-27)

@@ -14,6 +14,7 @@ use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
 use serde::{Serialize, de::DeserializeOwned};
 
+mod pretty;
 mod service;
 mod sync;
 
@@ -1316,66 +1317,7 @@ async fn cmd_search_fast(
         });
     }
 
-    if messages.is_empty() {
-        println!("No results found.");
-        return Ok(());
-    }
-
-    let count = messages.len();
-    for msg in messages {
-        // Header line with separator
-        let separator = "-".repeat(72);
-        println!("{separator}");
-
-        // Score (negate BM25 so higher = better), role, adapter, and workspace
-        let display_score = -msg.score;
-        let workspace = msg
-            .workspace
-            .as_ref()
-            .map(|ws| format!(" | WS: {ws}"))
-            .unwrap_or_default();
-        let host = msg
-            .host
-            .as_ref()
-            .map(|h| format!(" | Host: {h}"))
-            .unwrap_or_default();
-        println!(
-            "Score: {score:.2} | {role} | {adapter}{workspace}{host}",
-            score = display_score,
-            role = msg.role,
-            adapter = msg.source_adapter
-        );
-
-        // Title if available
-        if let Some(title) = &msg.title {
-            let title = truncate(title, 68);
-            println!("Title: {title}");
-        }
-
-        // Dates: created and updated
-        let created = msg.conv_created_at.format("%Y-%m-%d %H:%M");
-        let updated = msg
-            .conv_updated_at
-            .map(|dt| {
-                format!(
-                    " | Updated: {updated}",
-                    updated = dt.format("%Y-%m-%d %H:%M")
-                )
-            })
-            .unwrap_or_default();
-        println!("Date: {created}{updated}");
-
-        // Snippet with search highlights (colorized for TTY)
-        let snippet = truncate(&msg.snippet, 200);
-        let snippet = colorize_highlights(&snippet);
-        println!("Snippet: {snippet}");
-    }
-    // Final separator
-    if count > 0 {
-        let separator = "-".repeat(72);
-        println!("{separator}");
-    }
-
+    pretty::print_search_results(&messages);
     Ok(())
 }
 
@@ -3286,32 +3228,4 @@ fn run_mmry_add(
     }
 }
 
-fn truncate(s: &str, max_len: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.len() <= max_len {
-        s
-    } else {
-        format!("{snippet}...", snippet = &s[..max_len])
-    }
-}
 
-/// Convert bracket-highlighted text `[match]` to ANSI color codes for TTY output.
-/// Falls back to brackets if not a TTY or NO_COLOR is set.
-fn colorize_highlights(s: &str) -> String {
-    use std::io::IsTerminal;
-
-    // ANSI codes: bold yellow for highlights
-    const HIGHLIGHT_START: &str = "\x1b[1;33m"; // Bold yellow
-    const HIGHLIGHT_END: &str = "\x1b[0m"; // Reset
-
-    // Check if we should use colors
-    let use_color = std::io::stdout().is_terminal()
-        && std::env::var("NO_COLOR").is_err()
-        && std::env::var("FORCE_COLOR").map_or(true, |v| v != "0");
-
-    if !use_color {
-        return s.to_string();
-    }
-
-    s.replace('[', HIGHLIGHT_START).replace(']', HIGHLIGHT_END)
-}

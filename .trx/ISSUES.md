@@ -37,6 +37,7 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-0r08] Adjust clippy print rules for CLI crates (closed 2026-01-28)
 - [trx-ca4j] Core: remote search/show helpers + host field (closed 2026-01-28)
 - [trx-cmew] CLI/TUI: service-first search + remote SSH search (closed 2026-01-28)
 - [trx-pbj8] Service: add gRPC search endpoint for warm queries (closed 2026-01-28)

@@ -126,12 +126,34 @@ pub fn print_search_results(hits: &[SearchHit]) {
     }
 
     let width = term_width().min(120);
-    let sep = "─".repeat(width);
 
-    println!("{}", style(format!("Found {} result(s)", hits.len())).bold());
-    println!("{}", style(&sep).dim());
+    // Header
+    println!(
+        "{}{}{}",
+        style("╭").dim(),
+        style("─".repeat(width - 2)).dim(),
+        style("╮").dim()
+    );
+    println!(
+        "{} {} {}",
+        style("│").dim(),
+        style(format!("Found {} result(s)", hits.len())).bold(),
+        " ".repeat(width.saturating_sub(18 + hits.len().to_string().len()))
+            + &style("│").dim().to_string()
+    );
+    println!(
+        "{}{}{}",
+        style("╰").dim(),
+        style("─".repeat(width - 2)).dim(),
+        style("╯").dim()
+    );
 
-    for hit in hits {
+    for (i, hit) in hits.iter().enumerate() {
+        // Separator between items
+        if i > 0 {
+            println!("{}", style("├".to_string() + &"─".repeat(width - 1)).dim());
+        }
+
         // Line 1: metadata (score, role, adapter, workspace, date) - all on one line
         let bar = score_bar(hit.score);
         let score = hit.score.abs();
@@ -143,7 +165,7 @@ pub fn print_search_results(hits: &[SearchHit]) {
         let ws = hit
             .workspace
             .as_ref()
-            .map(|w| short_path(w, 40))
+            .map(|w| short_path(w, 35))
             .unwrap_or_default();
 
         let host_str = hit
@@ -153,7 +175,7 @@ pub fn print_search_results(hits: &[SearchHit]) {
             .unwrap_or_default();
 
         println!(
-            "{} {:.1} {} {} {} {} {}",
+            "{} {:>4.1} {} {} {} {} {}",
             style(bar).yellow(),
             style(score).dim(),
             role,
@@ -173,21 +195,20 @@ pub fn print_search_results(hits: &[SearchHit]) {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            let max_title = width.saturating_sub(2);
+            let max_title = width.saturating_sub(4);
             let display = if clean.len() > max_title {
                 format!("{}...", &clean[..max_title - 3])
             } else {
                 clean
             };
-            println!("  {}", style(display).bold());
+            println!("  {} {}", style("▶").cyan(), style(display).bold());
         }
 
         // Line 3: snippet (cleaned, single line, highlighted)
         let snippet = clean_snippet(&hit.snippet);
         let snippet = colorize_snippet(&snippet);
-        let max_snippet = width.saturating_sub(2);
+        let max_snippet = width.saturating_sub(4);
         let display = if snippet.len() > max_snippet {
-            // Account for ANSI codes when truncating
             let visible_len = console::measure_text_width(&snippet);
             if visible_len > max_snippet {
                 format!("{}...", &snippet[..max_snippet.saturating_sub(3)])
@@ -197,10 +218,14 @@ pub fn print_search_results(hits: &[SearchHit]) {
         } else {
             snippet
         };
-        println!("  {}", style(display).dim());
-
-        println!("{}", style(&sep).dim());
+        println!("    {}", display);
     }
+
+    // Footer
+    println!(
+        "{}",
+        style("└".to_string() + &"─".repeat(width - 1)).dim()
+    );
 }
 
 /// Print search results in TSV format (for piping/scripting).

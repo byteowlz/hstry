@@ -188,6 +188,10 @@ enum Command {
         #[arg(long)]
         remote: Vec<String>,
 
+        /// Include system context (AGENTS.md, etc.) in results
+        #[arg(long)]
+        include_system: bool,
+
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
@@ -660,6 +664,7 @@ async fn main() -> Result<()> {
             mode,
             scope,
             remote,
+            include_system,
             input,
         } => {
             let input = read_input::<SearchInput>(input)?;
@@ -677,7 +682,16 @@ async fn main() -> Result<()> {
                 .and_then(|v| v.remotes.clone())
                 .unwrap_or(remote);
             cmd_search_fast(
-                &config, &query, limit, source, workspace, mode, scope, remotes, cli.json,
+                &config,
+                &query,
+                limit,
+                source,
+                workspace,
+                mode,
+                scope,
+                remotes,
+                include_system,
+                cli.json,
             )
             .await
         }
@@ -1253,12 +1267,15 @@ async fn cmd_search_fast(
     mode: SearchModeArg,
     scope: SearchScopeArg,
     remotes: Vec<String>,
+    include_system: bool,
     json: bool,
 ) -> Result<()> {
+    // Request more results than needed if we're filtering, to ensure we get enough after filtering
+    let fetch_limit = if include_system { limit } else { limit * 2 };
     let opts = hstry_core::db::SearchOptions {
         source_id: source,
         workspace,
-        limit: Some(limit),
+        limit: Some(fetch_limit),
         offset: None,
         mode: mode.into(),
     };
@@ -1309,6 +1326,15 @@ async fn cmd_search_fast(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Filter out system context (AGENTS.md, etc.) unless explicitly requested
+    if !include_system {
+        messages.retain(|hit| !is_system_context(&hit.content));
+    }
+
+    // Apply the original limit after filtering
+    #[expect(clippy::cast_sign_loss)]
+    messages.truncate(limit as usize);
+
     if json {
         return emit_json(JsonResponse {
             ok: true,
@@ -1319,6 +1345,32 @@ async fn cmd_search_fast(
 
     pretty::print_search_results(&messages);
     Ok(())
+}
+
+/// Detect if content is system context (AGENTS.md, etc.) that should be hidden by default.
+fn is_system_context(content: &str) -> bool {
+    // Strong markers - if any of these are present, it's system context
+    let strong_markers = [
+        "# AGENTS.md",
+        "# Agent Configuration",
+        "<available_skills>",
+        "Guidance for coding agents",
+        "<SYSTEM_PROMPT>",
+        "</SYSTEM_PROMPT>",
+    ];
+
+    for marker in &strong_markers {
+        if content.contains(marker) {
+            return true;
+        }
+    }
+
+    // Check for AGENTS.md file path pattern
+    if content.contains("AGENTS.md") && content.contains("instructions") {
+        return true;
+    }
+
+    false
 }
 
 #[derive(Serialize)]
@@ -2073,6 +2125,20 @@ mod tests {
         let value: Option<ShowInput> = read_input(Some(file.path().to_path_buf())).expect("read");
         let value = value.expect("value");
         assert_eq!(value.id, "conv-1");
+    }
+
+    #[test]
+    fn is_system_context_detects_agents_md() {
+        // Should detect AGENTS.md markers
+        assert!(is_system_context("# AGENTS.md\n\nGuidance for coding agents"));
+        assert!(is_system_context("Some text\n<available_skills>\n</available_skills>"));
+        assert!(is_system_context("# Agent Configuration\n\nSome instructions"));
+        assert!(is_system_context("AGENTS.md instructions for the agent"));
+
+        // Should NOT detect normal content
+        assert!(!is_system_context("Can you help me with this code?"));
+        assert!(!is_system_context("The agent ran the command successfully"));
+        assert!(!is_system_context("Check the AGENTS.md file")); // just filename mention
     }
 }
 
@@ -2981,6 +3047,10 @@ async fn cmd_mmry_extract(
         let messages = db.get_messages(conv.id).await?;
         for msg in messages {
             if !role_allowed(&active_roles, &msg.role) {
+                continue;
+            }
+            // Skip system context (AGENTS.md, etc.) - not useful as memories
+            if is_system_context(&msg.content) {
                 continue;
             }
             message_count += 1;

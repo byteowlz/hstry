@@ -1567,7 +1567,12 @@ async fn cmd_list(
     for conv in conversations {
         let title = conv.title.as_deref().unwrap_or("(untitled)");
         let date = conv.created_at.format("%Y-%m-%d %H:%M");
-        println!("{id} | {date} | {title}", id = conv.id);
+        let agent = conv.source_id.as_str();
+        let workspace = conv.workspace.as_deref().unwrap_or("-");
+        println!(
+            "{title} | {date} | {agent} | {workspace} | {id}",
+            id = conv.id
+        );
     }
 
     Ok(())

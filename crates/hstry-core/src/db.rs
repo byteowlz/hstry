@@ -45,7 +45,7 @@ impl Database {
         self.ensure_conversations_readable_id_column().await?;
         self.ensure_conversations_readable_id_index().await?;
         self.ensure_messages_parts_column().await?;
-        self.ensure_fts_schema().await?;
+        self.ensure_fts_schema_optimized().await?;
         Ok(())
     }
 
@@ -427,6 +427,26 @@ impl Database {
         Ok(count.0)
     }
 
+    /// Count conversations and messages for a specific source.
+    pub async fn count_source_data(&self, source_id: &str) -> Result<(i64, i64)> {
+        let conv_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversations WHERE source_id = ?")
+                .bind(source_id)
+                .fetch_one(&self.pool)
+                .await?;
+
+        let msg_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM messages m
+             JOIN conversations c ON m.conversation_id = c.id
+             WHERE c.source_id = ?",
+        )
+        .bind(source_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok((conv_count.0, msg_count.0))
+    }
+
     /// Delete a conversation and all its messages.
     pub async fn delete_conversation(&self, id: Uuid) -> Result<()> {
         let id_str = id.to_string();
@@ -627,6 +647,152 @@ impl Database {
         }
 
         Ok(hits)
+    }
+
+    /// Optimized FTS schema initialization that checks integrity only when needed.
+    async fn ensure_fts_schema_optimized(&self) -> Result<()> {
+        // Check if we've already validated this database version
+        let fts_key = "fts_last_integrity_check_v1";
+        let last_check = self.get_search_state(fts_key).await?;
+
+        // Only run integrity check if: never checked, or DB was recently modified
+        let should_check = match last_check {
+            None => true,
+            Some(ts) => {
+                // Parse timestamp and check if > 1 hour old
+                match ts.parse::<i64>() {
+                    Ok(secs) => {
+                        let now = Utc::now().timestamp();
+                        (now - secs) > 3600 // Only check every hour
+                    }
+                    Err(_) => true,
+                }
+            }
+        };
+
+        if !should_check {
+            // Skip expensive checks, just ensure tables exist
+            self.ensure_fts_tables_exist().await?;
+            return Ok(());
+        }
+
+        // Run full check
+        self.ensure_fts_schema().await?;
+
+        // Mark as checked
+        self.set_search_state(fts_key, &Utc::now().timestamp().to_string())
+            .await?;
+
+        Ok(())
+    }
+
+    /// Ensure FTS tables exist without expensive integrity checks.
+    async fn ensure_fts_tables_exist(&self) -> Result<()> {
+        for table_name in ["messages_fts", "messages_code_fts"] {
+            let existing: Option<(String,)> =
+                sqlx::query_as("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
+                    .bind(table_name)
+                    .fetch_optional(&self.pool)
+                    .await?;
+
+            if existing.is_none() {
+                // Create table if missing
+                let (create_sql, trigger_sql, trigger_names) = match table_name {
+                    "messages_fts" => (
+                        r"
+                        CREATE VIRTUAL TABLE messages_fts USING fts5(
+                            content,
+                            content=messages,
+                            content_rowid=rowid,
+                            tokenize = 'porter',
+                            prefix = '2 3 4'
+                        );
+                        ",
+                        &[
+                            r"
+                            CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+                                INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                            END;
+                            ",
+                            r"
+                            CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+                                INSERT INTO messages_fts(messages_fts, rowid, content)
+                                VALUES('delete', OLD.rowid, OLD.content);
+                            END;
+                            ",
+                            r"
+                            CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+                                INSERT INTO messages_fts(messages_fts, rowid, content)
+                                VALUES('delete', OLD.rowid, OLD.content);
+                                INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                            END;
+                            ",
+                        ] as &[&str],
+                        &["messages_ai", "messages_ad", "messages_au"] as &[&str],
+                    ),
+                    "messages_code_fts" => (
+                        r#"
+                        CREATE VIRTUAL TABLE messages_code_fts USING fts5(
+                            content,
+                            content=messages,
+                            content_rowid=rowid,
+                            tokenize = "unicode61 tokenchars '_./:'",
+                            prefix = '2 3 4'
+                        );
+                        "#,
+                        &[
+                            r"
+                            CREATE TRIGGER messages_code_ai AFTER INSERT ON messages BEGIN
+                                INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+                            END;
+                            ",
+                            r"
+                            CREATE TRIGGER messages_code_ad AFTER DELETE ON messages BEGIN
+                                INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+                                VALUES('delete', OLD.rowid, OLD.content);
+                            END;
+                            ",
+                            r"
+                            CREATE TRIGGER messages_code_au AFTER UPDATE ON messages BEGIN
+                                INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
+                                VALUES('delete', OLD.rowid, OLD.content);
+                                INSERT INTO messages_code_fts(rowid, content)
+                                VALUES (NEW.rowid, NEW.content);
+                            END;
+                            ",
+                        ] as &[&str],
+                        &["messages_code_ai", "messages_code_ad", "messages_code_au"] as &[&str],
+                    ),
+                    _ => unreachable!(),
+                };
+
+                let mut conn = self.pool.acquire().await?;
+                for trigger in trigger_names {
+                    let drop_sql = format!("DROP TRIGGER IF EXISTS {trigger}");
+                    sqlx::raw_sql(&drop_sql).execute(&mut *conn).await?;
+                }
+                let drop_table = format!("DROP TABLE IF EXISTS {table_name}");
+                sqlx::raw_sql(&drop_table).execute(&mut *conn).await?;
+                sqlx::raw_sql(create_sql).execute(&mut *conn).await?;
+                for sql in trigger_sql {
+                    sqlx::raw_sql(sql).execute(&mut *conn).await?;
+                }
+
+                // Rebuild from existing messages
+                let messages_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
+                    .fetch_one(&self.pool)
+                    .await?;
+                if messages_count.0 > 0 {
+                    let rebuild =
+                        format!("INSERT INTO {table_name}({table_name}) VALUES('rebuild')");
+                    sqlx::raw_sql(&rebuild).execute(&self.pool).await?;
+                }
+
+                tracing::info!("Created FTS table {table_name}");
+            }
+        }
+
+        Ok(())
     }
 
     async fn ensure_fts_schema(&self) -> Result<()> {

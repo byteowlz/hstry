@@ -450,6 +450,13 @@ enum SourceCommand {
         #[arg(long)]
         input: Option<PathBuf>,
     },
+
+    /// Clean up duplicate sources (same adapter/path with different IDs)
+    Cleanup {
+        /// Remove duplicate sources automatically
+        #[arg(long)]
+        auto_remove: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1714,6 +1721,131 @@ async fn cmd_source(
                 });
             }
             println!("Removed source: {id}");
+        }
+        SourceCommand::Cleanup { auto_remove } => {
+            let sources = db.list_sources().await?;
+
+            // Group by (adapter, path_normalized)
+            use std::collections::HashMap;
+            let mut groups: HashMap<(String, String), Vec<hstry_core::models::Source>> =
+                HashMap::new();
+
+            for source in &sources {
+                let path_normalized = source
+                    .path
+                    .as_deref()
+                    .map(|p| p.trim_end_matches('/'))
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                groups
+                    .entry((source.adapter.clone(), path_normalized))
+                    .or_default()
+                    .push(source.clone());
+            }
+
+            // Find duplicates
+            let mut to_remove: Vec<String> = Vec::new();
+            let mut total_duplicates = 0usize;
+
+            for ((adapter, path), mut group) in groups {
+                if group.len() > 1 {
+                    total_duplicates += group.len() - 1;
+                    if !json {
+                        println!(
+                            "Found {n} duplicate sources for {adapter}:{path}",
+                            n = group.len(),
+                            adapter = adapter,
+                            path = path
+                        );
+                    }
+
+                    // Sort: keep the shortest/most canonical ID (e.g., "pi" over "pi-558c036f")
+                    group.sort_by(|a, b| {
+                        // Prefer non-generated IDs (shorter, no dashes)
+                        let a_score = if a.id.contains('-') { 2 } else { 0 };
+                        let b_score = if b.id.contains('-') { 2 } else { 0 };
+                        a_score.cmp(&b_score).then(a.id.len().cmp(&b.id.len()))
+                    });
+
+                    if !json {
+                        println!("  Keeping: {id}", id = group[0].id);
+                    }
+
+                    // Keep first, mark rest for removal
+                    for source in group.iter().skip(1) {
+                        to_remove.push(source.id.clone());
+                        if !json {
+                            println!(
+                                "  Would remove: {id} (path: {path})",
+                                id = source.id,
+                                path = source.path.as_deref().unwrap_or("-")
+                            );
+                        }
+                    }
+                }
+            }
+
+            if total_duplicates == 0 {
+                if !json {
+                    println!("No duplicate sources found.");
+                }
+                return Ok(());
+            }
+
+            if auto_remove {
+                if !json {
+                    println!(
+                        "\nRemoving {count} duplicate sources...",
+                        count = to_remove.len()
+                    );
+                }
+
+                let mut conversations_removed = 0i64;
+                let mut messages_removed = 0i64;
+
+                for source_id in &to_remove {
+                    // Get counts before removing
+                    let (conv_count, msg_count) =
+                        db.count_source_data(source_id).await.unwrap_or((0, 0));
+
+                    conversations_removed += conv_count;
+                    messages_removed += msg_count;
+
+                    db.remove_source(source_id).await?;
+                }
+
+                if !json {
+                    println!(
+                        "Removed {sources} sources, {convs} conversations, {msgs} messages",
+                        sources = to_remove.len(),
+                        convs = conversations_removed,
+                        msgs = messages_removed
+                    );
+                } else {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({
+                            "removed_sources": to_remove.len(),
+                            "removed_conversations": conversations_removed,
+                            "removed_messages": messages_removed,
+                            "source_ids": to_remove,
+                        })),
+                        error: None,
+                    });
+                }
+            } else {
+                if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({
+                            "duplicate_count": total_duplicates,
+                            "source_ids": to_remove,
+                        })),
+                        error: None,
+                    });
+                }
+            }
         }
     }
     Ok(())

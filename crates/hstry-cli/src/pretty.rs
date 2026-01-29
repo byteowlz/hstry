@@ -1,7 +1,7 @@
 //! Pretty terminal output formatting for hstry CLI.
 
 use chrono::{DateTime, Utc};
-use console::{style, Style, Term};
+use console::{Style, Term, style};
 use hstry_core::models::SearchHit;
 
 /// Icons - Nerd Font or ASCII fallback
@@ -15,9 +15,9 @@ impl Icons {
     fn detect() -> Self {
         if Self::has_nerd_font() {
             Self {
-                folder: "\u{f07b}",  // nf-fa-folder
-                clock: "\u{f017}",   // nf-fa-clock_o  
-                host: "\u{f108}",    // nf-fa-desktop
+                folder: "\u{f07b}", // nf-fa-folder
+                clock: "\u{f017}",  // nf-fa-clock_o
+                host: "\u{f108}",   // nf-fa-desktop
             }
         } else {
             Self {
@@ -33,7 +33,14 @@ impl Icons {
             return val != "0" && !val.is_empty();
         }
         if let Ok(term_prog) = std::env::var("TERM_PROGRAM") {
-            let modern = ["WezTerm", "Alacritty", "kitty", "iTerm.app", "Hyper", "ghostty"];
+            let modern = [
+                "WezTerm",
+                "Alacritty",
+                "kitty",
+                "iTerm.app",
+                "Hyper",
+                "ghostty",
+            ];
             if modern.iter().any(|t| term_prog.contains(t)) {
                 return true;
             }
@@ -131,9 +138,7 @@ fn colorize_snippet(s: &str) -> String {
         return s.replace("<b>", "").replace("</b>", "");
     }
 
-    let mut result = s
-        .replace("<b>", "\x1b[1;33m")
-        .replace("</b>", "\x1b[0m");
+    let mut result = s.replace("<b>", "\x1b[1;33m").replace("</b>", "\x1b[0m");
 
     // Clean up broken tags
     result = result.replace("<b", "").replace("</b", "\x1b[0m");

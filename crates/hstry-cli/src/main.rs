@@ -1389,7 +1389,7 @@ async fn cmd_search_fast(
     if dedup {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut seen = std::collections::HashSet::new();
         messages.retain(|hit| {
             let mut hasher = DefaultHasher::new();
@@ -1517,7 +1517,9 @@ enum SearchScopeArg {
     All,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize, PartialEq, Eq,
+)]
 #[serde(rename_all = "lowercase")]
 enum SearchRoleArg {
     User,
@@ -2207,9 +2209,15 @@ mod tests {
     #[test]
     fn is_system_context_detects_agents_md() {
         // Should detect AGENTS.md markers
-        assert!(is_system_context("# AGENTS.md\n\nGuidance for coding agents"));
-        assert!(is_system_context("Some text\n<available_skills>\n</available_skills>"));
-        assert!(is_system_context("# Agent Configuration\n\nSome instructions"));
+        assert!(is_system_context(
+            "# AGENTS.md\n\nGuidance for coding agents"
+        ));
+        assert!(is_system_context(
+            "Some text\n<available_skills>\n</available_skills>"
+        ));
+        assert!(is_system_context(
+            "# Agent Configuration\n\nSome instructions"
+        ));
         assert!(is_system_context("AGENTS.md instructions for the agent"));
 
         // Should NOT detect normal content
@@ -2461,7 +2469,10 @@ async fn cmd_dedup(
     let conversations = db.list_conversations(opts).await?;
 
     if !json {
-        println!("Scanning {} conversations for duplicates...", conversations.len());
+        println!(
+            "Scanning {} conversations for duplicates...",
+            conversations.len()
+        );
     }
 
     // Group conversations by a hash of their full content
@@ -2469,7 +2480,7 @@ async fn cmd_dedup(
 
     for conv in conversations {
         let messages = db.get_messages(conv.id).await?;
-        
+
         // Hash all message content for accurate dedup
         let mut hasher = DefaultHasher::new();
         conv.source_id.hash(&mut hasher);
@@ -3496,5 +3507,3 @@ fn run_mmry_add(
         Ok(Some(stdout))
     }
 }
-
-

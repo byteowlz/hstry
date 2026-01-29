@@ -78,9 +78,7 @@ pub async fn try_service_search(
     let port = if let Ok(value) = std::env::var("HSTRY_SERVICE_PORT") {
         value.parse::<u16>().ok()
     } else {
-        std::fs::read_to_string(service_port_path())
-            .ok()
-            .and_then(|value| value.trim().parse::<u16>().ok())
+        read_port_from_paths()
     };
 
     let Some(port) = port else {
@@ -104,6 +102,35 @@ pub async fn try_service_search(
         .map(hit_from_proto)
         .collect();
     Ok(Some(hits))
+}
+
+fn read_port_from_paths() -> Option<u16> {
+    let mut paths = Vec::new();
+
+    let primary = service_port_path();
+    paths.push(primary);
+
+    if let Some(home) = dirs::home_dir() {
+        let state_fallback = home
+            .join(".local")
+            .join("state")
+            .join("hstry")
+            .join("service.port");
+        paths.push(state_fallback);
+
+        let config_fallback = home.join(".config").join("hstry").join("service.port");
+        paths.push(config_fallback);
+    }
+
+    for path in paths {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(port) = content.trim().parse::<u16>() {
+                return Some(port);
+            }
+        }
+    }
+
+    None
 }
 
 fn ts_ms(dt: Option<DateTime<Utc>>) -> i64 {

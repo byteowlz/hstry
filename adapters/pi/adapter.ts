@@ -4,11 +4,13 @@
  * Parses Pi session logs stored as JSONL files in ~/.pi/agent/sessions
  * 
  * Pi uses an append-only tree structure where entries are linked via id/parentId.
- * Sessions are organized by workspace directory.
+ * Sessions are organized by workspace directory. This adapter scans all
+ * available sessions under the source path and uses the session header's
+ * cwd as the workspace.
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
-import { basename, extname, join } from 'path';
+import { basename, dirname, extname, join } from 'path';
 import { homedir } from 'os';
 import type {
   Adapter,
@@ -129,7 +131,7 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
-    const files = await findJsonlFiles(path, { shallowOnly: true });
+    const files = await findJsonlFiles(path, { shallowOnly: false });
     if (files.length === 0) return null;
 
     // Check if any file looks like a Pi session (has session header with cwd)
@@ -600,7 +602,6 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
     if (!header) continue;
 
     const messages = extractMessages(entries, opts?.includeTools ?? true);
-    if (messages.length === 0) continue;
 
     const timestamps = messages
       .map(msg => msg.createdAt)
@@ -609,7 +610,9 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
     const createdAt = timestamps.length > 0 
       ? Math.min(...timestamps) 
       : parseTimestamp(header.timestamp) ?? Date.now();
-    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : undefined;
+    const updatedAt = timestamps.length > 0
+      ? Math.max(...timestamps)
+      : parseTimestamp(header.timestamp);
 
     // Skip if both createdAt AND updatedAt are before the since filter
     // This ensures we re-import sessions that were modified (e.g., renamed) after last sync
@@ -635,7 +638,7 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       title,
       createdAt,
       updatedAt,
-      workspace: header.cwd,
+      workspace: header.cwd || decodeWorkspaceFromPath(filePath),
       model,
       tokensIn,
       tokensOut,
@@ -672,45 +675,37 @@ async function findJsonlFiles(
 
   if (!stats.isDirectory()) return files;
 
-  // Pi organizes sessions in subdirectories named after the encoded cwd
-  // e.g., ~/.pi/agent/sessions/--Users-foo-project--/timestamp_uuid.jsonl
-  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
-  
-  for (const entry of entries) {
-    const entryPath = join(path, entry.name);
+  const maxDepth = opts.shallowOnly ? 1 : Infinity;
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: path, depth: 0 }];
 
-    if (entry.isFile() && extname(entry.name) === '.jsonl') {
-      files.push(entryPath);
-      continue;
-    }
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
 
-    if (entry.isDirectory()) {
-      // Search one level deep into workspace directories
-      const nested = await readdir(entryPath, { withFileTypes: true }).catch(() => []);
-      for (const child of nested) {
-        if (child.isFile() && extname(child.name) === '.jsonl') {
-          files.push(join(entryPath, child.name));
-        }
+    const entries = await readdir(current.dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const entryPath = join(current.dir, entry.name);
+
+      if (entry.isFile() && extname(entry.name) === '.jsonl') {
+        files.push(entryPath);
+        continue;
       }
 
-      if (!opts.shallowOnly) {
-        // Search deeper for any additional nesting
-        for (const child of nested) {
-          if (child.isDirectory()) {
-            const deepPath = join(entryPath, child.name);
-            const deepEntries = await readdir(deepPath, { withFileTypes: true }).catch(() => []);
-            for (const deepEntry of deepEntries) {
-              if (deepEntry.isFile() && extname(deepEntry.name) === '.jsonl') {
-                files.push(join(deepPath, deepEntry.name));
-              }
-            }
-          }
-        }
+      if (entry.isDirectory() && current.depth < maxDepth) {
+        queue.push({ dir: entryPath, depth: current.depth + 1 });
       }
     }
   }
 
   return files;
+}
+
+function decodeWorkspaceFromPath(filePath: string): string | undefined {
+  const dirName = basename(dirname(filePath));
+  if (!dirName.startsWith('--') || !dirName.endsWith('--')) return undefined;
+  const encoded = dirName.slice(2, -2);
+  if (!encoded) return undefined;
+  return `/${encoded.replace(/-/g, '/')}`;
 }
 
 runAdapter(adapter);

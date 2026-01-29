@@ -8,6 +8,8 @@
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
+### [trx-t8dh] Pi adapter scan all sessions + service port fallback (P2, task)
+
 ### [trx-fycz] Conflict policy: dedupe by message_id + session_id, prefer newest updated_at (P2, task)
 
 ### [trx-g7af] Integration with mmry for memory extraction (P2, feature)

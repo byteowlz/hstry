@@ -5,11 +5,15 @@ Universal AI chat history database. Aggregates conversations from multiple AI to
 ## Features
 
 - Import chat history from multiple sources via pluggable TypeScript adapters
+- One-off imports from files or directories with auto-detection
 - Full-text search with separate indexes for natural language and code
-- Filter by source, workspace, or time range
+- Filter by source, workspace, role, and local/remote scope
+- Remote sync and search over SSH
 - Background service for automatic syncing
+- Optional terminal UI (`hstry-tui`) for interactive browsing
 - Incremental adapter parsing with cursor-based batching
-- Export memories to mmry for semantic search
+- Export conversations to adapter formats (markdown/json, pi, opencode, codex, claude-code, etc.)
+- Deduplicate conversations and export memories to mmry
 - JSON output for scripting and MCP integration
 
 ## Installation
@@ -36,6 +40,9 @@ hstry source add ~/.codex/sessions
 # Sync all sources
 hstry sync
 
+# Import a one-off export directory
+hstry import ~/Downloads/chatgpt-export
+
 # Search your history
 hstry search "how to parse JSON"
 
@@ -44,6 +51,9 @@ hstry list --limit 10
 
 # View a specific conversation
 hstry show <conversation-id>
+
+# Export a conversation to markdown
+hstry export --format markdown --conversations <conversation-id> --output ./conversation.md
 ```
 
 ## Commands
@@ -52,13 +62,19 @@ hstry show <conversation-id>
 |---------|-------------|
 | `scan` | Detect chat history sources on the system |
 | `sync` | Import conversations from all configured sources |
+| `import <path>` | One-off import with auto-detected adapter |
 | `search <query>` | Full-text search across all messages |
 | `index` | Build or refresh the search index |
 | `list` | List conversations with optional filters |
 | `show <id>` | Display a conversation with all messages |
+| `export` | Export conversations to markdown/json or adapter format |
+| `dedup` | Deduplicate conversations in the database |
 | `source add/list/remove` | Manage import sources |
-| `adapters` | List, enable, or disable adapters |
-| `service start/stop/status` | Control background sync service |
+| `adapters list/add/enable/disable/update` | Manage adapters and updates |
+| `adapters repo ...` | Manage adapter repositories (git/archive/local) |
+| `remote add/list/remove/test/fetch/sync/status` | Manage remote hosts and sync |
+| `service enable/disable/start/run/restart/stop/status` | Control background sync service |
+| `config show/path/edit` | Manage configuration |
 | `stats` | Show database statistics |
 | `mmry extract` | Export memories to mmry |
 
@@ -70,6 +86,15 @@ The search command auto-detects query type:
 - **Code**: Preserves underscores, dots, and path separators
 
 Force a mode with `--mode natural` or `--mode code`.
+
+Scope and filters:
+
+- `--scope local|remote|all` (default: local)
+- `--remote <name>` to target specific remotes
+- `--source`, `--workspace`, `--role` filters
+- `--no-tools` to exclude tool calls
+- `--dedup` to collapse similar results
+- `--include-system` to include system context (AGENTS.md, etc.)
 
 ## Configuration
 
@@ -95,12 +120,13 @@ search_api = true
 index_batch_size = 500
 ```
 
-See `examples/config.toml` for all options.
+See `examples/config.toml` for all options. Use `hstry config show/path/edit` for config management.
 
 ## Service + API
 
 `hstry service` runs a local daemon that keeps the search index warm and exposes a
 local-only gRPC search endpoint. The CLI prefers the service when it is running.
+Use `hstry service enable/disable/start/run/restart/stop/status` to manage it.
 
 The optional `hstry-api` binary serves a local HTTP API (default `http://127.0.0.1:3000`)
 for external integrations (e.g., Octo).
@@ -108,17 +134,53 @@ for external integrations (e.g., Octo).
 Override service usage with `HSTRY_NO_SERVICE=1`. Override the API URL with
 `HSTRY_API_URL` or disable API usage with `HSTRY_NO_API=1`.
 
+## Remote Sync
+
+hstry can sync and search remote databases over SSH. Remotes require `hstry` to
+be installed on the host.
+
+```bash
+# Add a remote host
+hstry remote add laptop user@laptop
+
+# Verify connectivity
+hstry remote test laptop
+
+# Fetch the remote database into the local cache
+hstry remote fetch --remote laptop
+
+# Search only remote results
+hstry search "auth error" --scope remote --remote laptop
+
+# Sync (merge) remote history into the local database
+hstry remote sync --remote laptop --direction pull
+```
+
+## Terminal UI
+
+Use the optional `hstry-tui` binary for an interactive, three-pane browser.
+
+```bash
+cargo install --path crates/hstry-tui
+hstry-tui
+```
+
 ## Supported Sources
 
-### Coding Agents (automatic local storage)
+### Local Agents & Apps (automatic local storage)
 
 | Adapter | Default Path | Description |
 |---------|--------------|-------------|
 | `claude-code` | `~/.claude/projects` | Claude Code CLI |
 | `codex` | `~/.codex/sessions` | OpenAI Codex CLI |
+| `cursor` | `Cursor workspaceStorage` (platform-specific) | Cursor (state.vscdb) |
 | `opencode` | `~/.local/share/opencode` | OpenCode |
 | `pi` | `~/.pi/agent/sessions` | Pi coding agent |
 | `aider` | Project directories | Aider (finds `.aider.chat.history.md`) |
+| `goose` | `~/.local/share/goose/sessions` | Goose (SQLite/JSONL) |
+| `jan` | `~/jan/threads` | Jan.ai |
+| `lmstudio` | `~/.cache/lm-studio/conversations` | LM Studio |
+| `openwebui` | `~/.open-webui/data` (or `/app/backend/data`) | Open WebUI |
 
 ### Web Exports (manual download)
 
@@ -137,7 +199,12 @@ Adapters are TypeScript modules that parse chat history from specific tools. Eac
 - `detect(path)` - Check if a path contains valid data
 - `parse(path, options)` - Extract conversations and messages
 
-Add custom adapters by placing them in `adapter_paths`.
+Add custom adapters by placing them in `adapter_paths`, or manage repositories with:
+
+```bash
+hstry adapters repo add-git community https://example.com/adapters.git
+hstry adapters update
+```
 
 ## Workspace Structure
 
@@ -158,6 +225,10 @@ just check-all  # Format, lint, and test
 just test       # Run tests only
 just clippy     # Lint only
 ```
+
+## Attribution
+
+This project is inspired by and references ideas from **cross-agent-session-search (cass)** by Jeffrey Emanuel. Source: https://github.com/Dicklesworthstone/coding_agent_session_search (MIT License).
 
 ## License
 

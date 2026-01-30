@@ -351,7 +351,7 @@ impl Database {
             sql.push_str(" AND created_at > ?");
         }
 
-        sql.push_str(" ORDER BY created_at DESC");
+        sql.push_str(" ORDER BY COALESCE(updated_at, created_at) DESC");
 
         if let Some(limit) = opts.limit {
             let _ = write!(sql, " LIMIT {limit}");
@@ -401,7 +401,7 @@ impl Database {
             sql.push_str(" AND c.created_at > ?");
         }
 
-        sql.push_str(" ORDER BY c.created_at DESC");
+        sql.push_str(" ORDER BY COALESCE(c.updated_at, c.created_at) DESC");
 
         if let Some(limit) = opts.limit {
             let _ = write!(sql, " LIMIT {limit}");

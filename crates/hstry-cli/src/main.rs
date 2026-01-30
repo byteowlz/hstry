@@ -886,7 +886,10 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
     for source in &config.sources {
         let existing = db.get_source(&source.id).await?;
         let expanded_path = hstry_core::Config::expand_path(&source.path);
-        let normalized_path = expanded_path.to_string_lossy().trim_end_matches('/').to_string();
+        let normalized_path = expanded_path
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .to_string();
         let entry = match existing {
             Some(mut entry) => {
                 let mut reset = false;
@@ -2471,6 +2474,8 @@ async fn cmd_export(
     };
 
     // Load conversations from database
+    // Apply fuzzy matching for workspace filter (wrap with % for SQL LIKE)
+    let workspace_filter = workspace_filter.map(|value| format!("%{value}%"));
     let conversations = if conversations_arg == "all" {
         db.list_conversations(ListConversationsOptions {
             source_id: source_filter.clone(),

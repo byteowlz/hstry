@@ -320,6 +320,107 @@ pub fn print_search_results(hits: &[SearchHit]) {
     );
 }
 
+/// Print conversations in a nice table format.
+pub fn print_conversations(conversations: &[hstry_core::models::Conversation]) {
+    if conversations.is_empty() {
+        println!("{}", style("No conversations found.").dim());
+        return;
+    }
+
+    let width = term_width();
+    let inner = width - 2;
+    let header_text = format!(" {} conversation(s) ", conversations.len());
+    let padding = inner.saturating_sub(header_text.len());
+
+    // Header
+    println!(
+        "{}{}{}",
+        style("╭").dim(),
+        style("─".repeat(inner)).dim(),
+        style("╮").dim()
+    );
+    println!(
+        "{}{}{}{}",
+        style("│").dim(),
+        style(&header_text).bold(),
+        " ".repeat(padding),
+        style("│").dim()
+    );
+    println!(
+        "{}{}{}",
+        style("├").dim(),
+        style("─".repeat(inner)).dim(),
+        style("┤").dim()
+    );
+
+    let icons = Icons::detect();
+
+    for (i, conv) in conversations.iter().enumerate() {
+        // Separator between items
+        if i > 0 {
+            println!(
+                "{}{}{}",
+                style("├").dim(),
+                style("─".repeat(inner)).dim(),
+                style("┤").dim()
+            );
+        }
+
+        // Line 1: metadata (source, workspace, date)
+        let source = style(&conv.source_id).cyan();
+        let date = relative_time_short(conv.created_at);
+
+        let ws_max = width.saturating_sub(40).max(20);
+        let ws = conv
+            .workspace
+            .as_ref()
+            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
+            .unwrap_or_default();
+
+        let date_str = format!("{} {}", icons.clock, date);
+
+        let line1 = format!(
+            "{} {} {} {}",
+            style("│").dim(),
+            source,
+            style(&ws).dim(),
+            style(date_str).dim().italic()
+        );
+        println!("{}", pad_line(&line1, width));
+
+        // Line 2: title
+        let title = conv.title.as_deref().unwrap_or("(untitled)");
+        let clean: String = title
+            .chars()
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let max_title = inner.saturating_sub(2);
+        let display = if clean.len() > max_title {
+            format!("{}...", &clean[..max_title.saturating_sub(3)])
+        } else {
+            clean
+        };
+        let line2 = format!("{} {}", style("│").dim(), style(display).bold());
+        println!("{}", pad_line(&line2, width));
+
+        // Line 3: ID (dimmed, for copy/paste)
+        let id_line = format!("{} {}", style("│").dim(), style(conv.id).dim());
+        println!("{}", pad_line(&id_line, width));
+    }
+
+    // Footer
+    println!(
+        "{}{}{}",
+        style("╰").dim(),
+        style("─".repeat(inner)).dim(),
+        style("╯").dim()
+    );
+}
+
 /// Print search results in TSV format (for piping/scripting).
 #[expect(dead_code)]
 pub fn print_search_results_compact(hits: &[SearchHit]) {

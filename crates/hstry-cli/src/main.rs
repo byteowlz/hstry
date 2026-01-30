@@ -1561,18 +1561,7 @@ async fn cmd_list(
         });
     }
 
-    if conversations.is_empty() {
-        println!("No conversations found.");
-        return Ok(());
-    }
-
-    for conv in conversations {
-        let title = truncate_title(conv.title.as_deref().unwrap_or("(untitled)"), 60);
-        let date = conv.created_at.format("%Y-%m-%d %H:%M");
-        let agent = conv.source_id.as_str();
-        let workspace = pretty::short_path(conv.workspace.as_deref().unwrap_or("-"), 30);
-        println!("{title:<60} | {date} | {agent:<12} | {workspace}",);
-    }
+    pretty::print_conversations(&conversations);
 
     Ok(())
 }

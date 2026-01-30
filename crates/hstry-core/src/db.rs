@@ -447,6 +447,90 @@ impl Database {
         Ok((conv_count.0, msg_count.0))
     }
 
+    /// Get detailed statistics per source.
+    pub async fn get_source_stats(&self) -> Result<Vec<SourceStats>> {
+        let rows = sqlx::query(
+            r"
+            SELECT
+                s.id as source_id,
+                s.adapter,
+                COUNT(DISTINCT c.id) as conversations,
+                COUNT(m.id) as messages,
+                MIN(c.created_at) as oldest,
+                MAX(c.created_at) as newest,
+                s.last_sync_at
+            FROM sources s
+            LEFT JOIN conversations c ON c.source_id = s.id
+            LEFT JOIN messages m ON m.conversation_id = c.id
+            GROUP BY s.id, s.adapter, s.last_sync_at
+            ORDER BY conversations DESC
+            ",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut stats = Vec::new();
+        for row in rows {
+            stats.push(SourceStats {
+                source_id: row.get("source_id"),
+                adapter: row.get("adapter"),
+                conversations: row.get::<i64, _>("conversations"),
+                messages: row.get::<i64, _>("messages"),
+                oldest: row
+                    .get::<Option<i64>, _>("oldest")
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|dt| dt.with_timezone(&Utc)),
+                newest: row
+                    .get::<Option<i64>, _>("newest")
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|dt| dt.with_timezone(&Utc)),
+                last_sync_at: row
+                    .get::<Option<i64>, _>("last_sync_at")
+                    .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                    .map(|dt| dt.with_timezone(&Utc)),
+            });
+        }
+        Ok(stats)
+    }
+
+    /// Get activity stats (conversations per day/week/month).
+    pub async fn get_activity_stats(&self, days: i64) -> Result<ActivityStats> {
+        let cutoff = Utc::now() - chrono::Duration::days(days);
+        let cutoff_ts = cutoff.timestamp();
+
+        let today_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversations WHERE created_at >= ?")
+                .bind((Utc::now() - chrono::Duration::days(1)).timestamp())
+                .fetch_one(&self.pool)
+                .await?;
+
+        let week_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversations WHERE created_at >= ?")
+                .bind((Utc::now() - chrono::Duration::days(7)).timestamp())
+                .fetch_one(&self.pool)
+                .await?;
+
+        let month_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversations WHERE created_at >= ?")
+                .bind((Utc::now() - chrono::Duration::days(30)).timestamp())
+                .fetch_one(&self.pool)
+                .await?;
+
+        let period_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversations WHERE created_at >= ?")
+                .bind(cutoff_ts)
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(ActivityStats {
+            today: today_count.0,
+            week: week_count.0,
+            month: month_count.0,
+            period: period_count.0,
+            period_days: days,
+        })
+    }
+
     /// Delete a conversation and all its messages.
     pub async fn delete_conversation(&self, id: Uuid) -> Result<()> {
         let id_str = id.to_string();
@@ -993,6 +1077,28 @@ impl Database {
         tracing::info!("Rebuilt FTS table {name}");
         Ok(())
     }
+}
+
+/// Statistics for a single source.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceStats {
+    pub source_id: String,
+    pub adapter: String,
+    pub conversations: i64,
+    pub messages: i64,
+    pub oldest: Option<chrono::DateTime<Utc>>,
+    pub newest: Option<chrono::DateTime<Utc>>,
+    pub last_sync_at: Option<chrono::DateTime<Utc>>,
+}
+
+/// Activity statistics over time periods.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActivityStats {
+    pub today: i64,
+    pub week: i64,
+    pub month: i64,
+    pub period: i64,
+    pub period_days: i64,
 }
 
 /// Options for listing conversations.

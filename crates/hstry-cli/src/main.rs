@@ -88,6 +88,8 @@ struct StatsSummary {
     sources: i64,
     conversations: i64,
     messages: i64,
+    per_source: Vec<hstry_core::db::SourceStats>,
+    activity: hstry_core::db::ActivityStats,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -2569,6 +2571,8 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
     let conv_count = db.count_conversations().await?;
     let msg_count = db.count_messages().await?;
     let sources_count = i64::try_from(sources.len()).unwrap_or(i64::MAX);
+    let per_source = db.get_source_stats().await?;
+    let activity = db.get_activity_stats(30).await?;
 
     if json {
         return emit_json(JsonResponse {
@@ -2577,17 +2581,64 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
                 sources: sources_count,
                 conversations: conv_count,
                 messages: msg_count,
+                per_source,
+                activity,
             }),
             error: None,
         });
     }
 
-    println!("Database Statistics");
-    println!("-------------------");
-    let sources_len = sources.len();
-    println!("Sources:       {sources_len}");
-    println!("Conversations: {conv_count}");
-    println!("Messages:      {msg_count}");
+    // Header
+    println!("\x1b[1mDatabase Statistics\x1b[0m");
+    println!();
+
+    // Totals
+    println!("\x1b[1;34mTotals\x1b[0m");
+    println!("  Sources:       {sources_count}");
+    println!("  Conversations: {conv_count}");
+    println!("  Messages:      {msg_count}");
+    println!();
+
+    // Activity
+    println!("\x1b[1;34mActivity\x1b[0m");
+    println!("  Today:      {:>6} conversations", activity.today);
+    println!("  This week:  {:>6} conversations", activity.week);
+    println!("  This month: {:>6} conversations", activity.month);
+    println!();
+
+    // Per-source stats
+    if !per_source.is_empty() {
+        println!("\x1b[1;34mPer Source\x1b[0m");
+        println!(
+            "  {:<15} {:<12} {:>8} {:>10} {:>12}",
+            "SOURCE", "ADAPTER", "CONVS", "MSGS", "LAST SYNC"
+        );
+        println!("  {}", "-".repeat(60));
+        for stats in &per_source {
+            let last_sync = stats
+                .last_sync_at
+                .map(|dt| pretty::relative_time_short(dt))
+                .unwrap_or_else(|| "never".to_string());
+            println!(
+                "  {:<15} {:<12} {:>8} {:>10} {:>12}",
+                truncate_title(&stats.source_id, 15),
+                truncate_title(&stats.adapter, 12),
+                stats.conversations,
+                stats.messages,
+                last_sync
+            );
+        }
+        println!();
+    }
+
+    // Date range
+    let oldest = per_source.iter().filter_map(|s| s.oldest).min();
+    let newest = per_source.iter().filter_map(|s| s.newest).max();
+    if let (Some(oldest), Some(newest)) = (oldest, newest) {
+        println!("\x1b[1;34mDate Range\x1b[0m");
+        println!("  Oldest: {}", oldest.format("%Y-%m-%d"));
+        println!("  Newest: {}", newest.format("%Y-%m-%d"));
+    }
 
     Ok(())
 }

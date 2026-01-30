@@ -58,7 +58,7 @@ fn term_width() -> usize {
 }
 
 /// Format a short relative time string.
-fn relative_time_short(dt: DateTime<Utc>) -> String {
+pub fn relative_time_short(dt: DateTime<Utc>) -> String {
     let now = Utc::now();
     let duration = now.signed_duration_since(dt);
 

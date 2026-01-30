@@ -211,6 +211,14 @@ fn truncate_middle(value: &str, max_len: usize) -> String {
     format!("{head}...{tail}")
 }
 
+fn pad_visible(value: &str, width: usize) -> String {
+    let visible_len = console::measure_text_width(value);
+    if visible_len >= width {
+        return value.to_string();
+    }
+    format!("{}{}", value, " ".repeat(width - visible_len))
+}
+
 /// Print search results in a compact format.
 pub fn print_search_results(hits: &[SearchHit]) {
     if hits.is_empty() {
@@ -400,7 +408,6 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         }
 
         // Single line: title | workdir | time | agent | id
-        let agent = style(&conv.source_id).cyan();
         let date = relative_time_short(conv.created_at);
         let date_str = format!("{} {}", icons.clock, date);
         let id_short = conv.id.to_string()[..8].to_string();
@@ -420,11 +427,11 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let fixed_width = console::measure_text_width(&format!(
-            "{} | {} | {}",
-            date_str, conv.source_id, id_short
-        ));
-        let available = inner.saturating_sub(fixed_width).saturating_sub(8);
+        let time_width = 8usize;
+        let agent_width = 12usize;
+        let id_width = 8usize;
+        let separator_width = 3usize * 4; // " | " * 4
+        let available = inner.saturating_sub(time_width + agent_width + id_width + separator_width);
         let title_max = (available * 2 / 3).max(12);
         let workdir_max = available.saturating_sub(title_max).max(10);
 
@@ -441,14 +448,20 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         };
         let workdir_display = truncate_middle(&workdir_raw, workdir_max);
 
+        let title_cell = pad_visible(&title_display, title_max);
+        let workdir_cell = pad_visible(&workdir_display, workdir_max);
+        let time_cell = pad_visible(&date_str, time_width);
+        let agent_cell = pad_visible(&conv.source_id, agent_width);
+        let id_cell = pad_visible(&id_short, id_width);
+
         let line = format!(
             "{} {} | {} | {} | {} | {}",
             style("│").dim(),
-            style(title_display).bold(),
-            style(workdir_display).dim(),
-            style(date_str).dim().italic(),
-            agent,
-            style(id_short).dim()
+            style(title_cell).bold(),
+            style(workdir_cell).dim(),
+            style(time_cell).dim().italic(),
+            style(agent_cell).cyan(),
+            style(id_cell).dim()
         );
         println!("{}", pad_line(&line, width));
     }

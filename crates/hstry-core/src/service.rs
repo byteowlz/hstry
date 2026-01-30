@@ -123,10 +123,10 @@ fn read_port_from_paths() -> Option<u16> {
     }
 
     for path in paths {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(port) = content.trim().parse::<u16>() {
-                return Some(port);
-            }
+        if let Ok(content) = std::fs::read_to_string(&path)
+            && let Ok(port) = content.trim().parse::<u16>()
+        {
+            return Some(port);
         }
     }
 

@@ -165,13 +165,8 @@ fn default_adapters_path() -> String {
 
 impl Default for Config {
     fn default() -> Self {
-        let data_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("hstry");
-
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("hstry");
+        let data_dir = xdg_data_dir().join("hstry");
+        let config_dir = xdg_config_dir().join("hstry");
 
         // Include both user config adapters and system-wide adapters
         // Also check for adapters in the executable's directory for dev mode
@@ -262,10 +257,7 @@ impl Config {
 
     /// Get the default config file path.
     pub fn default_config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("hstry")
-            .join("config.toml")
+        xdg_config_dir().join("hstry").join("config.toml")
     }
 
     /// Save configuration to a specific file path.
@@ -393,6 +385,38 @@ impl Default for ServiceConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Get XDG-compliant config directory.
+/// Checks `$XDG_CONFIG_HOME` first, then falls back to platform default.
+fn xdg_config_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
+    }
+    // Fallback: ~/.config on Unix, platform default elsewhere
+    if cfg!(unix) {
+        dirs::home_dir().map_or_else(|| PathBuf::from("."), |h| h.join(".config"))
+    } else {
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// Get XDG-compliant data directory.
+/// Checks `$XDG_DATA_HOME` first, then falls back to `~/.local/share`.
+fn xdg_data_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
+    }
+    // Fallback: ~/.local/share on Unix, platform default elsewhere
+    if cfg!(unix) {
+        dirs::home_dir().map_or_else(|| PathBuf::from("."), |h| h.join(".local").join("share"))
+    } else {
+        dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 #[cfg(test)]

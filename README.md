@@ -98,6 +98,14 @@ Scope and filters:
 
 ## Configuration
 
+hstry follows XDG Base Directory specifications:
+
+| Directory | Default | Environment Override |
+|-----------|---------|---------------------|
+| Config | `~/.config/hstry/` | `$XDG_CONFIG_HOME/hstry/` |
+| Data | `~/.local/share/hstry/` | `$XDG_DATA_HOME/hstry/` |
+| State | `~/.local/state/hstry/` | `$XDG_STATE_HOME/hstry/` |
+
 Default config: `~/.config/hstry/config.toml`
 
 ```toml

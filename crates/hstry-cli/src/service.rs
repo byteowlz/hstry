@@ -201,9 +201,25 @@ pub struct ServiceStatus {
 }
 
 fn service_state_dir() -> PathBuf {
-    let state_dir = dirs::state_dir()
-        .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")));
+    let state_dir = xdg_state_dir();
     state_dir.join("hstry")
+}
+
+/// Get XDG-compliant state directory.
+/// Checks `$XDG_STATE_HOME` first, then falls back to `~/.local/state`.
+fn xdg_state_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_STATE_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
+    }
+    // Fallback: ~/.local/state on Unix, platform default elsewhere
+    if cfg!(unix) {
+        dirs::home_dir().map_or_else(|| PathBuf::from("."), |h| h.join(".local").join("state"))
+    } else {
+        dirs::state_dir()
+            .unwrap_or_else(|| dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")))
+    }
 }
 
 fn pid_file_path() -> PathBuf {

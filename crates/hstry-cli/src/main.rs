@@ -1573,6 +1573,7 @@ async fn cmd_list(
     limit: i64,
     json: bool,
 ) -> Result<()> {
+    let workspace = workspace.map(|value| format!("%{value}%"));
     let opts = hstry_core::db::ListConversationsOptions {
         source_id: source,
         workspace,
@@ -1580,9 +1581,8 @@ async fn cmd_list(
         limit: Some(limit),
     };
 
-    let conversations = db.list_conversations(opts).await?;
-
     if json {
+        let conversations = db.list_conversations(opts).await?;
         return emit_json(JsonResponse {
             ok: true,
             result: Some(conversations),
@@ -1590,7 +1590,25 @@ async fn cmd_list(
         });
     }
 
-    pretty::print_conversations(&conversations);
+    let previews = db.list_conversation_previews(opts).await?;
+    let display = previews
+        .into_iter()
+        .map(|preview| {
+            let title = display_title_for_list(
+                preview.conversation.title.as_deref(),
+                preview.first_user_message.as_deref(),
+            );
+            pretty::ConversationDisplay {
+                id: preview.conversation.id,
+                source_id: preview.conversation.source_id,
+                workspace: preview.conversation.workspace,
+                created_at: preview.conversation.created_at,
+                title,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    pretty::print_conversations(&display);
 
     Ok(())
 }
@@ -2360,6 +2378,23 @@ fn truncate_title(title: &str, max_len: usize) -> String {
     } else {
         let truncated: String = collapsed.chars().take(max_len.saturating_sub(3)).collect();
         format!("{truncated}...")
+    }
+}
+
+fn display_title_for_list(title: Option<&str>, first_user: Option<&str>) -> String {
+    let title = title.unwrap_or("");
+    let first_user = first_user.unwrap_or("");
+
+    if title.is_empty() || is_system_context(title) {
+        if !first_user.trim().is_empty() {
+            return first_user.to_string();
+        }
+    }
+
+    if title.trim().is_empty() {
+        "(untitled)".to_string()
+    } else {
+        title.to_string()
     }
 }
 

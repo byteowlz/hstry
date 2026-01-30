@@ -65,7 +65,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | `import <path>` | One-off import with auto-detected adapter |
 | `search <query>` | Full-text search across all messages |
 | `index` | Build or refresh the search index |
-| `list` | List conversations with optional filters |
+| `list` | List conversations with optional filters (workspace uses substring match) |
 | `show <id>` | Display a conversation with all messages |
 | `export` | Export conversations to markdown/json or adapter format |
 | `dedup` | Deduplicate conversations in the database |

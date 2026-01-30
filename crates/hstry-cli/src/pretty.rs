@@ -11,6 +11,16 @@ struct Icons {
     host: &'static str,
 }
 
+/// Conversation display data for list output.
+#[derive(Debug, Clone)]
+pub struct ConversationDisplay {
+    pub id: uuid::Uuid,
+    pub source_id: String,
+    pub workspace: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub title: String,
+}
+
 impl Icons {
     fn detect() -> Self {
         if Self::has_nerd_font() {
@@ -321,7 +331,7 @@ pub fn print_search_results(hits: &[SearchHit]) {
 }
 
 /// Print conversations in a nice table format.
-pub fn print_conversations(conversations: &[hstry_core::models::Conversation]) {
+pub fn print_conversations(conversations: &[ConversationDisplay]) {
     if conversations.is_empty() {
         println!("{}", style("No conversations found.").dim());
         return;
@@ -366,9 +376,11 @@ pub fn print_conversations(conversations: &[hstry_core::models::Conversation]) {
             );
         }
 
-        // Line 1: metadata (source, workspace, date)
+        // Single line: source, workspace, date, title, id
         let source = style(&conv.source_id).cyan();
         let date = relative_time_short(conv.created_at);
+        let date_str = format!("{} {}", icons.clock, date);
+        let id_short = conv.id.to_string()[..8].to_string();
 
         let ws_max = width.saturating_sub(40).max(20);
         let ws = conv
@@ -377,20 +389,8 @@ pub fn print_conversations(conversations: &[hstry_core::models::Conversation]) {
             .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
             .unwrap_or_default();
 
-        let date_str = format!("{} {}", icons.clock, date);
-
-        let line1 = format!(
-            "{} {} {} {}",
-            style("│").dim(),
-            source,
-            style(&ws).dim(),
-            style(date_str).dim().italic()
-        );
-        println!("{}", pad_line(&line1, width));
-
-        // Line 2: title
-        let title = conv.title.as_deref().unwrap_or("(untitled)");
-        let clean: String = title
+        let clean: String = conv
+            .title
             .chars()
             .map(|c| if c.is_whitespace() { ' ' } else { c })
             .collect::<String>()
@@ -398,18 +398,25 @@ pub fn print_conversations(conversations: &[hstry_core::models::Conversation]) {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let max_title = inner.saturating_sub(2);
+        let prefix = format!("{} {} {} ", style("│").dim(), source, style(&ws).dim());
+        let suffix = format!(
+            " {} {}",
+            style(date_str).dim().italic(),
+            style(id_short).dim()
+        );
+        let max_title = inner
+            .saturating_sub(console::measure_text_width(&prefix))
+            .saturating_sub(console::measure_text_width(&suffix))
+            .saturating_sub(2);
+
         let display = if clean.len() > max_title {
             format!("{}...", &clean[..max_title.saturating_sub(3)])
         } else {
             clean
         };
-        let line2 = format!("{} {}", style("│").dim(), style(display).bold());
-        println!("{}", pad_line(&line2, width));
 
-        // Line 3: ID (dimmed, for copy/paste)
-        let id_line = format!("{} {}", style("│").dim(), style(conv.id).dim());
-        println!("{}", pad_line(&id_line, width));
+        let line = format!("{prefix}{}{suffix}", style(display).bold());
+        println!("{}", pad_line(&line, width));
     }
 
     // Footer

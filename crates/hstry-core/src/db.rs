@@ -340,8 +340,12 @@ impl Database {
         if opts.source_id.is_some() {
             sql.push_str(" AND source_id = ?");
         }
-        if opts.workspace.is_some() {
-            sql.push_str(" AND workspace = ?");
+        if let Some(ref workspace) = opts.workspace {
+            if is_like_pattern(workspace) {
+                sql.push_str(" AND workspace LIKE ?");
+            } else {
+                sql.push_str(" AND workspace = ?");
+            }
         }
         if opts.after.is_some() {
             sql.push_str(" AND created_at > ?");
@@ -372,6 +376,60 @@ impl Database {
             convs.push(conversation_from_row(&row));
         }
         Ok(convs)
+    }
+
+    /// List conversations with optional filters and include first user message.
+    pub async fn list_conversation_previews(
+        &self,
+        opts: ListConversationsOptions,
+    ) -> Result<Vec<ConversationPreview>> {
+        let mut sql = String::from(
+            "SELECT c.*, (SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.idx ASC LIMIT 1) AS first_user_message FROM conversations c WHERE 1=1",
+        );
+
+        if opts.source_id.is_some() {
+            sql.push_str(" AND c.source_id = ?");
+        }
+        if let Some(ref workspace) = opts.workspace {
+            if is_like_pattern(workspace) {
+                sql.push_str(" AND c.workspace LIKE ?");
+            } else {
+                sql.push_str(" AND c.workspace = ?");
+            }
+        }
+        if opts.after.is_some() {
+            sql.push_str(" AND c.created_at > ?");
+        }
+
+        sql.push_str(" ORDER BY c.created_at DESC");
+
+        if let Some(limit) = opts.limit {
+            let _ = write!(sql, " LIMIT {limit}");
+        }
+
+        let mut query = sqlx::query(&sql);
+
+        if let Some(ref source_id) = opts.source_id {
+            query = query.bind(source_id);
+        }
+        if let Some(ref workspace) = opts.workspace {
+            query = query.bind(workspace);
+        }
+        if let Some(after) = opts.after {
+            query = query.bind(after.timestamp());
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+
+        let mut previews = Vec::new();
+        for row in rows {
+            previews.push(ConversationPreview {
+                conversation: conversation_from_row(&row),
+                first_user_message: row.get("first_user_message"),
+            });
+        }
+
+        Ok(previews)
     }
 
     /// Get a conversation by ID.
@@ -1079,6 +1137,13 @@ impl Database {
     }
 }
 
+/// Conversation preview with first user message.
+#[derive(Debug, Clone)]
+pub struct ConversationPreview {
+    pub conversation: Conversation,
+    pub first_user_message: Option<String>,
+}
+
 /// Statistics for a single source.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SourceStats {
@@ -1173,6 +1238,10 @@ fn sanitize_fts_query(query: &str) -> String {
     }
 
     query.to_string()
+}
+
+fn is_like_pattern(value: &str) -> bool {
+    value.contains('%') || value.contains('_')
 }
 
 fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {

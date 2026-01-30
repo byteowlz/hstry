@@ -61,7 +61,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | Command | Description |
 |---------|-------------|
 | `scan` | Detect chat history sources on the system |
-| `sync` | Import conversations from all configured sources |
+| `sync` | Import conversations from all configured sources (resets cursor if source is empty) |
 | `import <path>` | One-off import with auto-detected adapter |
 | `search <query>` | Full-text search across all messages |
 | `index` | Build or refresh the search index |

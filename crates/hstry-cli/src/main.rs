@@ -887,8 +887,22 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
         let existing = db.get_source(&source.id).await?;
         let entry = match existing {
             Some(mut entry) => {
-                entry.adapter.clone_from(&source.adapter);
-                entry.path = Some(source.path.clone());
+                let mut reset = false;
+                if entry.adapter != source.adapter {
+                    entry.adapter.clone_from(&source.adapter);
+                    reset = true;
+                }
+                if entry.path.as_deref() != Some(source.path.as_str()) {
+                    entry.path = Some(source.path.clone());
+                    reset = true;
+                }
+                if reset {
+                    entry.last_sync_at = None;
+                    if let serde_json::Value::Object(mut config) = entry.config.clone() {
+                        config.remove("cursor");
+                        entry.config = serde_json::Value::Object(config);
+                    }
+                }
                 entry
             }
             None => Source {
@@ -953,6 +967,7 @@ async fn cmd_sync(
             continue;
         }
 
+        let mut source = source;
         if !json {
             println!(
                 "Syncing {id} ({adapter})...",
@@ -960,6 +975,20 @@ async fn cmd_sync(
                 adapter = source.adapter
             );
         }
+        if source.last_sync_at.is_some() {
+            let (conv_count, _) = db.count_source_data(&source.id).await?;
+            if conv_count == 0 {
+                if !json {
+                    println!("  No existing conversations; resetting sync cursor");
+                }
+                source.last_sync_at = None;
+                if let serde_json::Value::Object(mut config) = source.config.clone() {
+                    config.remove("cursor");
+                    source.config = serde_json::Value::Object(config);
+                }
+            }
+        }
+
         match sync::sync_source(db, runner, &source).await {
             Ok(result) => {
                 if !json {

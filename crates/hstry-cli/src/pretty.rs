@@ -219,6 +219,18 @@ fn pad_visible(value: &str, width: usize) -> String {
     format!("{}{}", value, " ".repeat(width - visible_len))
 }
 
+fn truncate_end(value: &str, max_len: usize) -> String {
+    let length = value.chars().count();
+    if length <= max_len {
+        return value.to_string();
+    }
+    if max_len <= 3 {
+        return "...".to_string();
+    }
+    let head: String = value.chars().take(max_len - 3).collect();
+    format!("{head}...")
+}
+
 /// Print search results in a compact format.
 pub fn print_search_results(hits: &[SearchHit]) {
     if hits.is_empty() {
@@ -431,7 +443,8 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         let agent_width = 12usize;
         let id_width = 8usize;
         let separator_width = 3usize * 4; // " | " * 4
-        let available = inner.saturating_sub(time_width + agent_width + id_width + separator_width);
+        let reserved = time_width + agent_width + id_width + separator_width + 2; // left border + space
+        let available = inner.saturating_sub(reserved).max(20);
         let title_max = (available * 2 / 3).max(12);
         let workdir_max = available.saturating_sub(title_max).max(10);
 
@@ -451,8 +464,8 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         let title_cell = pad_visible(&title_display, title_max);
         let workdir_cell = pad_visible(&workdir_display, workdir_max);
         let time_cell = pad_visible(&date_str, time_width);
-        let agent_cell = pad_visible(&conv.source_id, agent_width);
-        let id_cell = pad_visible(&id_short, id_width);
+        let agent_cell = pad_visible(&truncate_end(&conv.source_id, agent_width), agent_width);
+        let id_cell = pad_visible(&truncate_end(&id_short, id_width), id_width);
 
         let line = format!(
             "{} {} | {} | {} | {} | {}",

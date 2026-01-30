@@ -117,6 +117,38 @@ byt memory search "query" --all     # Search ALL projects
 - When encountering unfamiliar code patterns
 - When integrating with other repos (`byt memory search "query" --all`)
 
+## Adapters
+
+Adapters are TypeScript modules in `adapters/<name>/adapter.ts` that parse conversation data from various sources. They run via Bun and communicate with the Rust runtime via JSON.
+
+**Adapter deployment:**
+```bash
+just update-adapters    # Copy adapters to ~/.config/hstry/adapters
+```
+
+After modifying any adapter, always run `just update-adapters` before testing. The CLI loads adapters from the config directory, not the source tree.
+
+**Testing adapters directly:**
+```bash
+# Test detection
+HSTRY_REQUEST='{"method":"detect","params":{"path":"/path/to/file.json"}}' \
+  bun run ~/.config/hstry/adapters/<name>/adapter.ts
+
+# Test parsing (with limit)
+HSTRY_REQUEST='{"method":"parse","params":{"path":"/path/to/file.json","opts":{"limit":1}}}' \
+  bun run ~/.config/hstry/adapters/<name>/adapter.ts
+```
+
+**Type contract with Rust runtime:**
+- Timestamps must be integers (milliseconds). Use `Math.floor()` when converting from float seconds.
+- The Rust `ParsedConversation` struct uses `created_at: i64` - floats will cause deserialization errors.
+- Response types are defined in `adapters/types/index.ts` and must match `crates/hstry-runtime/src/runner.rs`.
+
+**Common adapter issues:**
+- "Could not detect format" - The `detect()` method returned null. Check file path patterns and content detection logic.
+- "data did not match any variant" - Usually a type mismatch. Check that timestamps are integers, not floats.
+- "No conversations found" - The `parse()` method returned empty array. Check file content parsing logic.
+
 ## Releases & Distribution
 
 This project uses GitHub Actions for automated releases. See `.github/workflows/release.yml`.

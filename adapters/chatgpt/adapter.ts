@@ -66,6 +66,13 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // For direct file paths, check if it looks like a ChatGPT export
+    const pathStats = await stat(path).catch(() => null);
+    if (pathStats?.isFile() && path.endsWith('.json')) {
+      const isExport = await looksLikeChatGptExport(path);
+      return isExport ? 0.9 : null;
+    }
+    
     const candidates = await findConversationFiles(path, { shallowOnly: true });
     return candidates.length > 0 ? 0.9 : null;
   },
@@ -154,10 +161,10 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
   }
 
   const createdAtSec = entry.create_time ?? earliestMessageTime(messages) ?? 0;
-  const createdAt = createdAtSec * 1000;
+  const createdAt = Math.floor(createdAtSec * 1000);
 
   const updatedAtSec = entry.update_time ?? latestMessageTime(messages) ?? undefined;
-  const updatedAt = updatedAtSec ? updatedAtSec * 1000 : undefined;
+  const updatedAt = updatedAtSec ? Math.floor(updatedAtSec * 1000) : undefined;
 
   // Check both created and updated time so modified sessions are re-imported
   if (opts?.since) {
@@ -200,7 +207,7 @@ function extractMessages(mapping?: ConversationMap): Message[] {
       continue;
     }
 
-    const createdAt = msg.create_time ? msg.create_time * 1000 : undefined;
+    const createdAt = msg.create_time ? Math.floor(msg.create_time * 1000) : undefined;
 
     messages.push({
       role: mapRole(msg.author.role),
@@ -390,7 +397,8 @@ async function findConversationFiles(
   if (!pathStats) return candidates;
 
   if (pathStats.isFile()) {
-    if (basename(path) === 'conversations.json') {
+    // Accept any JSON file that looks like a ChatGPT export
+    if (path.endsWith('.json') && (await looksLikeChatGptExport(path))) {
       candidates.push(path);
     }
     return candidates;
@@ -400,6 +408,7 @@ async function findConversationFiles(
     return candidates;
   }
 
+  // First check for conversations.json directly
   const direct = join(path, 'conversations.json');
   const directStats = await stat(direct).catch(() => null);
   if (directStats?.isFile()) {
@@ -409,9 +418,15 @@ async function findConversationFiles(
 
   const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
   for (const entry of entries.slice(0, 200)) {
-    if (entry.isFile() && entry.name === 'conversations.json') {
-      candidates.push(join(path, entry.name));
-      break;
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      const filePath = join(path, entry.name);
+      // Prioritize conversations.json but also check other JSON files
+      if (entry.name === 'conversations.json' || (await looksLikeChatGptExport(filePath))) {
+        candidates.push(filePath);
+        if (opts.shallowOnly) {
+          break;
+        }
+      }
     }
 
     if (!entry.isDirectory()) continue;
@@ -427,6 +442,31 @@ async function findConversationFiles(
   }
 
   return candidates;
+}
+
+/**
+ * Check if a JSON file looks like a ChatGPT export by examining its structure.
+ * ChatGPT exports are arrays of conversations with `mapping` objects containing messages.
+ */
+async function looksLikeChatGptExport(filePath: string): Promise<boolean> {
+  try {
+    const content = await readFile(filePath, 'utf-8');
+    // Read just enough to detect the structure (first 10KB should be enough)
+    const sample = content.slice(0, 10240);
+    
+    // Check for ChatGPT export markers
+    // Must be an array with objects containing 'mapping' field
+    if (!sample.startsWith('[')) return false;
+    
+    // Look for characteristic ChatGPT export fields
+    const hasMapping = sample.includes('"mapping"');
+    const hasCreateTime = sample.includes('"create_time"');
+    const hasAuthorRole = sample.includes('"author"') && sample.includes('"role"');
+    
+    return hasMapping && hasCreateTime && hasAuthorRole;
+  } catch {
+    return false;
+  }
 }
 
 runAdapter(adapter);

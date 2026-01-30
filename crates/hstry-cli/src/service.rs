@@ -590,6 +590,7 @@ impl ServiceState {
             return Ok(());
         }
 
+        // Check if this exact path already exists
         if self
             .db
             .get_source_by_adapter_path(adapter_name, &path_str)
@@ -597,6 +598,25 @@ impl ServiceState {
             .is_some()
         {
             return Ok(());
+        }
+
+        // Check if this path is a child of an existing source for the same adapter
+        // This prevents creating sources for individual files when parent directory is already a source
+        let sources = self.db.list_sources().await?;
+        let normalized_path = std::path::Path::new(&path_str);
+        for existing in &sources {
+            if existing.adapter != adapter_name {
+                continue;
+            }
+            if let Some(existing_path) = &existing.path {
+                if let Ok(existing) = std::path::Path::new(existing_path).canonicalize() {
+                    if let Ok(path_canon) = normalized_path.canonicalize() {
+                        if path_canon.starts_with(&existing) {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
         }
 
         let uuid = uuid::Uuid::new_v4().to_string();

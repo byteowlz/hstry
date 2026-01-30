@@ -151,7 +151,7 @@ fn colorize_snippet(s: &str) -> String {
 }
 
 /// Shorten a path for display.
-fn short_path(path: &str, max_len: usize) -> String {
+pub fn short_path(path: &str, max_len: usize) -> String {
     if path.len() <= max_len {
         return path.to_string();
     }

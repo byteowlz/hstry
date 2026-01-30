@@ -1565,14 +1565,11 @@ async fn cmd_list(
     }
 
     for conv in conversations {
-        let title = conv.title.as_deref().unwrap_or("(untitled)");
+        let title = truncate_title(conv.title.as_deref().unwrap_or("(untitled)"), 60);
         let date = conv.created_at.format("%Y-%m-%d %H:%M");
         let agent = conv.source_id.as_str();
-        let workspace = conv.workspace.as_deref().unwrap_or("-");
-        println!(
-            "{title} | {date} | {agent} | {workspace} | {id}",
-            id = conv.id
-        );
+        let workspace = pretty::short_path(conv.workspace.as_deref().unwrap_or("-"), 30);
+        println!("{title:<60} | {date} | {agent:<12} | {workspace}",);
     }
 
     Ok(())
@@ -2327,6 +2324,23 @@ fn emit_json<T: serde::Serialize>(value: T) -> Result<()> {
     let pretty = serde_json::to_string_pretty(&value)?;
     println!("{pretty}");
     Ok(())
+}
+
+/// Truncate a title for display, cleaning up whitespace and newlines.
+fn truncate_title(title: &str, max_len: usize) -> String {
+    // Replace newlines and collapse whitespace
+    let cleaned: String = title
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if collapsed.chars().count() <= max_len {
+        collapsed
+    } else {
+        let truncated: String = collapsed.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
 }
 
 #[cfg(test)]

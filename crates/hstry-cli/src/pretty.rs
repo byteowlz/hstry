@@ -188,6 +188,29 @@ fn pad_line(content: &str, width: usize) -> String {
     format!("{}{}{}", content, " ".repeat(padding), style("│").dim())
 }
 
+fn truncate_middle(value: &str, max_len: usize) -> String {
+    let length = value.chars().count();
+    if length <= max_len {
+        return value.to_string();
+    }
+    if max_len <= 3 {
+        return "...".to_string();
+    }
+
+    let head_len = max_len / 2 - 1;
+    let tail_len = max_len - head_len - 3;
+    let head: String = value.chars().take(head_len).collect();
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{head}...{tail}")
+}
+
 /// Print search results in a compact format.
 pub fn print_search_results(hits: &[SearchHit]) {
     if hits.is_empty() {
@@ -376,20 +399,19 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
             );
         }
 
-        // Single line: source, workspace, date, title, id
-        let source = style(&conv.source_id).cyan();
+        // Single line: title | workdir | time | agent | id
+        let agent = style(&conv.source_id).cyan();
         let date = relative_time_short(conv.created_at);
         let date_str = format!("{} {}", icons.clock, date);
         let id_short = conv.id.to_string()[..8].to_string();
 
-        let ws_max = width.saturating_sub(40).max(20);
-        let ws = conv
+        let workdir_raw = conv
             .workspace
             .as_ref()
-            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
-            .unwrap_or_default();
+            .map(|w| format!("{} {}", icons.folder, w))
+            .unwrap_or_else(|| "-".to_string());
 
-        let clean: String = conv
+        let clean_title: String = conv
             .title
             .chars()
             .map(|c| if c.is_whitespace() { ' ' } else { c })
@@ -398,24 +420,36 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let prefix = format!("{} {} {} ", style("│").dim(), source, style(&ws).dim());
-        let suffix = format!(
-            " {} {}",
+        let fixed_width = console::measure_text_width(&format!(
+            "{} | {} | {}",
+            date_str, conv.source_id, id_short
+        ));
+        let available = inner.saturating_sub(fixed_width).saturating_sub(8);
+        let title_max = (available * 2 / 3).max(12);
+        let workdir_max = available.saturating_sub(title_max).max(10);
+
+        let title_display = if clean_title.chars().count() > title_max {
+            format!(
+                "{}...",
+                clean_title
+                    .chars()
+                    .take(title_max.saturating_sub(3))
+                    .collect::<String>()
+            )
+        } else {
+            clean_title
+        };
+        let workdir_display = truncate_middle(&workdir_raw, workdir_max);
+
+        let line = format!(
+            "{} {} | {} | {} | {} | {}",
+            style("│").dim(),
+            style(title_display).bold(),
+            style(workdir_display).dim(),
             style(date_str).dim().italic(),
+            agent,
             style(id_short).dim()
         );
-        let max_title = inner
-            .saturating_sub(console::measure_text_width(&prefix))
-            .saturating_sub(console::measure_text_width(&suffix))
-            .saturating_sub(2);
-
-        let display = if clean.len() > max_title {
-            format!("{}...", &clean[..max_title.saturating_sub(3)])
-        } else {
-            clean
-        };
-
-        let line = format!("{prefix}{}{suffix}", style(display).bold());
         println!("{}", pad_line(&line, width));
     }
 

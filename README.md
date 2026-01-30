@@ -70,7 +70,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | `export` | Export conversations to markdown/json or adapter format |
 | `dedup` | Deduplicate conversations in the database |
 | `source add/list/remove` | Manage import sources |
-| `adapters list/add/enable/disable/update` | Manage adapters and updates |
+| `adapters list/add/enable/disable` | Manage adapters |
 | `adapters repo ...` | Manage adapter repositories (git/archive/local) |
 | `remote add/list/remove/test/fetch/sync/status` | Manage remote hosts and sync |
 | `service enable/disable/start/run/restart/stop/status` | Control background sync service |
@@ -221,9 +221,10 @@ crates/
 ## Development
 
 ```bash
-just check-all  # Format, lint, and test
-just test       # Run tests only
-just clippy     # Lint only
+just check-all       # Format, lint, and test
+just test            # Run tests only
+just clippy          # Lint only
+just update-adapters # Copy latest adapters to ~/.config/hstry/adapters
 ```
 
 ## Attribution

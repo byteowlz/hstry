@@ -45,9 +45,9 @@ interface SessionRow {
   id: string;
   session_id?: string;
   metadata?: string;
-  messages?: string;
-  created_at?: number;
-  updated_at?: number;
+  messages?: string; // Legacy: JSON string of messages
+  created_at?: string | number; // Can be ISO string or Unix timestamp
+  updated_at?: string | number;
   working_directory?: string;
 }
 
@@ -82,6 +82,7 @@ interface JsonlEntry {
   type?: string;
   role?: string;
   content?: string | GooseContent[];
+  created?: number;
   timestamp?: string;
   tool_calls?: GooseToolCall[];
   metadata?: Record<string, unknown>;
@@ -194,34 +195,121 @@ async function parseDatabase(dbPath: string, opts?: ParseOptions): Promise<Conve
   try {
     const db = new Database(dbPath, { readonly: true });
 
-    // Try different table names (goose may use 'sessions' or 'session')
-    let tableName = 'sessions';
+    // Check if messages table exists (new schema)
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
-    if (!tables.some(t => t.name === 'sessions') && tables.some(t => t.name === 'session')) {
-      tableName = 'session';
-    }
+    const hasMessagesTable = tables.some(t => t.name === 'messages');
 
-    let query = `SELECT * FROM ${tableName} WHERE 1=1`;
-    const params: unknown[] = [];
+    if (hasMessagesTable) {
+      // Use new schema with separate messages table
+      let query = `
+        SELECT
+          s.id,
+          s.name as title,
+          s.working_dir as working_directory,
+          s.created_at,
+          s.updated_at,
+          s.description as metadata,
+          m.id as msg_id,
+          m.role,
+          m.content_json,
+          m.created_timestamp,
+          m.metadata_json as msg_metadata
+        FROM sessions s
+        LEFT JOIN messages m ON s.id = m.session_id
+        WHERE 1=1
+      `;
+      const params: unknown[] = [];
 
-    if (opts?.since) {
-      query += ' AND (created_at >= ? OR updated_at >= ?)';
-      params.push(opts.since, opts.since);
-    }
+      if (opts?.since) {
+        query += ' AND (s.created_at >= ? OR s.updated_at >= ?)';
+        params.push(opts.since, opts.since);
+      }
 
-    query += ' ORDER BY COALESCE(updated_at, created_at) DESC';
+      query += ' ORDER BY COALESCE(s.updated_at, s.created_at) DESC, m.id ASC';
 
-    if (opts?.limit) {
-      query += ' LIMIT ?';
-      params.push(opts.limit);
-    }
+      if (opts?.limit) {
+        // Note: LIMIT applies to sessions, not messages
+        query = `
+          SELECT * FROM (
+            ${query}
+          ) WHERE msg_id IS NOT NULL
+        `;
+      }
 
-    const rows = db.prepare(query).all(...params) as SessionRow[];
+      const rows = db.prepare(query).all(...params) as any[];
 
-    for (const row of rows) {
-      const conv = parseSessionRow(row);
-      if (conv && conv.messages.length > 0) {
-        conversations.push(conv);
+      // Group messages by session
+      const sessionMap = new Map<string, {
+        title: string;
+        working_directory?: string;
+        created_at: string;
+        updated_at?: string;
+        metadata?: string;
+        messages: any[];
+      }>();
+
+      for (const row of rows) {
+        const sessionId = row.id;
+        if (!sessionMap.has(sessionId)) {
+          sessionMap.set(sessionId, {
+            title: row.title,
+            working_directory: row.working_directory,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            metadata: row.metadata,
+            messages: [],
+          });
+        }
+
+        if (row.role) {
+          sessionMap.get(sessionId)!.messages.push({
+            role: row.role,
+            content_json: row.content_json,
+            created_timestamp: row.created_timestamp,
+            msg_metadata: row.msg_metadata,
+          });
+        }
+      }
+
+      // Convert to conversations
+      for (const [id, session] of sessionMap.entries()) {
+        const conv = parseSessionFromDb({
+          id,
+          title: session.title,
+          working_directory: session.working_directory,
+          created_at: session.created_at,
+          updated_at: session.updated_at,
+          metadata: session.metadata,
+          messages: session.messages,
+        });
+        if (conv && conv.messages.length > 0) {
+          conversations.push(conv);
+        }
+      }
+    } else {
+      // Fallback to old schema (messages embedded in session row)
+      let query = `SELECT * FROM sessions WHERE 1=1`;
+      const params: unknown[] = [];
+
+      if (opts?.since) {
+        query += ' AND (created_at >= ? OR updated_at >= ?)';
+        params.push(opts.since, opts.since);
+      }
+
+      query += ' ORDER BY COALESCE(updated_at, created_at) DESC';
+
+      if (opts?.limit) {
+        query += ' LIMIT ?';
+        params.push(opts.limit);
+      }
+
+      const rows = db.prepare(query).all(...params) as SessionRow[];
+
+      for (const row of rows) {
+        const conv = parseSessionRow(row);
+        if (conv && conv.messages.length > 0) {
+          conversations.push(conv);
+        }
       }
     }
 
@@ -235,7 +323,7 @@ async function parseDatabase(dbPath: string, opts?: ParseOptions): Promise<Conve
 
 function parseSessionRow(row: SessionRow): Conversation | null {
   let messages: Message[] = [];
-  
+
   if (row.messages) {
     try {
       const msgData = JSON.parse(row.messages) as GooseMessage[];
@@ -252,12 +340,66 @@ function parseSessionRow(row: SessionRow): Conversation | null {
     } catch { /* ignore */ }
   }
 
-  const createdAt = row.created_at ?? Date.now();
-  const updatedAt = row.updated_at;
+  const createdAt = parseTimestamp(row.created_at) ?? Date.now();
+  const updatedAt = row.updated_at ? parseTimestamp(row.updated_at) : undefined;
 
   return {
     externalId: row.session_id ?? row.id,
     title: (metadata.title as string) ?? deriveTitle(messages),
+    createdAt,
+    updatedAt,
+    workspace: row.working_directory ?? (metadata.working_directory as string),
+    messages,
+    metadata: {
+      source: 'goose-db',
+      ...metadata,
+    },
+  };
+}
+
+function parseSessionFromDb(row: {
+  id: string;
+  title?: string;
+  working_directory?: string;
+  created_at: string;
+  updated_at?: string;
+  metadata?: string;
+  messages: Array<{
+    role: string;
+    content_json: string;
+    created_timestamp: number;
+    msg_metadata?: string;
+  }>;
+}): Conversation | null {
+  const messages: Message[] = row.messages.map(m => {
+    let content = '';
+    try {
+      const contentArray = JSON.parse(m.content_json) as GooseContent[];
+      content = extractContent(contentArray);
+    } catch { /* ignore */ }
+
+    return {
+      role: mapRole(m.role),
+      content,
+      createdAt: m.created_timestamp * 1000, // Convert seconds to milliseconds
+    };
+  }).filter((m): m is Message => m.content || m.tool_calls?.length);
+
+  if (messages.length === 0) return null;
+
+  let metadata: Record<string, unknown> = {};
+  if (row.metadata) {
+    try {
+      metadata = JSON.parse(row.metadata);
+    } catch { /* ignore */ }
+  }
+
+  const createdAt = parseTimestamp(row.created_at) ?? Date.now();
+  const updatedAt = row.updated_at ? parseTimestamp(row.updated_at) : undefined;
+
+  return {
+    externalId: row.id,
+    title: row.title ?? (metadata.title as string) ?? deriveTitle(messages),
     createdAt,
     updatedAt,
     workspace: row.working_directory ?? (metadata.working_directory as string),
@@ -314,7 +456,7 @@ async function parseJsonlFile(filePath: string, opts?: ParseOptions): Promise<Co
       }
 
       if (entry.role && entry.content) {
-        const timestamp = parseTimestamp(entry.timestamp);
+        const timestamp = parseTimestamp(entry.created ?? entry.timestamp);
         if (timestamp) {
           if (!firstTimestamp || timestamp < firstTimestamp) firstTimestamp = timestamp;
           if (!lastTimestamp || timestamp > lastTimestamp) lastTimestamp = timestamp;

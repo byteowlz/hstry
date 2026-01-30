@@ -16,6 +16,12 @@ pub struct Database {
     pool: SqlitePool,
 }
 
+/// Normalize a source path for consistent comparison.
+/// Trims trailing slashes and handles path normalization.
+fn normalize_source_path(path: Option<&String>) -> Option<String> {
+    path.map(|p| p.trim_end_matches('/').to_string())
+}
+
 impl Database {
     /// Open or create a database at the given path.
     pub async fn open(path: &Path) -> Result<Self> {
@@ -154,6 +160,7 @@ impl Database {
     /// Upsert a source.
     pub async fn upsert_source(&self, source: &Source) -> Result<()> {
         let last_sync = source.last_sync_at.map(|dt| dt.timestamp());
+        let normalized_path = normalize_source_path(source.path.as_ref());
         sqlx::query(
             r"
             INSERT INTO sources (id, adapter, path, last_sync_at, config)
@@ -167,7 +174,7 @@ impl Database {
         )
         .bind(&source.id)
         .bind(&source.adapter)
-        .bind(&source.path)
+        .bind(&normalized_path)
         .bind(last_sync)
         .bind(source.config.to_string())
         .execute(&self.pool)
@@ -230,9 +237,10 @@ impl Database {
         adapter: &str,
         path: &str,
     ) -> Result<Option<Source>> {
+        let normalized_path = path.trim_end_matches('/');
         let row = sqlx::query("SELECT * FROM sources WHERE adapter = ? AND path = ?")
             .bind(adapter)
-            .bind(path)
+            .bind(normalized_path)
             .fetch_optional(&self.pool)
             .await?;
 

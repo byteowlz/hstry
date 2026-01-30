@@ -885,6 +885,8 @@ async fn main() -> Result<()> {
 async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
     for source in &config.sources {
         let existing = db.get_source(&source.id).await?;
+        let expanded_path = hstry_core::Config::expand_path(&source.path);
+        let normalized_path = expanded_path.to_string_lossy().trim_end_matches('/').to_string();
         let entry = match existing {
             Some(mut entry) => {
                 let mut reset = false;
@@ -892,8 +894,13 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
                     entry.adapter.clone_from(&source.adapter);
                     reset = true;
                 }
-                if entry.path.as_deref() != Some(source.path.as_str()) {
-                    entry.path = Some(source.path.clone());
+                let existing_normalized = entry
+                    .path
+                    .as_deref()
+                    .map(|p| p.trim_end_matches('/').to_string())
+                    .unwrap_or_default();
+                if existing_normalized != normalized_path {
+                    entry.path = Some(normalized_path);
                     reset = true;
                 }
                 if reset {
@@ -908,7 +915,7 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
             None => Source {
                 id: source.id.clone(),
                 adapter: source.adapter.clone(),
-                path: Some(source.path.clone()),
+                path: Some(normalized_path),
                 last_sync_at: None,
                 config: serde_json::Value::Object(serde_json::Map::default()),
             },

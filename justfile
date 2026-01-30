@@ -161,3 +161,12 @@ release-tag VERSION:
 # Set up GitHub secrets for automated releases (requires byt)
 setup-secrets:
     byt secrets setup hstry
+
+# === Adapters ===
+
+# Copy latest adapters to config directory (overwrites existing)
+update-adapters:
+    @mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters"
+    @rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters/"*
+    @cp -r adapters/* "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters/"
+    @echo "Adapters updated in ${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters"

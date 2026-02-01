@@ -138,6 +138,7 @@ mod adapter_request_tests {
             created_at: 1700000000000,
             updated_at: Some(1700001000000),
             model: Some("gpt-4".to_string()),
+            provider: Some("openai".to_string()),
             workspace: Some("/project".to_string()),
             tokens_in: Some(100),
             tokens_out: Some(200),

@@ -49,6 +49,7 @@ impl Database {
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
         self.ensure_conversations_readable_id_column().await?;
+        self.ensure_conversations_provider_column().await?;
         self.ensure_conversations_readable_id_index().await?;
         self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema_optimized().await?;
@@ -111,6 +112,7 @@ impl Database {
                     created_at: Utc::now(),
                     updated_at: None,
                     model: None,
+                    provider: None,
                     workspace: None,
                     tokens_in: None,
                     tokens_out: None,
@@ -122,6 +124,25 @@ impl Database {
             sqlx::query("UPDATE conversations SET readable_id = ? WHERE id = ?")
                 .bind(readable_id)
                 .bind(id.to_string())
+                .execute(&self.pool)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_conversations_provider_column(&self) -> Result<()> {
+        let rows = sqlx::query("PRAGMA table_info(conversations)")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let has_provider = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .any(|name| name == "provider");
+
+        if !has_provider {
+            sqlx::query("ALTER TABLE conversations ADD COLUMN provider TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -306,13 +327,14 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, workspace, tokens_in, tokens_out, cost_usd, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,
+                provider = excluded.provider,
                 workspace = excluded.workspace,
                 tokens_in = excluded.tokens_in,
                 tokens_out = excluded.tokens_out,
@@ -328,6 +350,7 @@ impl Database {
         .bind(conv.created_at.timestamp())
         .bind(conv.updated_at.map(|dt| dt.timestamp()))
         .bind(&conv.model)
+        .bind(&conv.provider)
         .bind(&conv.workspace)
         .bind(conv.tokens_in)
         .bind(conv.tokens_out)
@@ -438,6 +461,130 @@ impl Database {
         }
 
         Ok(previews)
+    }
+
+    /// List conversations with message counts and first user message.
+    pub async fn list_conversation_summaries(
+        &self,
+        opts: ListConversationsOptions,
+    ) -> Result<Vec<ConversationSummary>> {
+        let mut sql = String::from(
+            "SELECT c.*, \
+             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count, \
+             (SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.idx ASC LIMIT 1) AS first_user_message \
+             FROM conversations c WHERE 1=1",
+        );
+
+        if opts.source_id.is_some() {
+            sql.push_str(" AND c.source_id = ?");
+        }
+        if let Some(ref workspace) = opts.workspace {
+            if is_like_pattern(workspace) {
+                sql.push_str(" AND c.workspace LIKE ?");
+            } else {
+                sql.push_str(" AND c.workspace = ?");
+            }
+        }
+        if opts.after.is_some() {
+            sql.push_str(" AND c.created_at > ?");
+        }
+
+        sql.push_str(" ORDER BY COALESCE(c.updated_at, c.created_at) DESC");
+
+        if let Some(limit) = opts.limit {
+            let _ = write!(sql, " LIMIT {limit}");
+        }
+
+        let mut query = sqlx::query(&sql);
+
+        if let Some(ref source_id) = opts.source_id {
+            query = query.bind(source_id);
+        }
+        if let Some(ref workspace) = opts.workspace {
+            query = query.bind(workspace);
+        }
+        if let Some(after) = opts.after {
+            query = query.bind(after.timestamp());
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            summaries.push(ConversationSummary {
+                conversation: conversation_from_row(&row),
+                message_count: row.get::<i64, _>("message_count"),
+                first_user_message: row.get::<Option<String>, _>("first_user_message"),
+            });
+        }
+
+        Ok(summaries)
+    }
+
+    /// Resolve a conversation using source_id and identifiers.
+    pub async fn get_conversation_by_reference(
+        &self,
+        source_id: Option<&str>,
+        external_id: Option<&str>,
+        readable_id: Option<&str>,
+        conversation_id: Option<&str>,
+        workspace: Option<&str>,
+    ) -> Result<Option<Conversation>> {
+        let mut sql = String::from("SELECT * FROM conversations WHERE 1=1");
+
+        if source_id.is_some() {
+            sql.push_str(" AND source_id = ?");
+        }
+        if workspace.is_some() {
+            sql.push_str(" AND workspace = ?");
+        }
+
+        if external_id.is_none() && readable_id.is_none() && conversation_id.is_none() {
+            return Ok(None);
+        }
+
+        sql.push_str(" AND (");
+        let mut or_count = 0;
+        if external_id.is_some() {
+            sql.push_str("external_id = ?");
+            or_count += 1;
+        }
+        if readable_id.is_some() {
+            if or_count > 0 {
+                sql.push_str(" OR readable_id = ?");
+            } else {
+                sql.push_str("readable_id = ?");
+            }
+            or_count += 1;
+        }
+        if conversation_id.is_some() {
+            if or_count > 0 {
+                sql.push_str(" OR id = ?");
+            } else {
+                sql.push_str("id = ?");
+            }
+        }
+        sql.push_str(") LIMIT 1");
+
+        let mut query = sqlx::query(&sql);
+
+        if let Some(source_id) = source_id {
+            query = query.bind(source_id);
+        }
+        if let Some(workspace) = workspace {
+            query = query.bind(workspace);
+        }
+        if let Some(external_id) = external_id {
+            query = query.bind(external_id);
+        }
+        if let Some(readable_id) = readable_id {
+            query = query.bind(readable_id);
+        }
+        if let Some(conversation_id) = conversation_id {
+            query = query.bind(conversation_id);
+        }
+
+        let row = query.fetch_optional(&self.pool).await?;
+        Ok(row.map(|row| conversation_from_row(&row)))
     }
 
     /// Get a conversation by ID.
@@ -1221,6 +1368,14 @@ pub struct ConversationPreview {
     pub first_user_message: Option<String>,
 }
 
+/// Conversation summary with message counts.
+#[derive(Debug, Clone)]
+pub struct ConversationSummary {
+    pub conversation: Conversation,
+    pub message_count: i64,
+    pub first_user_message: Option<String>,
+}
+
 /// Statistics for a single source.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SourceStats {
@@ -1336,6 +1491,7 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
             .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
             .map(|dt| dt.with_timezone(&Utc)),
         model: row.get("model"),
+        provider: row.try_get("provider").ok(),
         workspace: row.get("workspace"),
         tokens_in: row.get("tokens_in"),
         tokens_out: row.get("tokens_out"),

@@ -99,6 +99,7 @@ pub async fn sync_source(
                     chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.with_timezone(&Utc))
                 }),
                 model: conv.model,
+                provider: conv.provider,
                 workspace: conv.workspace,
                 tokens_in: conv.tokens_in,
                 tokens_out: conv.tokens_out,

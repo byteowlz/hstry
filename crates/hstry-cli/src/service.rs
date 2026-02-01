@@ -23,8 +23,10 @@ use hstry_core::config::ServiceTransport;
 use hstry_core::models::Source;
 use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::service::{
-    SearchService, SearchServiceServer, WriteService, WriteServiceServer,
-    conversation_from_proto, hit_to_proto, message_from_proto, search_request_to_opts,
+    ReadService, ReadServiceServer, SearchService, SearchServiceServer, WriteService,
+    WriteServiceServer, conversation_from_proto, conversation_summary_to_proto,
+    conversation_to_proto, hit_to_proto, message_from_proto, message_to_proto,
+    search_request_to_opts,
 };
 use hstry_core::{Config, Database, search_tantivy};
 use hstry_runtime::{AdapterRunner, Runtime};
@@ -92,7 +94,9 @@ impl WriteService for ServerState {
             self.db
                 .get_conversation_id(&conv.source_id, external_id)
                 .await
-                .map_err(|e| tonic::Status::internal(format!("Failed to get conversation ID: {e}")))?
+                .map_err(|e| {
+                    tonic::Status::internal(format!("Failed to get conversation ID: {e}"))
+                })?
                 .unwrap_or(conv.id)
         } else {
             conv.id
@@ -127,7 +131,8 @@ impl WriteService for ServerState {
         let request = request.into_inner();
 
         // Find existing conversation by source_id + external_id
-        let conv_id = self.db
+        let conv_id = self
+            .db
             .get_conversation_id(&request.source_id, &request.external_id)
             .await
             .map_err(|e| tonic::Status::internal(format!("Failed to find conversation: {e}")))?
@@ -147,7 +152,8 @@ impl WriteService for ServerState {
         // Update conversation updated_at if provided
         if let Some(updated_at_ms) = request.updated_at_ms {
             if let Some(updated_at) = chrono::DateTime::from_timestamp_millis(updated_at_ms) {
-                let _ = self.db
+                let _ = self
+                    .db
                     .update_conversation_updated_at(conv_id, updated_at.with_timezone(&chrono::Utc))
                     .await;
             }
@@ -169,7 +175,7 @@ impl WriteService for ServerState {
         tonic::Status,
     > {
         let request = request.into_inner();
-        
+
         let attachment_id = uuid::Uuid::new_v4().to_string();
         let message_id = uuid::Uuid::parse_str(&request.message_id)
             .map_err(|_| tonic::Status::invalid_argument("Invalid message_id"))?;
@@ -186,10 +192,173 @@ impl WriteService for ServerState {
             .map_err(|e| tonic::Status::internal(format!("Failed to insert attachment: {e}")))?;
 
         Ok(tonic::Response::new(
-            hstry_core::service::proto::UploadAttachmentResponse {
-                attachment_id,
-            },
+            hstry_core::service::proto::UploadAttachmentResponse { attachment_id },
         ))
+    }
+}
+
+#[tonic::async_trait]
+impl ReadService for ServerState {
+    async fn get_conversation(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::GetConversationRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::GetConversationResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        let conv = self
+            .db
+            .get_conversation_by_reference(
+                if request.source_id.is_empty() {
+                    None
+                } else {
+                    Some(request.source_id.as_str())
+                },
+                if request.external_id.is_empty() {
+                    None
+                } else {
+                    Some(request.external_id.as_str())
+                },
+                if request.readable_id.is_empty() {
+                    None
+                } else {
+                    Some(request.readable_id.as_str())
+                },
+                if request.conversation_id.is_empty() {
+                    None
+                } else {
+                    Some(request.conversation_id.as_str())
+                },
+                if request.workspace.is_empty() {
+                    None
+                } else {
+                    Some(request.workspace.as_str())
+                },
+            )
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to load conversation: {e}")))?;
+
+        let response = hstry_core::service::proto::GetConversationResponse {
+            conversation: conv.as_ref().map(conversation_to_proto),
+        };
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_messages(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::GetMessagesRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::GetMessagesResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        let conv = self
+            .db
+            .get_conversation_by_reference(
+                if request.source_id.is_empty() {
+                    None
+                } else {
+                    Some(request.source_id.as_str())
+                },
+                if request.external_id.is_empty() {
+                    None
+                } else {
+                    Some(request.external_id.as_str())
+                },
+                if request.readable_id.is_empty() {
+                    None
+                } else {
+                    Some(request.readable_id.as_str())
+                },
+                if request.conversation_id.is_empty() {
+                    None
+                } else {
+                    Some(request.conversation_id.as_str())
+                },
+                if request.workspace.is_empty() {
+                    None
+                } else {
+                    Some(request.workspace.as_str())
+                },
+            )
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to resolve conversation: {e}")))?;
+
+        let Some(conv) = conv else {
+            return Ok(tonic::Response::new(
+                hstry_core::service::proto::GetMessagesResponse {
+                    conversation_id: String::new(),
+                    messages: Vec::new(),
+                },
+            ));
+        };
+
+        let mut messages = self
+            .db
+            .get_messages(conv.id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to load messages: {e}")))?;
+
+        if request.limit > 0 && messages.len() > request.limit as usize {
+            let start = messages.len() - request.limit as usize;
+            messages = messages.split_off(start);
+        }
+
+        let response = hstry_core::service::proto::GetMessagesResponse {
+            conversation_id: conv.id.to_string(),
+            messages: messages.iter().map(message_to_proto).collect(),
+        };
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn list_conversations(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::ListConversationsRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::ListConversationsResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        let summaries = self
+            .db
+            .list_conversation_summaries(hstry_core::db::ListConversationsOptions {
+                source_id: if request.source_id.is_empty() {
+                    None
+                } else {
+                    Some(request.source_id)
+                },
+                workspace: if request.workspace.is_empty() {
+                    None
+                } else {
+                    Some(request.workspace)
+                },
+                after: None,
+                limit: if request.limit > 0 {
+                    Some(request.limit)
+                } else {
+                    None
+                },
+            })
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to list conversations: {e}")))?;
+
+        let response = hstry_core::service::proto::ListConversationsResponse {
+            conversations: summaries
+                .iter()
+                .map(|summary| {
+                    conversation_summary_to_proto(
+                        &summary.conversation,
+                        summary.message_count,
+                        summary.first_user_message.clone(),
+                    )
+                })
+                .collect(),
+        };
+
+        Ok(tonic::Response::new(response))
     }
 }
 
@@ -469,7 +638,8 @@ async fn start_tcp_server(
     let handle = tokio::spawn(async move {
         if let Err(err) = tonic::transport::Server::builder()
             .add_service(SearchServiceServer::new(server.clone()))
-            .add_service(WriteServiceServer::new(server))
+            .add_service(WriteServiceServer::new(server.clone()))
+            .add_service(ReadServiceServer::new(server))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
         {
@@ -512,7 +682,8 @@ async fn start_unix_server(server: ServerState) -> Result<tokio::task::JoinHandl
     let handle = tokio::spawn(async move {
         if let Err(err) = tonic::transport::Server::builder()
             .add_service(SearchServiceServer::new(server.clone()))
-            .add_service(WriteServiceServer::new(server))
+            .add_service(WriteServiceServer::new(server.clone()))
+            .add_service(ReadServiceServer::new(server))
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await
         {

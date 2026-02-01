@@ -25,6 +25,7 @@ pub struct Conversation {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub model: Option<String>,
+    pub provider: Option<String>,
     pub workspace: Option<String>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,

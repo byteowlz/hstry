@@ -11,6 +11,8 @@ pub mod proto {
     tonic::include_proto!("hstry.service");
 }
 
+pub use proto::read_service_client::ReadServiceClient;
+pub use proto::read_service_server::{ReadService, ReadServiceServer};
 pub use proto::search_service_client::SearchServiceClient;
 pub use proto::search_service_server::{SearchService, SearchServiceServer};
 pub use proto::write_service_client::WriteServiceClient;
@@ -276,6 +278,7 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
         created_at: ts_from_ms(proto.created_at_ms).unwrap_or_else(Utc::now),
         updated_at: proto.updated_at_ms.and_then(ts_from_ms),
         model: proto.model,
+        provider: proto.provider,
         workspace: proto.workspace,
         tokens_in: proto.tokens_in,
         tokens_out: proto.tokens_out,
@@ -310,5 +313,52 @@ pub fn message_from_proto(proto: proto::Message, conversation_id: Uuid) -> Messa
         } else {
             serde_json::from_str(&proto.metadata_json).unwrap_or_default()
         },
+    }
+}
+
+// ============================================================================
+// Read Service Conversions
+// ============================================================================
+
+pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
+    proto::Conversation {
+        source_id: conv.source_id.clone(),
+        external_id: conv.external_id.clone().unwrap_or_default(),
+        title: conv.title.clone(),
+        created_at_ms: conv.created_at.timestamp_millis(),
+        updated_at_ms: conv.updated_at.map(|dt| dt.timestamp_millis()),
+        model: conv.model.clone(),
+        provider: conv.provider.clone(),
+        workspace: conv.workspace.clone(),
+        tokens_in: conv.tokens_in,
+        tokens_out: conv.tokens_out,
+        cost_usd: conv.cost_usd,
+        metadata_json: conv.metadata.to_string(),
+    }
+}
+
+pub fn message_to_proto(msg: &Message) -> proto::Message {
+    proto::Message {
+        idx: msg.idx,
+        role: msg.role.to_string(),
+        content: msg.content.clone(),
+        parts_json: msg.parts_json.to_string(),
+        created_at_ms: msg.created_at.map(|dt| dt.timestamp_millis()),
+        model: msg.model.clone(),
+        tokens: msg.tokens,
+        cost_usd: msg.cost_usd,
+        metadata_json: msg.metadata.to_string(),
+    }
+}
+
+pub fn conversation_summary_to_proto(
+    conv: &Conversation,
+    message_count: i64,
+    first_user_message: Option<String>,
+) -> proto::ConversationSummary {
+    proto::ConversationSummary {
+        conversation: Some(conversation_to_proto(conv)),
+        message_count,
+        first_user_message: first_user_message.unwrap_or_default(),
     }
 }

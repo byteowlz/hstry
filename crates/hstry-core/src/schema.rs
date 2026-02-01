@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at INTEGER NOT NULL,
     updated_at INTEGER,
     model TEXT,
+    provider TEXT,
     workspace TEXT,
     tokens_in INTEGER,
     tokens_out INTEGER,
@@ -154,6 +155,7 @@ CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace);
 CREATE INDEX IF NOT EXISTS idx_conv_workspace_created ON conversations(workspace, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_conv_model ON conversations(model);
+CREATE INDEX IF NOT EXISTS idx_conv_provider ON conversations(provider);
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, idx);
 CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_msg_role ON messages(role);

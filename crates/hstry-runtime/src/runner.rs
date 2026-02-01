@@ -137,6 +137,7 @@ pub struct ParsedConversation {
     pub created_at: i64, // Unix ms
     pub updated_at: Option<i64>,
     pub model: Option<String>,
+    pub provider: Option<String>,
     pub workspace: Option<String>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
@@ -196,6 +197,7 @@ pub struct ExportConversation {
     pub created_at: i64, // Unix ms
     pub updated_at: Option<i64>,
     pub model: Option<String>,
+    pub provider: Option<String>,
     pub workspace: Option<String>,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,

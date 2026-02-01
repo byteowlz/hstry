@@ -1274,6 +1274,7 @@ async fn cmd_import(
                 chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.with_timezone(&chrono::Utc))
             }),
             model: conv.model,
+            provider: conv.provider,
             workspace: conv.workspace,
             tokens_in: conv.tokens_in,
             tokens_out: conv.tokens_out,
@@ -1334,7 +1335,9 @@ async fn cmd_import(
         });
     }
 
-    println!("Imported {imported_convs} conversations ({imported_msgs} messages) into source '{source_id}'");
+    println!(
+        "Imported {imported_convs} conversations ({imported_msgs} messages) into source '{source_id}'"
+    );
     Ok(())
 }
 
@@ -2535,6 +2538,7 @@ async fn cmd_export(
             created_at: conv.created_at.timestamp_millis(),
             updated_at: conv.updated_at.map(|dt| dt.timestamp_millis()),
             model: conv.model.clone(),
+            provider: conv.provider.clone(),
             workspace: conv.workspace.clone(),
             tokens_in: conv.tokens_in,
             tokens_out: conv.tokens_out,

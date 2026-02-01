@@ -22,6 +22,13 @@ service WriteService {
   rpc UploadAttachment(UploadAttachmentRequest) returns (UploadAttachmentResponse);
 }
 
+// Read service for retrieving conversations and messages.
+service ReadService {
+  rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+}
+
 enum SearchMode {
   SEARCH_MODE_AUTO = 0;
   SEARCH_MODE_NATURAL = 1;
@@ -72,11 +79,12 @@ message Conversation {
   int64 created_at_ms = 4;
   optional int64 updated_at_ms = 5;
   optional string model = 6;
-  optional string workspace = 7;
-  optional int64 tokens_in = 8;
-  optional int64 tokens_out = 9;
-  optional double cost_usd = 10;
-  string metadata_json = 11;      // JSON string
+  optional string provider = 7;
+  optional string workspace = 8;
+  optional int64 tokens_in = 9;
+  optional int64 tokens_out = 10;
+  optional double cost_usd = 11;
+  string metadata_json = 12;      // JSON string
 }
 
 message Message {
@@ -122,4 +130,51 @@ message UploadAttachmentRequest {
 
 message UploadAttachmentResponse {
   string attachment_id = 1;       // UUID to use in MediaSource.AttachmentRef
+}
+
+// ============================================================================
+// Read Service Messages
+// ============================================================================
+
+message ConversationSummary {
+  Conversation conversation = 1;
+  int64 message_count = 2;
+  string first_user_message = 3;
+}
+
+message GetConversationRequest {
+  string source_id = 1;
+  string external_id = 2;
+  string readable_id = 3;
+  string conversation_id = 4;
+  string workspace = 5;
+}
+
+message GetConversationResponse {
+  optional Conversation conversation = 1;
+}
+
+message GetMessagesRequest {
+  string source_id = 1;
+  string external_id = 2;
+  string readable_id = 3;
+  string conversation_id = 4;
+  string workspace = 5;
+  int64 limit = 6;
+}
+
+message GetMessagesResponse {
+  string conversation_id = 1;
+  repeated Message messages = 2;
+}
+
+message ListConversationsRequest {
+  string source_id = 1;
+  string workspace = 2;
+  int64 limit = 3;
+  int64 offset = 4;
+}
+
+message ListConversationsResponse {
+  repeated ConversationSummary conversations = 1;
 }

@@ -627,11 +627,21 @@ struct CommonOpts {
 #[derive(Debug, Clone)]
 enum AppMode {
     Normal,
-    Search { query: String, cursor: usize },
-    Help { scroll: usize },
+    Search {
+        query: String,
+        cursor: usize,
+    },
+    Help {
+        scroll: usize,
+    },
     Sort,
-    Delete { count: usize },
-    DeleteSource { source_id: String, source_name: String },
+    Delete {
+        count: usize,
+    },
+    DeleteSource {
+        source_id: String,
+        source_name: String,
+    },
 }
 
 impl AppMode {
@@ -1450,7 +1460,8 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::Char('d') => {
             // Delete conversations when in middle pane, or source when in left pane with source selected
             if app.focus == FocusPane::Left {
-                if let Some(NavItem::Source(id, name)) = app.nav_items.get(app.nav_selection.index) {
+                if let Some(NavItem::Source(id, name)) = app.nav_items.get(app.nav_selection.index)
+                {
                     app.mode = AppMode::DeleteSource {
                         source_id: id.clone(),
                         source_name: name.clone(),

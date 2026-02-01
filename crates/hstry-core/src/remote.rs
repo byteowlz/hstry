@@ -385,6 +385,7 @@ pub async fn merge_databases(
                 created_at: conv.created_at,
                 updated_at: conv.updated_at,
                 model: conv.model,
+                provider: conv.provider,
                 workspace: conv.workspace,
                 tokens_in: conv.tokens_in,
                 tokens_out: conv.tokens_out,

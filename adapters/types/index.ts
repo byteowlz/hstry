@@ -30,6 +30,7 @@ export interface Conversation {
   createdAt: number;      // Unix timestamp (ms)
   updatedAt?: number;
   model?: string;
+  provider?: string;
   workspace?: string;
   tokensIn?: number;
   tokensOut?: number;

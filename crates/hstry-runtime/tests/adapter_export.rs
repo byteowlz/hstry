@@ -11,6 +11,7 @@ fn export_request_serializes() {
         created_at: 1_700_000_000_000,
         updated_at: None,
         model: Some("test-model".to_string()),
+        provider: Some("test-provider".to_string()),
         workspace: Some("/tmp".to_string()),
         tokens_in: None,
         tokens_out: None,

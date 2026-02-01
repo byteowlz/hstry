@@ -1334,7 +1334,7 @@ async fn cmd_import(
         });
     }
 
-    println!("Imported {imported_convs} conversations ({imported_msgs} messages)");
+    println!("Imported {imported_convs} conversations ({imported_msgs} messages) into source '{source_id}'");
     Ok(())
 }
 

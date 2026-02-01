@@ -94,11 +94,17 @@ const adapter: Adapter = {
         continue;
       }
 
-      if (!Array.isArray(parsed)) {
-        continue;
-      }
+      // Handle both array format (conversations.json) and single object format (ChatGPT-*.json)
+      const entries: RawConversation[] = Array.isArray(parsed) 
+        ? parsed 
+        : [parsed as RawConversation];
 
-      for (const entry of parsed as RawConversation[]) {
+      for (const entry of entries) {
+        // Skip if entry doesn't have the expected structure
+        if (!entry || typeof entry !== 'object' || !entry.mapping) {
+          continue;
+        }
+
         const conv = parseConversation(entry, opts);
         if (!conv) {
           continue;
@@ -417,7 +423,7 @@ async function findConversationFiles(
   }
 
   const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries.slice(0, 200)) {
+  for (const entry of entries) {
     if (entry.isFile() && entry.name.endsWith('.json')) {
       const filePath = join(path, entry.name);
       // Prioritize conversations.json but also check other JSON files
@@ -446,7 +452,9 @@ async function findConversationFiles(
 
 /**
  * Check if a JSON file looks like a ChatGPT export by examining its structure.
- * ChatGPT exports are arrays of conversations with `mapping` objects containing messages.
+ * ChatGPT exports can be:
+ * 1. An array of conversations (conversations.json from bulk export)
+ * 2. A single conversation object (individual export files like ChatGPT-*.json)
  */
 async function looksLikeChatGptExport(filePath: string): Promise<boolean> {
   try {
@@ -455,8 +463,11 @@ async function looksLikeChatGptExport(filePath: string): Promise<boolean> {
     const sample = content.slice(0, 10240);
     
     // Check for ChatGPT export markers
-    // Must be an array with objects containing 'mapping' field
-    if (!sample.startsWith('[')) return false;
+    // Can be an array of conversations OR a single conversation object
+    const startsWithArray = sample.trimStart().startsWith('[');
+    const startsWithObject = sample.trimStart().startsWith('{');
+    
+    if (!startsWithArray && !startsWithObject) return false;
     
     // Look for characteristic ChatGPT export fields
     const hasMapping = sample.includes('"mapping"');

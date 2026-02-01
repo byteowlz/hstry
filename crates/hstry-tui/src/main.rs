@@ -579,7 +579,7 @@ fn try_main() -> Result<()> {
     // Load initial data
     let sources = rt.block_on(db.list_sources())?;
     let conversations = rt.block_on(db.list_conversations(ListConversationsOptions {
-        limit: Some(1000),
+        limit: None,
         ..Default::default()
     }))?;
 
@@ -1298,7 +1298,7 @@ impl App {
         }
 
         match rt.block_on(self.db.list_conversations(ListConversationsOptions {
-            limit: Some(1000),
+            limit: None,
             ..Default::default()
         })) {
             Ok(convs) => {

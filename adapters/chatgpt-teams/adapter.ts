@@ -41,6 +41,8 @@ interface TeamsHistory {
 
 interface TeamsChat {
   history?: TeamsHistory;
+  timestamp?: number;
+  models?: string[];
 }
 
 interface RawConversation {
@@ -48,6 +50,11 @@ interface RawConversation {
   user_id?: string;
   title?: string;
   chat?: TeamsChat;
+  created_at?: number;
+  updated_at?: number;
+  archived?: boolean;
+  pinned?: boolean;
+  folder_id?: string | null;
 }
 
 const adapter: Adapter = {
@@ -92,8 +99,11 @@ const adapter: Adapter = {
         continue;
       }
 
+      // Extract date from filename (e.g., history_20250822_120830.json)
+      const fileDate = extractDateFromFilename(filePath);
+
       for (const entry of parsed as RawConversation[]) {
-        const conv = parseConversation(entry, opts);
+        const conv = parseConversation(entry, opts, fileDate);
         if (!conv) {
           continue;
         }
@@ -115,15 +125,53 @@ function sortConversations(conversations: Conversation[]): Conversation[] {
   return conversations;
 }
 
-function parseConversation(entry: RawConversation, opts?: ParseOptions): Conversation | null {
+/**
+ * Extract a date from filename patterns like:
+ * - history_20250822_120830.json -> Aug 22, 2025 12:08:30
+ * - history_20250822.json -> Aug 22, 2025
+ */
+function extractDateFromFilename(filePath: string): number | null {
+  const filename = filePath.split('/').pop() || '';
+  
+  // Match patterns: history_YYYYMMDD_HHMMSS.json or history_YYYYMMDD.json
+  const fullMatch = filename.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if (fullMatch) {
+    const [, year, month, day, hour, min, sec] = fullMatch;
+    const date = new Date(
+      parseInt(year),
+      parseInt(month) - 1,
+      parseInt(day),
+      parseInt(hour),
+      parseInt(min),
+      parseInt(sec)
+    );
+    return date.getTime();
+  }
+  
+  const dateMatch = filename.match(/(\d{4})(\d{2})(\d{2})/);
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch;
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    return date.getTime();
+  }
+  
+  return null;
+}
+
+function parseConversation(entry: RawConversation, opts?: ParseOptions, fileDate?: number | null): Conversation | null {
   const messages = extractMessages(entry.chat?.history?.messages);
 
   if (messages.length === 0) {
     return null;
   }
 
-  const createdAt = Date.now();
-  const updatedAt = undefined;
+  // Use conversation timestamps if available, fall back to chat timestamp, then file date, then now
+  const createdAtSec = entry.created_at ?? entry.chat?.timestamp;
+  const updatedAtSec = entry.updated_at;
+  
+  // Convert from seconds to milliseconds (these are Unix timestamps in seconds)
+  const createdAt = createdAtSec ? createdAtSec * 1000 : (fileDate ?? Date.now());
+  const updatedAt = updatedAtSec ? updatedAtSec * 1000 : undefined;
 
   if (opts?.since) {
     const lastModified = updatedAt ?? createdAt;

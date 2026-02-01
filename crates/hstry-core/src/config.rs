@@ -353,6 +353,17 @@ pub struct AdapterConfig {
     pub enabled: bool,
 }
 
+/// Transport type for gRPC service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceTransport {
+    /// TCP on localhost (default, backward compatible).
+    #[default]
+    Tcp,
+    /// Unix domain socket (more secure for multi-user).
+    Unix,
+}
+
 /// Background service configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -368,8 +379,14 @@ pub struct ServiceConfig {
     pub search_api: bool,
 
     /// Optional port for search API (defaults to dynamic if unset).
+    /// Only used when transport = "tcp".
     #[serde(default)]
     pub search_port: Option<u16>,
+
+    /// Transport type: "tcp" (localhost:port) or "unix" (domain socket).
+    /// Unix socket provides better security for multi-user systems.
+    #[serde(default)]
+    pub transport: ServiceTransport,
 }
 
 impl Default for ServiceConfig {
@@ -379,6 +396,7 @@ impl Default for ServiceConfig {
             poll_interval_secs: 30,
             search_api: true,
             search_port: None,
+            transport: ServiceTransport::Tcp,
         }
     }
 }

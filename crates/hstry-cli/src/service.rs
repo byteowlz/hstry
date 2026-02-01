@@ -13,14 +13,18 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 use tokio_stream::wrappers::TcpListenerStream;
+#[cfg(unix)]
+use tokio_stream::wrappers::UnixListenerStream;
 use walkdir::WalkDir;
 
 use crate::ServiceCommand;
 use crate::sync;
+use hstry_core::config::ServiceTransport;
 use hstry_core::models::Source;
 use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::service::{
-    SearchService, SearchServiceServer, hit_to_proto, search_request_to_opts,
+    SearchService, SearchServiceServer, WriteService, WriteServiceServer,
+    conversation_from_proto, hit_to_proto, message_from_proto, search_request_to_opts,
 };
 use hstry_core::{Config, Database, search_tantivy};
 use hstry_runtime::{AdapterRunner, Runtime};
@@ -28,13 +32,13 @@ use hstry_runtime::{AdapterRunner, Runtime};
 const DETECT_THRESHOLD: f32 = 0.5;
 
 #[derive(Clone)]
-struct SearchServerState {
+struct ServerState {
     db: Arc<Database>,
     index: Arc<SearchIndex>,
 }
 
 #[tonic::async_trait]
-impl SearchService for SearchServerState {
+impl SearchService for ServerState {
     async fn search(
         &self,
         request: tonic::Request<hstry_core::service::proto::SearchRequest>,
@@ -59,6 +63,133 @@ impl SearchService for SearchServerState {
             hits: hits.iter().map(hit_to_proto).collect(),
         };
         Ok(tonic::Response::new(response))
+    }
+}
+
+#[tonic::async_trait]
+impl WriteService for ServerState {
+    async fn write_conversation(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::WriteConversationRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::WriteConversationResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        let Some(conv_proto) = request.conversation else {
+            return Err(tonic::Status::invalid_argument("conversation is required"));
+        };
+
+        // Convert and upsert conversation
+        let conv = conversation_from_proto(conv_proto);
+        self.db
+            .upsert_conversation(&conv)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to upsert conversation: {e}")))?;
+
+        // Get the actual conversation ID (may differ if it was an update)
+        let conv_id = if let Some(ref external_id) = conv.external_id {
+            self.db
+                .get_conversation_id(&conv.source_id, external_id)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("Failed to get conversation ID: {e}")))?
+                .unwrap_or(conv.id)
+        } else {
+            conv.id
+        };
+
+        // Insert messages
+        let mut messages_written = 0i32;
+        for msg_proto in request.messages {
+            let msg = message_from_proto(msg_proto, conv_id);
+            self.db
+                .insert_message(&msg)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("Failed to insert message: {e}")))?;
+            messages_written += 1;
+        }
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::WriteConversationResponse {
+                conversation_id: conv_id.to_string(),
+                messages_written,
+            },
+        ))
+    }
+
+    async fn append_messages(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::AppendMessagesRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::AppendMessagesResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        // Find existing conversation by source_id + external_id
+        let conv_id = self.db
+            .get_conversation_id(&request.source_id, &request.external_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to find conversation: {e}")))?
+            .ok_or_else(|| tonic::Status::not_found("Conversation not found"))?;
+
+        // Insert messages
+        let mut messages_written = 0i32;
+        for msg_proto in request.messages {
+            let msg = message_from_proto(msg_proto, conv_id);
+            self.db
+                .insert_message(&msg)
+                .await
+                .map_err(|e| tonic::Status::internal(format!("Failed to insert message: {e}")))?;
+            messages_written += 1;
+        }
+
+        // Update conversation updated_at if provided
+        if let Some(updated_at_ms) = request.updated_at_ms {
+            if let Some(updated_at) = chrono::DateTime::from_timestamp_millis(updated_at_ms) {
+                let _ = self.db
+                    .update_conversation_updated_at(conv_id, updated_at.with_timezone(&chrono::Utc))
+                    .await;
+            }
+        }
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::AppendMessagesResponse {
+                conversation_id: conv_id.to_string(),
+                messages_written,
+            },
+        ))
+    }
+
+    async fn upload_attachment(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::UploadAttachmentRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::UploadAttachmentResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        
+        let attachment_id = uuid::Uuid::new_v4().to_string();
+        let message_id = uuid::Uuid::parse_str(&request.message_id)
+            .map_err(|_| tonic::Status::invalid_argument("Invalid message_id"))?;
+
+        self.db
+            .insert_attachment(
+                &attachment_id,
+                message_id,
+                &request.mime_type,
+                request.filename.as_deref(),
+                &request.data,
+            )
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to insert attachment: {e}")))?;
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::UploadAttachmentResponse {
+                attachment_id,
+            },
+        ))
     }
 }
 
@@ -260,6 +391,7 @@ async fn run_service(config_path: &Path) -> Result<()> {
     let server_handle = if state.config.service.search_api {
         Some(
             start_search_server(
+                state.config.service.transport,
                 state.config.service.search_port,
                 state.search_index.clone(),
                 state.db.clone(),
@@ -297,9 +429,30 @@ async fn run_service(config_path: &Path) -> Result<()> {
 }
 
 async fn start_search_server(
+    transport: ServiceTransport,
     port: Option<u16>,
     search_index: Arc<SearchIndex>,
     db: Arc<Database>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let server = ServerState {
+        db,
+        index: search_index,
+    };
+
+    match transport {
+        ServiceTransport::Tcp => start_tcp_server(port, server).await,
+        #[cfg(unix)]
+        ServiceTransport::Unix => start_unix_server(server).await,
+        #[cfg(not(unix))]
+        ServiceTransport::Unix => {
+            anyhow::bail!("Unix domain sockets are not supported on this platform")
+        }
+    }
+}
+
+async fn start_tcp_server(
+    port: Option<u16>,
+    server: ServerState,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port.unwrap_or(0)));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -311,19 +464,59 @@ async fn start_search_server(
     }
     std::fs::write(&port_path, local_addr.port().to_string())?;
 
-    println!("Search service listening on {local_addr}");
+    println!("Service listening on {local_addr} (TCP)");
 
-    let server = SearchServerState {
-        db,
-        index: search_index,
-    };
     let handle = tokio::spawn(async move {
         if let Err(err) = tonic::transport::Server::builder()
-            .add_service(SearchServiceServer::new(server))
+            .add_service(SearchServiceServer::new(server.clone()))
+            .add_service(WriteServiceServer::new(server))
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
         {
-            eprintln!("Search service error: {err}");
+            eprintln!("Service error: {err}");
+        }
+    });
+
+    Ok(handle)
+}
+
+#[cfg(unix)]
+async fn start_unix_server(server: ServerState) -> Result<tokio::task::JoinHandle<()>> {
+    let socket_path = hstry_core::paths::service_socket_path();
+
+    // Ensure parent directory exists
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Remove stale socket file if it exists
+    if socket_path.exists() {
+        std::fs::remove_file(&socket_path)?;
+    }
+
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+
+    // Set socket permissions to user-only (0600)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&socket_path, perms)?;
+    }
+
+    println!(
+        "Service listening on {} (Unix socket)",
+        socket_path.display()
+    );
+
+    let handle = tokio::spawn(async move {
+        if let Err(err) = tonic::transport::Server::builder()
+            .add_service(SearchServiceServer::new(server.clone()))
+            .add_service(WriteServiceServer::new(server))
+            .serve_with_incoming(UnixListenerStream::new(listener))
+            .await
+        {
+            eprintln!("Service error: {err}");
         }
     });
 

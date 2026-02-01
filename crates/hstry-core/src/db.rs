@@ -613,6 +613,20 @@ impl Database {
         Ok(())
     }
 
+    /// Update a conversation's updated_at timestamp.
+    pub async fn update_conversation_updated_at(
+        &self,
+        id: Uuid,
+        updated_at: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+            .bind(updated_at.timestamp())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     // =========================================================================
     // Messages
     // =========================================================================
@@ -672,6 +686,61 @@ impl Database {
             .fetch_one(&self.pool)
             .await?;
         Ok(count.0)
+    }
+
+    // =========================================================================
+    // Attachments
+    // =========================================================================
+
+    /// Insert a binary attachment for a message.
+    pub async fn insert_attachment(
+        &self,
+        id: &str,
+        message_id: Uuid,
+        mime_type: &str,
+        filename: Option<&str>,
+        data: &[u8],
+    ) -> Result<()> {
+        // Determine type from mime_type
+        let attachment_type = if mime_type.starts_with("image/") {
+            "image"
+        } else if mime_type.starts_with("audio/") {
+            "audio"
+        } else if mime_type.starts_with("video/") {
+            "video"
+        } else {
+            "file"
+        };
+
+        sqlx::query(
+            r"
+            INSERT INTO attachments (id, message_id, type, name, mime_type, content)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ",
+        )
+        .bind(id)
+        .bind(message_id.to_string())
+        .bind(attachment_type)
+        .bind(filename)
+        .bind(mime_type)
+        .bind(data)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get attachment binary data by ID.
+    pub async fn get_attachment(&self, id: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let row = sqlx::query("SELECT mime_type, content FROM attachments WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(|row| {
+            let mime_type: String = row.get("mime_type");
+            let content: Vec<u8> = row.get("content");
+            (mime_type, content)
+        }))
     }
 
     // =========================================================================

@@ -2,8 +2,24 @@ syntax = "proto3";
 
 package hstry.service;
 
+// Search service for querying chat history.
 service SearchService {
   rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// Write service for external writers (e.g., Octo) to persist messages.
+// This is the primary API for real-time message persistence.
+service WriteService {
+  // Upsert a conversation and its messages.
+  // Uses source_id + external_id for deduplication.
+  rpc WriteConversation(WriteConversationRequest) returns (WriteConversationResponse);
+  
+  // Append messages to an existing conversation.
+  rpc AppendMessages(AppendMessagesRequest) returns (AppendMessagesResponse);
+  
+  // Upload binary data (images, audio, etc.) to attachments table.
+  // Returns attachment_id to use in MediaSource.AttachmentRef.
+  rpc UploadAttachment(UploadAttachmentRequest) returns (UploadAttachmentResponse);
 }
 
 enum SearchMode {
@@ -43,4 +59,67 @@ message SearchHit {
 
 message SearchResponse {
   repeated SearchHit hits = 1;
+}
+
+// ============================================================================
+// Write Service Messages
+// ============================================================================
+
+message Conversation {
+  string source_id = 1;           // e.g., "pi"
+  string external_id = 2;         // Agent session ID (e.g., "ses_abc123")
+  optional string title = 3;
+  int64 created_at_ms = 4;
+  optional int64 updated_at_ms = 5;
+  optional string model = 6;
+  optional string workspace = 7;
+  optional int64 tokens_in = 8;
+  optional int64 tokens_out = 9;
+  optional double cost_usd = 10;
+  string metadata_json = 11;      // JSON string
+}
+
+message Message {
+  int32 idx = 1;                  // Message index in conversation
+  string role = 2;                // "user", "assistant", "system", "tool"
+  string content = 3;             // Flattened text content
+  string parts_json = 4;          // JSON array of Part objects
+  optional int64 created_at_ms = 5;
+  optional string model = 6;
+  optional int64 tokens = 7;
+  optional double cost_usd = 8;
+  string metadata_json = 9;       // JSON string
+}
+
+message WriteConversationRequest {
+  Conversation conversation = 1;
+  repeated Message messages = 2;
+}
+
+message WriteConversationResponse {
+  string conversation_id = 1;     // UUID assigned by hstry
+  int32 messages_written = 2;
+}
+
+message AppendMessagesRequest {
+  string source_id = 1;
+  string external_id = 2;         // Identifies the conversation
+  repeated Message messages = 3;
+  optional int64 updated_at_ms = 4;
+}
+
+message AppendMessagesResponse {
+  string conversation_id = 1;
+  int32 messages_written = 2;
+}
+
+message UploadAttachmentRequest {
+  string message_id = 1;          // UUID of the message
+  string mime_type = 2;
+  optional string filename = 3;
+  bytes data = 4;                 // Binary content
+}
+
+message UploadAttachmentResponse {
+  string attachment_id = 1;       // UUID to use in MediaSource.AttachmentRef
 }

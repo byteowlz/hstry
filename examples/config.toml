@@ -25,6 +25,10 @@ enabled = true
 name = "claude-web"
 enabled = false
 
+[[adapters]]
+name = "chatgpt-teams"
+enabled = true
+
 # Search index settings (Tantivy)
 [search]
 # index_path = "~/.local/share/hstry/search"
@@ -53,6 +57,7 @@ search_api = true
 # | pi          | ~/.pi/agent/sessions                   | Pi coding agent sessions        |
 # | aider       | ~/projects, ~/work, ~/src              | .aider.chat.history.md files    |
 # | chatgpt     | ~/Downloads                            | ChatGPT export (conversations.json) |
+# | chatgpt-teams| ~/Downloads                            | ChatGPT Teams browser extension export |
 # | claude-web  | ~/Downloads                            | Claude.ai export JSON           |
 # | gemini      | ~/Downloads                            | Gemini/AI Studio export JSON    |
 
@@ -103,6 +108,14 @@ auto_sync = true
 id = "chatgpt-export"
 adapter = "chatgpt"
 path = "~/Downloads/chatgpt-export"
+auto_sync = false
+
+# ChatGPT Teams (browser extension): Click export button in extension
+# Exports JSON with chat.history.messages structure
+[[sources]]
+id = "chatgpt-teams-export"
+adapter = "chatgpt-teams"
+path = "~/Downloads"
 auto_sync = false
 
 # =============================================================================

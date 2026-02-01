@@ -65,6 +65,22 @@ interface CompactionEntry extends SessionEntryBase {
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
+  details?: unknown;
+  fromHook?: boolean;
+}
+
+// Branch summary entry (created when forking a session)
+interface BranchSummaryEntry extends SessionEntryBase {
+  type: 'branch_summary';
+  fromId: string;
+  summary: string;
+  details?: unknown;
+}
+
+// Thinking level change entry
+interface ThinkingLevelChangeEntry extends SessionEntryBase {
+  type: 'thinking_level_change';
+  thinkingLevel: string;
 }
 
 // Session info entry
@@ -73,7 +89,23 @@ interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
-type SessionEntry = SessionHeader | MessageEntry | ModelChangeEntry | CompactionEntry | SessionInfoEntry | SessionEntryBase;
+// Label entry (user-defined labels on entries)
+interface LabelEntry extends SessionEntryBase {
+  type: 'label';
+  targetId: string;
+  label: string | undefined;
+}
+
+type SessionEntry = 
+  | SessionHeader 
+  | MessageEntry 
+  | ModelChangeEntry 
+  | CompactionEntry 
+  | BranchSummaryEntry 
+  | ThinkingLevelChangeEntry 
+  | SessionInfoEntry 
+  | LabelEntry
+  | SessionEntryBase;
 
 // Pi message types
 interface PiMessage {
@@ -401,40 +433,125 @@ function randomId(prefix: string): string {
 
 function extractMessages(entries: SessionEntry[], includeTools: boolean): Message[] {
   const messages: Message[] = [];
+  let currentModel: string | undefined;
+  let currentProvider: string | undefined;
 
   for (const entry of entries) {
-    if (entry.type !== 'message') continue;
-    const msgEntry = entry as MessageEntry;
-    const msg = msgEntry.message;
-    if (!msg || !msg.role) continue;
+    const createdAt = parseTimestamp(entry.timestamp);
 
-    const content = extractContent(msg.content);
-    
-    // Skip empty messages unless they have tool calls
-    const toolCalls = includeTools ? extractToolCalls(msg.content) : undefined;
-    if (!content && (!toolCalls || toolCalls.length === 0)) continue;
+    // Track model changes for subsequent messages
+    if (entry.type === 'model_change') {
+      const modelEntry = entry as ModelChangeEntry;
+      currentModel = modelEntry.modelId;
+      currentProvider = modelEntry.provider;
+      
+      // Add as system message to preserve the event
+      messages.push({
+        role: 'system',
+        content: `Model changed to ${modelEntry.provider}/${modelEntry.modelId}`,
+        createdAt,
+        model: modelEntry.modelId,
+        metadata: {
+          entryType: 'model_change',
+          id: entry.id,
+          parentId: entry.parentId,
+          provider: modelEntry.provider,
+          modelId: modelEntry.modelId,
+        },
+      });
+      continue;
+    }
 
-    const createdAt = msg.timestamp ?? parseTimestamp(msgEntry.timestamp);
+    // Compaction summaries - important for context continuity
+    if (entry.type === 'compaction') {
+      const compEntry = entry as CompactionEntry;
+      messages.push({
+        role: 'system',
+        content: compEntry.summary,
+        createdAt,
+        metadata: {
+          entryType: 'compaction',
+          id: entry.id,
+          parentId: entry.parentId,
+          firstKeptEntryId: compEntry.firstKeptEntryId,
+          tokensBefore: compEntry.tokensBefore,
+          details: compEntry.details,
+          fromHook: compEntry.fromHook,
+        },
+      });
+      continue;
+    }
 
-    messages.push({
-      role: mapRole(msg.role),
-      content,
-      createdAt,
-      model: msg.model,
-      tokens: msg.usage?.totalTokens,
-      costUsd: msg.usage?.cost?.total,
-      toolCalls: toolCalls?.length ? toolCalls : undefined,
-      metadata: {
-        id: msgEntry.id,
-        parentId: msgEntry.parentId,
-        provider: msg.provider,
-        api: msg.api,
-        stopReason: msg.stopReason,
-        isError: msg.isError,
-        toolCallId: msg.toolCallId,
-        toolName: msg.toolName,
-      },
-    });
+    // Branch summaries - created when forking a session
+    if (entry.type === 'branch_summary') {
+      const branchEntry = entry as BranchSummaryEntry;
+      messages.push({
+        role: 'system',
+        content: branchEntry.summary,
+        createdAt,
+        metadata: {
+          entryType: 'branch_summary',
+          id: entry.id,
+          parentId: entry.parentId,
+          fromId: branchEntry.fromId,
+          details: branchEntry.details,
+        },
+      });
+      continue;
+    }
+
+    // Thinking level changes
+    if (entry.type === 'thinking_level_change') {
+      const thinkingEntry = entry as ThinkingLevelChangeEntry;
+      messages.push({
+        role: 'system',
+        content: `Thinking level changed to: ${thinkingEntry.thinkingLevel}`,
+        createdAt,
+        metadata: {
+          entryType: 'thinking_level_change',
+          id: entry.id,
+          parentId: entry.parentId,
+          thinkingLevel: thinkingEntry.thinkingLevel,
+        },
+      });
+      continue;
+    }
+
+    // Regular messages
+    if (entry.type === 'message') {
+      const msgEntry = entry as MessageEntry;
+      const msg = msgEntry.message;
+      if (!msg || !msg.role) continue;
+
+      const content = extractContent(msg.content);
+      
+      // Skip empty messages unless they have tool calls
+      const toolCalls = includeTools ? extractToolCalls(msg.content) : undefined;
+      if (!content && (!toolCalls || toolCalls.length === 0)) continue;
+
+      const msgCreatedAt = msg.timestamp ?? createdAt;
+
+      messages.push({
+        role: mapRole(msg.role),
+        content,
+        createdAt: msgCreatedAt,
+        model: msg.model ?? currentModel,
+        tokens: msg.usage?.totalTokens,
+        costUsd: msg.usage?.cost?.total,
+        toolCalls: toolCalls?.length ? toolCalls : undefined,
+        metadata: {
+          entryType: 'message',
+          id: msgEntry.id,
+          parentId: msgEntry.parentId,
+          provider: msg.provider ?? currentProvider,
+          api: msg.api,
+          stopReason: msg.stopReason,
+          isError: msg.isError,
+          toolCallId: msg.toolCallId,
+          toolName: msg.toolName,
+        },
+      });
+    }
   }
 
   // Messages are already in tree order from the JSONL append-only format

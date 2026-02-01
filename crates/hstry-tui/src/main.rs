@@ -631,6 +631,7 @@ enum AppMode {
     Help { scroll: usize },
     Sort,
     Delete { count: usize },
+    DeleteSource { source_id: String, source_name: String },
 }
 
 impl AppMode {
@@ -641,6 +642,7 @@ impl AppMode {
             AppMode::Help { .. } => "HELP",
             AppMode::Sort => "SORT",
             AppMode::Delete { .. } => "DELETE",
+            AppMode::DeleteSource { .. } => "DELETE SOURCE",
         }
     }
 
@@ -650,7 +652,7 @@ impl AppMode {
             AppMode::Search { .. } => Color::Blue,
             AppMode::Help { .. } => Color::Yellow,
             AppMode::Sort => Color::Magenta,
-            AppMode::Delete { .. } => Color::Red,
+            AppMode::Delete { .. } | AppMode::DeleteSource { .. } => Color::Red,
         }
     }
 }
@@ -928,23 +930,10 @@ impl App {
         sources: Vec<Source>,
         conversations: Vec<Conversation>,
     ) -> Self {
-        // Build navigation items
+        // Build navigation items for Sources view (default)
         let mut nav_items = vec![NavItem::All];
         for source in &sources {
             nav_items.push(NavItem::Source(source.id.clone(), source.adapter.clone()));
-        }
-
-        // Collect unique workspaces
-        let mut workspaces: HashSet<String> = HashSet::new();
-        for conv in &conversations {
-            if let Some(ws) = &conv.workspace {
-                workspaces.insert(ws.clone());
-            }
-        }
-        let mut ws_vec: Vec<_> = workspaces.into_iter().collect();
-        ws_vec.sort();
-        for ws in ws_vec {
-            nav_items.push(NavItem::Workspace(ws));
         }
 
         let filtered_conversations = conversations.clone();
@@ -1414,6 +1403,9 @@ fn run_app<B: ratatui::backend::Backend>(
                 AppMode::Delete { .. } => {
                     handle_delete_mode(app, action, rt);
                 }
+                AppMode::DeleteSource { .. } => {
+                    handle_delete_source_mode(app, action, rt);
+                }
             }
         }
     }
@@ -1456,13 +1448,23 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                 .unwrap_or(0);
         }
         KeyAction::Char('d') => {
-            let count = if app.conv_selection.has_selections() {
-                app.conv_selection.selected_indices.len()
+            // Delete conversations when in middle pane, or source when in left pane with source selected
+            if app.focus == FocusPane::Left {
+                if let Some(NavItem::Source(id, name)) = app.nav_items.get(app.nav_selection.index) {
+                    app.mode = AppMode::DeleteSource {
+                        source_id: id.clone(),
+                        source_name: name.clone(),
+                    };
+                }
             } else {
-                usize::from(!app.filtered_conversations.is_empty())
-            };
-            if count > 0 {
-                app.mode = AppMode::Delete { count };
+                let count = if app.conv_selection.has_selections() {
+                    app.conv_selection.selected_indices.len()
+                } else {
+                    usize::from(!app.filtered_conversations.is_empty())
+                };
+                if count > 0 {
+                    app.mode = AppMode::Delete { count };
+                }
             }
         }
         KeyAction::Char('r') => {
@@ -1777,11 +1779,76 @@ fn handle_delete_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
             app.mode = AppMode::Normal;
         }
         KeyAction::Char('y') => {
-            // Perform deletion
-            // Note: This is a placeholder - actual deletion would require database operations
-            app.status_message = "Delete not yet implemented".to_string();
+            // Get conversations to delete
+            let to_delete: Vec<uuid::Uuid> = if app.conv_selection.has_selections() {
+                app.conv_selection
+                    .selected_indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        if app.show_search_results {
+                            app.search_results.get(idx).map(|h| h.conversation_id)
+                        } else {
+                            app.filtered_conversations.get(idx).map(|c| c.id)
+                        }
+                    })
+                    .collect()
+            } else {
+                // Delete current selection
+                let idx = app.conv_selection.index;
+                if app.show_search_results {
+                    app.search_results
+                        .get(idx)
+                        .map(|h| vec![h.conversation_id])
+                        .unwrap_or_default()
+                } else {
+                    app.filtered_conversations
+                        .get(idx)
+                        .map(|c| vec![c.id])
+                        .unwrap_or_default()
+                }
+            };
+
+            let count = to_delete.len();
+            let mut deleted = 0;
+            for id in to_delete {
+                if rt.block_on(app.db.delete_conversation(id)).is_ok() {
+                    deleted += 1;
+                }
+            }
+
+            app.status_message = format!("Deleted {deleted}/{count} conversations");
             app.mode = AppMode::Normal;
             app.conv_selection.deselect_all();
+            app.conv_selection.index = 0;
+            app.refresh_data(rt);
+        }
+        _ => {}
+    }
+}
+
+fn handle_delete_source_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Runtime) {
+    let source_id = if let AppMode::DeleteSource { source_id, .. } = &app.mode {
+        source_id.clone()
+    } else {
+        return;
+    };
+
+    match action {
+        KeyAction::Escape | KeyAction::Char('n') => {
+            app.mode = AppMode::Normal;
+        }
+        KeyAction::Char('y') => {
+            match rt.block_on(app.db.remove_source(&source_id)) {
+                Ok(()) => {
+                    app.status_message = format!("Deleted source '{source_id}'");
+                    app.nav_selection.index = 0;
+                    app.filter.source = None;
+                }
+                Err(e) => {
+                    app.status_message = format!("Error deleting source: {e}");
+                }
+            }
+            app.mode = AppMode::Normal;
             app.refresh_data(rt);
         }
         _ => {}
@@ -1820,6 +1887,7 @@ fn ui(f: &mut Frame, app: &App) {
             draw_search_overlay(f, query, *cursor, app.search_scope);
         }
         AppMode::Delete { count } => draw_delete_overlay(f, *count),
+        AppMode::DeleteSource { source_name, .. } => draw_delete_source_overlay(f, source_name),
         AppMode::Normal => {}
     }
 }
@@ -2319,6 +2387,39 @@ fn draw_delete_overlay(f: &mut Frame, count: usize) {
         Line::from(""),
         Line::from(format!("Delete {count} conversation(s)?")).bold(),
         Line::from(""),
+        Line::from("This action cannot be undone.").fg(Color::DarkGray),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" y ", Style::default().fg(Color::Black).bg(Color::Red)),
+            Span::raw(" Yes  "),
+            Span::styled(" n ", Style::default().fg(Color::Black).bg(Color::Green)),
+            Span::raw(" No"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(paragraph, inner);
+}
+
+fn draw_delete_source_overlay(f: &mut Frame, source_name: &str) {
+    let area = centered_rect(60, 25, f.area());
+
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Confirm Delete Source ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(format!("Delete source '{source_name}'?")).bold(),
+        Line::from(""),
+        Line::from("All conversations from this source will be deleted.").fg(Color::Yellow),
         Line::from("This action cannot be undone.").fg(Color::DarkGray),
         Line::from(""),
         Line::from(vec![

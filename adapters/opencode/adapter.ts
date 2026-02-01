@@ -267,6 +267,7 @@ async function parseNewLayout(basePath: string, opts?: ParseOptions): Promise<Co
           let tokensOut = 0;
           let cost = 0;
           let model: string | undefined;
+          let provider: string | undefined;
 
           for (const msg of messages) {
             if (msg.tokens) {
@@ -275,12 +276,16 @@ async function parseNewLayout(basePath: string, opts?: ParseOptions): Promise<Co
             }
             if (msg.costUsd) cost += msg.costUsd;
             if (msg.model && !model) model = msg.model;
+            if (!provider && msg.metadata && typeof msg.metadata.provider === 'string') {
+              provider = msg.metadata.provider;
+            }
           }
 
           if (tokensIn > 0) conv.tokensIn = tokensIn;
           if (tokensOut > 0) conv.tokensOut = tokensOut;
           if (cost > 0) conv.costUsd = cost;
           if (model) conv.model = model;
+          if (provider) conv.provider = provider;
 
           conversations.push(conv);
 
@@ -472,6 +477,7 @@ async function parseOldLayout(basePath: string, opts?: ParseOptions): Promise<Co
           let tokensOut = 0;
           let cost = 0;
           let model: string | undefined;
+          let provider: string | undefined;
 
           for (const msg of messages) {
             if (msg.tokens) {
@@ -480,12 +486,16 @@ async function parseOldLayout(basePath: string, opts?: ParseOptions): Promise<Co
             }
             if (msg.costUsd) cost += msg.costUsd;
             if (msg.model && !model) model = msg.model;
+            if (!provider && msg.metadata && typeof msg.metadata.provider === 'string') {
+              provider = msg.metadata.provider;
+            }
           }
 
           if (tokensIn > 0) conv.tokensIn = tokensIn;
           if (tokensOut > 0) conv.tokensOut = tokensOut;
           if (cost > 0) conv.costUsd = cost;
           if (model) conv.model = model;
+          if (provider) conv.provider = provider;
 
           conversations.push(conv);
 

@@ -320,7 +320,7 @@ function buildPiFiles(conversations: Conversation[], opts: ExportOptions): Expor
         id: randomId(''),
         parentId: lastEntryId,
         timestamp: new Date(conv.createdAt).toISOString(),
-        provider: deriveProvider(conv.model),
+        provider: conv.provider ?? deriveProvider(conv.model),
         modelId: conv.model,
       };
       lines.push(JSON.stringify(modelEntry));
@@ -610,13 +610,25 @@ function calculateTotals(entries: SessionEntry[]): {
   tokensOut?: number;
   costUsd?: number;
   model?: string;
+  provider?: string;
 } {
   let tokensIn = 0;
   let tokensOut = 0;
   let costUsd = 0;
   let model: string | undefined;
+  let provider: string | undefined;
 
   for (const entry of entries) {
+    if (entry.type === 'model_change') {
+      const modelEntry = entry as ModelChangeEntry;
+      if (modelEntry.provider) {
+        provider = modelEntry.provider;
+      }
+      if (modelEntry.modelId) {
+        model = modelEntry.modelId;
+      }
+      continue;
+    }
     if (entry.type !== 'message') continue;
     const msg = (entry as MessageEntry).message;
     if (msg.role !== 'assistant' || !msg.usage) continue;
@@ -625,6 +637,7 @@ function calculateTotals(entries: SessionEntry[]): {
     tokensOut += msg.usage.output;
     costUsd += msg.usage.cost?.total ?? 0;
     if (msg.model) model = msg.model;
+    if (msg.provider) provider = msg.provider;
   }
 
   return {
@@ -632,6 +645,7 @@ function calculateTotals(entries: SessionEntry[]): {
     tokensOut: tokensOut > 0 ? tokensOut : undefined,
     costUsd: costUsd > 0 ? costUsd : undefined,
     model,
+    provider: provider ?? (model ? deriveProvider(model) : undefined),
   };
 }
 
@@ -748,7 +762,7 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
     const title = latestSessionInfo?.name || deriveTitle(messages);
 
     // Calculate totals from assistant messages with usage
-    const { tokensIn, tokensOut, costUsd, model } = calculateTotals(entries);
+    const { tokensIn, tokensOut, costUsd, model, provider } = calculateTotals(entries);
 
     conversations.push({
       externalId: header.id,
@@ -757,6 +771,7 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       updatedAt,
       workspace: header.cwd || decodeWorkspaceFromPath(filePath),
       model,
+      provider,
       tokensIn,
       tokensOut,
       costUsd,

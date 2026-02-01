@@ -2,12 +2,6 @@
 
 ## Open
 
-### [trx-ex6v] Add typed Part enum to hstry-core (P1, feature)
-Move CanonPart types from Octo's canon module to hstry-core. This becomes the shared contract for message parts (Text, Thinking, ToolCall, ToolResult, Image, Audio, etc). Add ts_rs as optional feature for TypeScript generation.
-
-### [trx-qtb6] Add gRPC write API for external writers (Octo) (P1, feature)
-Add WriteService to hstry gRPC API so Octo can write messages directly. Includes UpsertConversation and WriteMessages RPCs. Uses source_id=pi and agent session IDs as external_id for deduplication via existing UNIQUE(source_id, external_id).
-
 ### [trx-vg8v] Schema: store host_id/hostname on sessions + migrations (P1, task)
 
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
@@ -45,6 +39,8 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-qtb6] Add gRPC write API for external writers (Octo) (closed 2026-02-01)
+- [trx-ex6v] Add typed Part enum to hstry-core (closed 2026-02-01)
 - [trx-cbkm] Use Unix domain socket for gRPC service security (closed 2026-02-01)
 - [trx-0r08] Adjust clippy print rules for CLI crates (closed 2026-01-28)
 - [trx-ca4j] Core: remote search/show helpers + host field (closed 2026-01-28)

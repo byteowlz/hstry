@@ -1348,6 +1348,7 @@ name = "hstry-tui"
 version = "0.2.12"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "crossterm",
  "hstry-core",

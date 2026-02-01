@@ -18,3 +18,4 @@ crossterm.workspace = true
 ratatui.workspace = true
 pulldown-cmark.workspace = true
 uuid.workspace = true
+chrono.workspace = true

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::Datelike;
 use clap::{Args, Parser};
 use crossterm::{
     event::{
@@ -735,9 +736,13 @@ impl SearchScope {
 
 #[derive(Debug, Clone, Default)]
 struct FilterState {
-    source_filter: Option<String>,
-    workspace_filter: Option<String>,
+    source: Option<String>,
+    workspace: Option<String>,
+    date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
 }
+
+// Import for date filtering
+use chrono::{DateTime, NaiveDate, Utc};
 
 // =============================================================================
 // Selection State
@@ -809,6 +814,35 @@ impl Selection {
 }
 
 // =============================================================================
+// Left Pane View Modes
+// =============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftPaneView {
+    Sources,
+    Workspaces,
+    Dates,
+}
+
+impl LeftPaneView {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Sources => "Sources",
+            Self::Workspaces => "Workspaces",
+            Self::Dates => "Dates",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Sources => Self::Workspaces,
+            Self::Workspaces => Self::Dates,
+            Self::Dates => Self::Sources,
+        }
+    }
+}
+
+// =============================================================================
 // Navigation Item for Left Pane
 // =============================================================================
 
@@ -817,6 +851,10 @@ enum NavItem {
     All,
     Source(String, String), // (id, adapter name)
     Workspace(String),
+    // Date grouping items
+    DateYear(i32),          // Year (e.g., 2025)
+    DateMonth(i32, u32),    // Year, Month (1-12)
+    DateDay(i32, u32, u32), // Year, Month, Day
 }
 
 impl NavItem {
@@ -825,6 +863,19 @@ impl NavItem {
             NavItem::All => "All Conversations".to_string(),
             NavItem::Source(_, adapter) => adapter.clone(),
             NavItem::Workspace(ws) => format!("@ {ws}"),
+            NavItem::DateYear(year) => year.to_string(),
+            NavItem::DateMonth(year, month) => {
+                let month_names = [
+                    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                    "Nov", "Dec",
+                ];
+                format!(
+                    "{} {}",
+                    month_names.get(*month as usize).unwrap_or(&"?"),
+                    year
+                )
+            }
+            NavItem::DateDay(year, month, day) => format!("{month:02}/{day:02}/{year}"),
         }
     }
 }
@@ -854,8 +905,11 @@ struct App {
     search_scope: SearchScope,
 
     // Navigation items for left pane
+    left_pane_view: LeftPaneView,
     nav_items: Vec<NavItem>,
     nav_selection: Selection,
+    // Track expanded date groups
+    expanded_dates: HashSet<String>,
 
     // Middle pane selection
     conv_selection: Selection,
@@ -912,8 +966,10 @@ impl App {
             show_search_results: false,
             last_search_query: None,
             search_scope: SearchScope::Local,
+            left_pane_view: LeftPaneView::Sources,
             nav_items,
             nav_selection: Selection::default(),
+            expanded_dates: HashSet::new(),
             conv_selection: Selection::default(),
             detail_scroll: 0,
             status_message: "Press ? for help, q to quit".to_string(),
@@ -950,13 +1006,18 @@ impl App {
             .all_conversations
             .iter()
             .filter(|c| {
-                if let Some(ref source_id) = self.filter.source_filter
+                if let Some(ref source_id) = self.filter.source
                     && &c.source_id != source_id
                 {
                     return false;
                 }
-                if let Some(ref workspace) = self.filter.workspace_filter
+                if let Some(ref workspace) = self.filter.workspace
                     && c.workspace.as_ref() != Some(workspace)
+                {
+                    return false;
+                }
+                if let Some((start, end)) = self.filter.date_range
+                    && (c.created_at < start || c.created_at > end)
                 {
                     return false;
                 }
@@ -1004,6 +1065,106 @@ impl App {
                     .sort_by(|a, b| a.source_id.cmp(&b.source_id));
             }
         }
+    }
+
+    fn toggle_date_expand(&mut self, key: &str) {
+        if self.expanded_dates.contains(key) {
+            self.expanded_dates.remove(key);
+        } else {
+            self.expanded_dates.insert(key.to_string());
+        }
+    }
+
+    fn rebuild_nav_items(&mut self) {
+        self.nav_items.clear();
+
+        match self.left_pane_view {
+            LeftPaneView::Sources => {
+                self.nav_items.push(NavItem::All);
+                for source in &self.sources {
+                    self.nav_items
+                        .push(NavItem::Source(source.id.clone(), source.adapter.clone()));
+                }
+            }
+            LeftPaneView::Workspaces => {
+                self.nav_items.push(NavItem::All);
+                // Collect unique workspaces
+                let mut workspaces: HashSet<String> = HashSet::new();
+                for conv in &self.all_conversations {
+                    if let Some(ws) = &conv.workspace {
+                        workspaces.insert(ws.clone());
+                    }
+                }
+                let mut ws_vec: Vec<_> = workspaces.into_iter().collect();
+                ws_vec.sort();
+                for ws in ws_vec {
+                    self.nav_items.push(NavItem::Workspace(ws));
+                }
+            }
+            LeftPaneView::Dates => {
+                // Build date hierarchy
+                // Collect all years from conversations
+                let mut years: HashSet<i32> = HashSet::new();
+                for conv in &self.all_conversations {
+                    years.insert(conv.created_at.year());
+                }
+                let mut years: Vec<i32> = years.into_iter().collect();
+                years.sort_by(|a, b| b.cmp(a)); // Descending (newest first)
+
+                for year in years {
+                    self.nav_items.push(NavItem::DateYear(year));
+
+                    // If year is expanded, add months
+                    if self.expanded_dates.contains(&format!("year:{year}")) {
+                        let mut months: HashSet<u32> = HashSet::new();
+                        for conv in &self.all_conversations {
+                            if conv.created_at.year() == year {
+                                months.insert(conv.created_at.month());
+                            }
+                        }
+                        let mut months: Vec<u32> = months.into_iter().collect();
+                        months.sort_by(|a, b| b.cmp(a)); // Descending
+
+                        for month in months {
+                            self.nav_items.push(NavItem::DateMonth(year, month));
+
+                            // If month is expanded, add days
+                            if self
+                                .expanded_dates
+                                .contains(&format!("month:{year}-{month}"))
+                            {
+                                let mut days: HashSet<u32> = HashSet::new();
+                                for conv in &self.all_conversations {
+                                    if conv.created_at.year() == year
+                                        && conv.created_at.month() == month
+                                    {
+                                        days.insert(conv.created_at.day());
+                                    }
+                                }
+                                let mut days: Vec<u32> = days.into_iter().collect();
+                                days.sort_by(|a, b| b.cmp(a)); // Descending
+
+                                for day in days {
+                                    self.nav_items.push(NavItem::DateDay(year, month, day));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reset selection if it's now out of bounds
+        if self.nav_selection.index >= self.nav_items.len() && !self.nav_items.is_empty() {
+            self.nav_selection.index = self.nav_items.len() - 1;
+        }
+    }
+
+    fn cycle_left_pane_view(&mut self) {
+        self.left_pane_view = self.left_pane_view.next();
+        self.rebuild_nav_items();
+        self.nav_selection.index = 0;
+        self.status_message = format!("View: {}", self.left_pane_view.label());
     }
 
     fn load_messages(&mut self, rt: &tokio::runtime::Runtime) {
@@ -1063,8 +1224,8 @@ impl App {
 
             let opts = hstry_core::db::SearchOptions {
                 limit: Some(100),
-                source_id: self.filter.source_filter.clone(),
-                workspace: self.filter.workspace_filter.clone(),
+                source_id: self.filter.source.clone(),
+                workspace: self.filter.workspace.clone(),
                 ..Default::default()
             };
             let search_scope = self.search_scope;
@@ -1357,22 +1518,53 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::Char('V') => {
             app.conv_selection.deselect_all();
         }
+        KeyAction::Tab => {
+            // Cycle left pane view when focused on left pane
+            if app.focus == FocusPane::Left {
+                app.cycle_left_pane_view();
+            }
+        }
         KeyAction::Select => {
             if app.focus == FocusPane::Left {
-                // Apply filter based on selected nav item
+                // Handle selection based on nav item type
                 if let Some(nav_item) = app.nav_items.get(app.nav_selection.index) {
                     match nav_item {
                         NavItem::All => {
-                            app.filter.source_filter = None;
-                            app.filter.workspace_filter = None;
+                            app.filter.source = None;
+                            app.filter.workspace = None;
+                            app.filter.date_range = None;
                         }
                         NavItem::Source(id, _) => {
-                            app.filter.source_filter = Some(id.clone());
-                            app.filter.workspace_filter = None;
+                            app.filter.source = Some(id.clone());
+                            app.filter.workspace = None;
+                            app.filter.date_range = None;
                         }
                         NavItem::Workspace(ws) => {
-                            app.filter.source_filter = None;
-                            app.filter.workspace_filter = Some(ws.clone());
+                            app.filter.source = None;
+                            app.filter.workspace = Some(ws.clone());
+                            app.filter.date_range = None;
+                        }
+                        NavItem::DateYear(year) => {
+                            app.toggle_date_expand(&format!("year:{year}"));
+                            app.rebuild_nav_items();
+                            return false;
+                        }
+                        NavItem::DateMonth(year, month) => {
+                            app.toggle_date_expand(&format!("month:{year}-{month}"));
+                            app.rebuild_nav_items();
+                            return false;
+                        }
+                        NavItem::DateDay(year, month, day) => {
+                            // Filter to specific day
+                            let start = NaiveDate::from_ymd_opt(*year, *month, *day)
+                                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+                            let end = NaiveDate::from_ymd_opt(*year, *month, *day)
+                                .and_then(|d| d.and_hms_opt(23, 59, 59))
+                                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+                            app.filter.date_range = start.zip(end);
+                            app.filter.source = None;
+                            app.filter.workspace = None;
                         }
                     }
                     app.apply_filters();
@@ -1646,7 +1838,7 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new("").style(base_style), area);
 
     let block = Block::default()
-        .title(" Sources ")
+        .title(format!(" {} ", app.left_pane_view.label()))
         .borders(Borders::ALL)
         .border_style(border_style)
         .style(base_style);
@@ -1661,11 +1853,12 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, item)| {
             let is_selected = i == app.nav_selection.index;
             let is_active = match item {
-                NavItem::All => {
-                    app.filter.source_filter.is_none() && app.filter.workspace_filter.is_none()
+                NavItem::All => app.filter.source.is_none() && app.filter.workspace.is_none(),
+                NavItem::Source(id, _) => app.filter.source.as_ref() == Some(id),
+                NavItem::Workspace(ws) => app.filter.workspace.as_ref() == Some(ws),
+                NavItem::DateYear(_) | NavItem::DateMonth(_, _) | NavItem::DateDay(_, _, _) => {
+                    false
                 }
-                NavItem::Source(id, _) => app.filter.source_filter.as_ref() == Some(id),
-                NavItem::Workspace(ws) => app.filter.workspace_filter.as_ref() == Some(ws),
             };
 
             let style = if is_selected && is_focused {
@@ -1681,6 +1874,23 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
             let prefix = match item {
                 NavItem::All => " * ",
                 NavItem::Source(_, _) | NavItem::Workspace(_) => "   ",
+                NavItem::DateYear(year) => {
+                    let key = format!("year:{year}");
+                    if app.expanded_dates.contains(&key) {
+                        "[-] "
+                    } else {
+                        "[+] "
+                    }
+                }
+                NavItem::DateMonth(year, month) => {
+                    let key = format!("month:{year}-{month}");
+                    if app.expanded_dates.contains(&key) {
+                        "[-] "
+                    } else {
+                        "[+] "
+                    }
+                }
+                NavItem::DateDay(_, _, _) => "     ",
             };
 
             ListItem::new(format!("{}{}", prefix, item.label())).style(style)
@@ -1741,7 +1951,7 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
                 let source = &hit.source_adapter;
                 ListItem::new(vec![
                     Line::from(title).style(style),
-                    Line::from(format!("  {source} | {host} | {snippet}")).fg(Color::DarkGray),
+                    Line::from(format!("    {source} | {host} | {snippet}")).fg(Color::DarkGray),
                 ])
             })
             .collect();
@@ -1775,7 +1985,7 @@ fn draw_middle_pane(f: &mut Frame, app: &App, area: Rect) {
 
                 ListItem::new(vec![
                     Line::from(format!("{marker}{title}")).style(style),
-                    Line::from(format!("    {date} | {source}")).fg(Color::DarkGray),
+                    Line::from(format!("      {date} | {source}")).fg(Color::DarkGray),
                 ])
             })
             .collect();
@@ -1964,6 +2174,11 @@ fn draw_help_overlay(f: &mut Frame, scroll: usize) {
         Line::from("  Ctrl-d        Page down"),
         Line::from("  Ctrl-u        Page up"),
         Line::from("  Enter         Select/expand"),
+        Line::from(""),
+        Line::from("LEFT PANE").bold(),
+        Line::from(""),
+        Line::from("  Tab           Cycle view (Sources/Workspaces/Dates)"),
+        Line::from("  Enter         Expand/collapse or filter"),
         Line::from(""),
         Line::from("SELECTION").bold(),
         Line::from(""),

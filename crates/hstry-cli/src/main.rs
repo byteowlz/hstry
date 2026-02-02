@@ -286,6 +286,10 @@ enum Command {
         #[arg(long)]
         workspace: Option<String>,
 
+        /// Filter by message role (user, assistant, system, tool)
+        #[arg(long, short = 'r', value_enum)]
+        role: Vec<SearchRoleArg>,
+
         /// Output directory (for multi-file formats like pi, opencode)
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -840,6 +844,7 @@ async fn main() -> Result<()> {
             conversations,
             source,
             workspace,
+            role,
             output,
             pretty,
         } => {
@@ -855,6 +860,7 @@ async fn main() -> Result<()> {
                 &conversations,
                 source,
                 workspace,
+                role,
                 output,
                 pretty,
                 cli.json,
@@ -2454,6 +2460,7 @@ async fn cmd_export(
     conversations_arg: &str,
     source_filter: Option<String>,
     workspace_filter: Option<String>,
+    role_filter: Vec<SearchRoleArg>,
     output: Option<PathBuf>,
     pretty: bool,
     json_output: bool,
@@ -2518,6 +2525,18 @@ async fn cmd_export(
         let messages = db.get_messages(conv.id).await?;
         let parsed_messages: Vec<ParsedMessage> = messages
             .into_iter()
+            .filter(|m| {
+                // Filter by role if specified
+                if role_filter.is_empty() {
+                    return true;
+                }
+                role_filter.iter().any(|r| match r {
+                    SearchRoleArg::User => m.role == MessageRole::User,
+                    SearchRoleArg::Assistant => m.role == MessageRole::Assistant,
+                    SearchRoleArg::System => m.role == MessageRole::System,
+                    SearchRoleArg::Tool => m.role == MessageRole::Tool,
+                })
+            })
             .map(|m| ParsedMessage {
                 role: m.role.to_string(),
                 content: m.content,

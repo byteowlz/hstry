@@ -45,28 +45,168 @@ impl Database {
         Ok(db)
     }
 
-    /// Initialize schema.
+    /// Initialize schema and run migrations.
     async fn init(&self) -> Result<()> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        self.run_migrations().await?;
         self.ensure_conversations_readable_id_column().await?;
         self.ensure_conversations_provider_column().await?;
-        self.ensure_conversations_readable_id_index().await?;
         self.ensure_messages_parts_column().await?;
         self.ensure_fts_schema_optimized().await?;
         Ok(())
     }
 
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
+    /// Run all pending migrations from the migrations directory.
+    async fn run_migrations(&self) -> Result<()> {
+        // Try to find migrations directory:
+        // 1. HSTRY_MIGRATIONS_DIR environment variable
+        // 2. CARGO_MANIFEST_DIR/migrations (when running from source)
+        // 3. XDG_DATA_HOME/hstry/migrations (user data directory)
+        // 4. ./migrations (fallback for development)
+
+        let migrations_dir = if let Ok(dir) = std::env::var("HSTRY_MIGRATIONS_DIR") {
+            std::path::PathBuf::from(dir)
+        } else if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            let path = std::path::PathBuf::from(manifest_dir).join("migrations");
+            if path.exists() {
+                path
+            } else {
+                // Fallback to embedded migrations for production builds
+                return self.run_embedded_migrations().await;
+            }
+        } else if let Some(data_dir) = dirs::data_dir() {
+            let path = data_dir.join("hstry").join("migrations");
+            if path.exists() {
+                path
+            } else {
+                return self.run_embedded_migrations().await;
+            }
+        } else {
+            std::path::PathBuf::from("migrations")
+        };
+
+        if !migrations_dir.exists() {
+            return self.run_embedded_migrations().await;
+        }
+
+        let mut entries: Vec<_> = std::fs::read_dir(&migrations_dir)?
+            .filter_map(|e| e.ok())
+            .collect();
+        entries.sort_by_key(|e| e.path());
+
+        for entry in entries {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("sql") {
+                continue;
+            }
+
+            let filename = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| Error::Other("Invalid migration filename".to_string()))?;
+
+            // Parse version from filename (e.g., "001_initial_schema.sql" -> 1)
+            let version = filename
+                .split('_')
+                .next()
+                .and_then(|v| v.parse::<i64>().ok())
+                .ok_or_else(|| Error::Other(format!("Invalid migration filename: {filename}")))?;
+
+            // Check if already applied
+            let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = ?")
+                .bind(version)
+                .fetch_optional(&self.pool)
+                .await?;
+
+            if applied.is_some() {
+                continue; // Already applied
+            }
+
+            // Read and execute migration
+            let migration_sql = std::fs::read_to_string(&path)?;
+            tracing::info!("Running migration: {filename}");
+
+            let mut tx = self.pool.begin().await?;
+            sqlx::raw_sql(&migration_sql).execute(&mut *tx).await?;
+
+            // Record migration
+            sqlx::query(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            )
+            .bind(version)
+            .bind(filename)
+            .bind(Utc::now().timestamp())
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            tracing::info!("Applied migration: {filename}");
+        }
+
+        Ok(())
     }
 
-    async fn ensure_conversations_readable_id_index(&self) -> Result<()> {
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_conv_readable_id ON conversations(readable_id)",
-        )
-        .execute(&self.pool)
-        .await?;
+    /// Run embedded migrations (compiled into the binary).
+    async fn run_embedded_migrations(&self) -> Result<()> {
+        // Embedded migrations - update this list when adding new migrations
+        let migrations: &[(&str, &str)] = &[
+            (
+                "001_initial_schema.sql",
+                include_str!("../migrations/001_initial_schema.sql"),
+            ),
+            (
+                "002_add_provider_column.sql",
+                include_str!("../migrations/002_add_provider_column.sql"),
+            ),
+            (
+                "003_add_provider_index.sql",
+                include_str!("../migrations/003_add_provider_index.sql"),
+            ),
+        ];
+
+        for (filename, sql) in migrations {
+            // Parse version from filename
+            let version = filename
+                .split('_')
+                .next()
+                .and_then(|v| v.parse::<i64>().ok())
+                .ok_or_else(|| Error::Other(format!("Invalid migration filename: {filename}")))?;
+
+            // Check if already applied
+            let applied = sqlx::query("SELECT 1 FROM schema_migrations WHERE version = ?")
+                .bind(version)
+                .fetch_optional(&self.pool)
+                .await?;
+
+            if applied.is_some() {
+                continue; // Already applied
+            }
+
+            // Execute migration
+            tracing::info!("Running embedded migration: {filename}");
+
+            let mut tx = self.pool.begin().await?;
+            sqlx::raw_sql(sql).execute(&mut *tx).await?;
+
+            // Record migration
+            sqlx::query(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+            )
+            .bind(version)
+            .bind(*filename)
+            .bind(Utc::now().timestamp())
+            .execute(&mut *tx)
+            .await?;
+
+            tx.commit().await?;
+            tracing::info!("Applied embedded migration: {filename}");
+        }
+
         Ok(())
+    }
+
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     async fn ensure_conversations_readable_id_column(&self) -> Result<()> {

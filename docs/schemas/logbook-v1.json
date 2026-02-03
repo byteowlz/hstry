@@ -1,0 +1,359 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hstry.dev/schemas/logbook-v1.json",
+  "title": "Hstry Logbook",
+  "description": "Concise extraction of facts and decisions from conversation history",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version (semver)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Information about the logbook generation",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Workspace name"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO8601 timestamp when logbook was generated"
+        },
+        "source_range": {
+          "type": "object",
+          "description": "Time range of conversations processed",
+          "properties": {
+            "from": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Oldest conversation timestamp processed"
+            },
+            "to": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Newest conversation timestamp processed"
+            },
+            "conversations_processed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of conversations analyzed"
+            },
+            "messages_processed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of messages analyzed"
+            }
+          },
+          "required": ["from", "to"]
+        },
+        "config": {
+          "type": "object",
+          "description": "Configuration used for extraction",
+          "properties": {
+            "code_blocks": {
+              "type": "string",
+              "enum": ["none", "context", "summary", "full"],
+              "description": "How code blocks were handled"
+            },
+            "chunk_strategy": {
+              "type": "string",
+              "enum": ["conversation", "messages", "tokens"],
+              "description": "Chunking strategy used"
+            },
+            "chunk_size": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Chunk size (messages or tokens depending on strategy)"
+            },
+            "similarity_threshold": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Deduplication similarity threshold"
+            },
+            "llm_model": {
+              "type": "string",
+              "description": "LLM model used for extraction"
+            }
+          }
+        },
+        "hstry_version": {
+          "type": "string",
+          "description": "Version of hstry used to generate this logbook"
+        }
+      },
+      "required": ["workspace", "generated_at", "source_range"]
+    },
+    "stats": {
+      "type": "object",
+      "description": "Statistics about extracted content",
+      "properties": {
+        "total_facts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of facts extracted"
+        },
+        "total_decisions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of decisions extracted"
+        },
+        "facts_by_category": {
+          "type": "object",
+          "description": "Facts count per category",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "decisions_by_category": {
+          "type": "object",
+          "description": "Decisions count per category",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "deduplication_stats": {
+          "type": "object",
+          "description": "Statistics about deduplication",
+          "properties": {
+            "facts_before_dedup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "facts_after_dedup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "facts_removed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "decisions_before_dedup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "decisions_after_dedup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "decisions_merged": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "facts_before_dedup",
+            "facts_after_dedup",
+            "facts_removed",
+            "decisions_before_dedup",
+            "decisions_after_dedup",
+            "decisions_merged"
+          ]
+        }
+      },
+      "required": ["total_facts", "total_decisions"]
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "A fact extracted from conversation",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for this fact"
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Concise factual statement (1-2 sentences)"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "architecture",
+              "bug",
+              "feature",
+              "config",
+              "performance",
+              "api",
+              "database",
+              "security",
+              "testing",
+              "deployment",
+              "other"
+            ],
+            "description": "Category of the fact"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Confidence score (0-1)"
+          },
+          "related_entities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files, components, or systems mentioned"
+          },
+          "context": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Brief context or code snippet (only included with --code-blocks context/full)"
+          },
+          "source": {
+            "type": "object",
+            "description": "Reference to the source conversation",
+            "properties": {
+              "conversation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "conversation_title": {
+                "type": "string",
+                "description": "Title of the source conversation"
+              },
+              "message_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Specific message where fact/decision appeared"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO8601 timestamp from the conversation"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "Workspace name"
+              },
+              "model": {
+                "type": "string",
+                "description": "LLM model used in the conversation"
+              }
+            },
+            "required": ["conversation_id", "timestamp"]
+          }
+        },
+        "required": ["id", "statement", "category", "confidence", "source"]
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "A decision made during the conversation",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Unique identifier for this decision"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "What was decided (concise)"
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "Why this decision was made"
+          },
+          "alternatives_considered": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "description": "Other options that were discussed"
+          },
+          "impact": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "Impact level of this decision"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["technical", "product", "process", "infrastructure", "team", "other"],
+            "description": "Type of decision"
+          },
+          "code_evidence": {
+            "type": "object",
+            "description": "Code demonstrating the decision (optional)",
+            "properties": {
+              "snippet": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 5000,
+                "description": "Code demonstrating the decision (3-10 lines recommended)"
+              },
+              "language": {
+                "type": "string",
+                "description": "Programming language (rust, typescript, python, etc.)"
+              },
+              "purpose": {
+                "type": "string",
+                "maxLength": 300,
+                "description": "What this code demonstrates"
+              },
+              "context": {
+                "type": "string",
+                "maxLength": 300,
+                "description": "Where this code would be used (optional)"
+              }
+            },
+            "required": ["snippet", "language", "purpose"]
+          },
+          "source": {
+            "type": "object",
+            "description": "Reference to the source conversation",
+            "properties": {
+              "conversation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "conversation_title": {
+                "type": "string",
+                "description": "Title of the source conversation"
+              },
+              "message_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Specific message where fact/decision appeared"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO8601 timestamp from the conversation"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "Workspace name"
+              },
+              "model": {
+                "type": "string",
+                "description": "LLM model used in the conversation"
+              }
+            },
+            "required": ["conversation_id", "timestamp"]
+          }
+        },
+        "required": ["id", "description", "rationale", "impact", "category", "source"]
+      }
+    }
+  },
+  "required": ["version", "metadata", "stats", "facts", "decisions"],
+  "additionalProperties": false
+}

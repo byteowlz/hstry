@@ -1,0 +1,11 @@
+=== Project Logbook: my-project ===
+Generated: 2026-02-02 13:11:53 UTC
+Source: 7 events, Jan 15 → Feb 2
+
+2026-02-01 | DECISION | Deploy to Kubernetes on AWS EKS
+2026-01-28 | BUG | Memory leak in connection pool (fixed in v0.2.1)
+2026-01-25 | DECISION | Use GitHub Actions for CI/CD
+2026-01-20 | DECISION | Adopt async/await with Result error handling
+2026-01-18 | FACT | Authentication uses JWT with RS256
+2026-01-16 | DECISION | PostgreSQL as primary database
+2026-01-15 | DECISION | Rust with Tokio for async runtime

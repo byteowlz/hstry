@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hstry.dev/schemas/logbook-timeline-v1.json",
+  "title": "Hstry Logbook Timeline",
+  "description": "Simple chronological timeline of facts and decisions",
+  "type": "object",
+  "properties": {
+    "workspace": {
+      "type": "string",
+      "description": "Workspace name"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 timestamp when logbook was generated"
+    },
+    "source_range": {
+      "type": "object",
+      "description": "Time range of conversations processed",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Oldest conversation timestamp"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Newest conversation timestamp"
+        }
+      },
+      "required": ["from", "to"]
+    },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this event occurred"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["decision", "fact", "bug"],
+            "description": "Type of event"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "What happened (1 sentence preferred)"
+          },
+          "rationale": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Why (for decisions)"
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Alternatives considered (for decisions)"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Brief code snippet if critical"
+          },
+          "resolution": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "How it was fixed (for bugs)"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "conversation_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "message_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": ["conversation_id"]
+          }
+        },
+        "required": ["timestamp", "type", "content", "source"]
+      }
+    }
+  },
+  "required": ["workspace", "generated_at", "source_range", "timeline"]
+}

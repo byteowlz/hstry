@@ -1,0 +1,36 @@
+=== Project Logbook: my-project ===
+Generated: 2026-02-02 13:11:53 UTC
+Source: 7 events, 2026-01-15 → 2026-02-02
+
+2026-02-01 10:30:00 | DECISION | Deploy to Kubernetes on AWS EKS
+  → Rationale: Team expertise and managed service benefits
+  → Alternatives: Docker Compose on EC2, AWS ECS, Self-hosted k8s
+  → Source: conv:f7a8b9c0
+
+2026-01-28 09:45:00 | BUG | Memory leak in connection pool when not released
+  → Resolution: Fixed in v0.2.1: ensure `.await` is called for all pool operations
+  → Source: conv:e6f7a8b9
+
+2026-01-25 16:00:00 | DECISION | Use GitHub Actions for CI/CD
+  → Rationale: Integrated with GitHub, no additional setup needed
+  → Alternatives: GitLab CI, CircleCI, Self-hosted Jenkins
+  → Source: conv:d5e6f7a8
+
+2026-01-20 11:30:00 | DECISION | Adopt async/await with Result<T, E> error handling
+  → Rationale: Explicit error handling, better than panics
+  → Alternatives: Callbacks, Option for errors
+  → Code: async fn fetch_user(id: i32) -> Result<User>
+  → Source: conv:c4d5e6f7
+
+2026-01-18 09:00:00 | FACT | Authentication uses JWT with RS256 signing
+  → Source: conv:b3c4d5e6
+
+2026-01-16 14:20:00 | DECISION | PostgreSQL as primary database
+  → Rationale: ACID transactions and JSONB support
+  → Alternatives: MySQL, MongoDB
+  → Code: let pool = PgPoolOptions::new().max_connections(10).connect(&url).await?
+  → Source: conv:a2b3c4d5
+
+2026-01-15 10:30:00 | DECISION | Use Rust with Tokio for async runtime
+  → Rationale: Need async operations without blocking threads
+  → Source: conv:9a1b2c3d

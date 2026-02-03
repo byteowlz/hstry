@@ -1,0 +1,79 @@
+{
+  "workspace": "my-project",
+  "generated_at": "2026-02-02T13:11:53.123Z",
+  "source_range": {
+    "from": "2026-01-15T10:30:00Z",
+    "to": "2026-02-02T11:00:00Z"
+  },
+  "timeline": [
+    {
+      "timestamp": "2026-02-01T10:30:00Z",
+      "type": "decision",
+      "content": "Deploy to Kubernetes on AWS EKS",
+      "rationale": "Team expertise and managed service benefits",
+      "alternatives": ["Docker Compose on EC2", "AWS ECS", "Self-hosted k8s"],
+      "source": {
+        "conversation_id": "f7a8b9c0-d1e2-3456-f123-456789012345"
+      }
+    },
+    {
+      "timestamp": "2026-01-28T09:45:00Z",
+      "type": "bug",
+      "content": "Memory leak in connection pool when not released",
+      "resolution": "Fixed in v0.2.1: ensure `.await` is called for all pool operations",
+      "source": {
+        "conversation_id": "e6f7a8b9-c0d1-2345-e123-345678901234",
+        "message_id": "f7a8b9c0-d1e2-3456-f123-456789012346"
+      }
+    },
+    {
+      "timestamp": "2026-01-25T16:00:00Z",
+      "type": "decision",
+      "content": "Use GitHub Actions for CI/CD",
+      "rationale": "Integrated with GitHub, no additional setup needed",
+      "alternatives": ["GitLab CI", "CircleCI", "Self-hosted Jenkins"],
+      "source": {
+        "conversation_id": "d5e6f7a8-b9c0-1234-d012-234567890123"
+      }
+    },
+    {
+      "timestamp": "2026-01-20T11:30:00Z",
+      "type": "decision",
+      "content": "Adopt async/await with Result<T, E> error handling",
+      "rationale": "Explicit error handling, better than panics",
+      "alternatives": ["Callbacks", "Option for errors"],
+      "code": "async fn fetch_user(id: i32) -> Result<User>",
+      "source": {
+        "conversation_id": "c4d5e6f7-a8b9-0123-c011-123456789012"
+      }
+    },
+    {
+      "timestamp": "2026-01-18T09:00:00Z",
+      "type": "fact",
+      "content": "Authentication uses JWT with RS256 signing",
+      "source": {
+        "conversation_id": "b3c4d5e6-f7a8-9012-b010-012345678901"
+      }
+    },
+    {
+      "timestamp": "2026-01-16T14:20:00Z",
+      "type": "decision",
+      "content": "PostgreSQL as primary database",
+      "rationale": "ACID transactions and JSONB support",
+      "alternatives": ["MySQL", "MongoDB"],
+      "code": "let pool = PgPoolOptions::new().max_connections(10).connect(&url).await?",
+      "source": {
+        "conversation_id": "a2b3c4d5-e6f7-8901-a009-901234567890"
+      }
+    },
+    {
+      "timestamp": "2026-01-15T10:30:00Z",
+      "type": "decision",
+      "content": "Use Rust with Tokio for async runtime",
+      "rationale": "Need async operations without blocking threads",
+      "source": {
+        "conversation_id": "9a1b2c3d-4e5f-6789-90ab-cdef12345678"
+      }
+    }
+  ]
+}

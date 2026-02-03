@@ -1,7 +1,9 @@
 //! Database operations for hstry.
 
 use crate::error::{Error, Result};
-use crate::models::{Conversation, ConversationSnapshot, Message, MessageRole, SearchHit, Source};
+use crate::models::{
+    Conversation, ConversationSnapshot, Message, MessageEvent, MessageRole, SearchHit, Source,
+};
 use crate::schema::SCHEMA;
 use chrono::Utc;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -614,9 +616,11 @@ impl Database {
     ) -> Result<Vec<ConversationSummary>> {
         let mut sql = String::from(
             "SELECT c.*, \
-             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count, \
-             (SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.idx ASC LIMIT 1) AS first_user_message \
-             FROM conversations c WHERE 1=1",
+             COALESCE(cs.message_count, (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id)) AS message_count, \
+             COALESCE(cs.first_user_message, (SELECT content FROM messages m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.idx ASC LIMIT 1)) AS first_user_message \
+             FROM conversations c \
+             LEFT JOIN conversation_summary_cache cs ON cs.conversation_id = c.id \
+             WHERE 1=1",
         );
 
         if opts.source_id.is_some() {
@@ -924,6 +928,7 @@ impl Database {
 
     /// Insert a message.
     pub async fn insert_message(&self, msg: &Message) -> Result<()> {
+        let exists = self.message_exists(msg.conversation_id, msg.idx).await?;
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
         sqlx::query(
@@ -945,7 +950,7 @@ impl Database {
         .bind(msg.conversation_id.to_string())
         .bind(msg.idx)
         .bind(msg.role.to_string())
-        .bind(content)
+        .bind(&content)
         .bind(parts_json.to_string())
         .bind(msg.created_at.map(|dt| dt.timestamp()))
         .bind(&msg.model)
@@ -957,6 +962,12 @@ impl Database {
         self.insert_message_event(msg).await?;
         self.invalidate_conversation_snapshot(msg.conversation_id)
             .await?;
+        if exists {
+            self.rebuild_conversation_summary(msg.conversation_id)
+                .await?;
+        } else {
+            self.bump_conversation_summary(msg, &content).await?;
+        }
         Ok(())
     }
 
@@ -976,7 +987,9 @@ impl Database {
 
     /// Get messages with snapshot caching.
     pub async fn get_messages_cached(&self, conversation_id: Uuid) -> Result<Vec<Message>> {
-        let message_count = self.count_messages_for_conversation(conversation_id).await?;
+        let message_count = self
+            .count_messages_for_conversation(conversation_id)
+            .await?;
         if let Some(snapshot) = self.get_conversation_snapshot(conversation_id).await? {
             if snapshot.message_count == message_count {
                 return Ok(snapshot.messages);
@@ -987,6 +1000,64 @@ impl Database {
         self.upsert_conversation_snapshot(conversation_id, message_count, &messages)
             .await?;
         Ok(messages)
+    }
+
+    /// Get message events for a conversation with optional cursor/limit.
+    pub async fn get_message_events(
+        &self,
+        conversation_id: Uuid,
+        after_idx: Option<i32>,
+        after_created_at_ms: Option<i64>,
+        limit: Option<i64>,
+    ) -> Result<Vec<MessageEvent>> {
+        let mut sql = String::from(
+            "SELECT id, conversation_id, idx, payload_json, created_at, metadata \
+             FROM message_events WHERE conversation_id = ?",
+        );
+
+        if after_idx.is_some() {
+            sql.push_str(" AND idx > ?");
+        }
+        if after_created_at_ms.is_some() {
+            sql.push_str(" AND created_at > ?");
+        }
+
+        sql.push_str(" ORDER BY idx");
+
+        if let Some(limit) = limit {
+            let _ = write!(sql, " LIMIT {limit}");
+        }
+
+        let mut query = sqlx::query(&sql).bind(conversation_id.to_string());
+        if let Some(after_idx) = after_idx {
+            query = query.bind(after_idx);
+        }
+        if let Some(after_created_at_ms) = after_created_at_ms {
+            query = query.bind(after_created_at_ms / 1000);
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows {
+            let created_at = row
+                .get::<Option<i64>, _>("created_at")
+                .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
+                .map(|dt| dt.with_timezone(&Utc));
+            let metadata = row
+                .get::<Option<String>, _>("metadata")
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+
+            events.push(MessageEvent {
+                id: Uuid::parse_str(row.get::<String, _>("id").as_str()).unwrap_or_default(),
+                conversation_id,
+                idx: row.get("idx"),
+                payload_json: row.get("payload_json"),
+                created_at,
+                metadata,
+            });
+        }
+        Ok(events)
     }
 
     pub async fn count_messages_for_conversation(&self, conversation_id: Uuid) -> Result<i64> {
@@ -1033,6 +1104,16 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn message_exists(&self, conversation_id: Uuid, idx: i32) -> Result<bool> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM messages WHERE conversation_id = ? AND idx = ?")
+                .bind(conversation_id.to_string())
+                .bind(idx)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count.0 > 0)
     }
 
     async fn invalidate_conversation_snapshot(&self, conversation_id: Uuid) -> Result<()> {
@@ -1089,6 +1170,66 @@ impl Database {
         .bind(message_count)
         .bind(payload)
         .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn bump_conversation_summary(&self, msg: &Message, content: &str) -> Result<()> {
+        let updated_at = chrono::Utc::now().timestamp();
+        let first_user_message = if msg.role == MessageRole::User {
+            Some(content.to_string())
+        } else {
+            None
+        };
+
+        sqlx::query(
+            r"
+            INSERT INTO conversation_summary_cache (conversation_id, message_count, first_user_message, updated_at)
+            VALUES (?, 1, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                message_count = message_count + 1,
+                first_user_message = COALESCE(first_user_message, excluded.first_user_message),
+                updated_at = excluded.updated_at
+            ",
+        )
+        .bind(msg.conversation_id.to_string())
+        .bind(first_user_message)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn rebuild_conversation_summary(&self, conversation_id: Uuid) -> Result<()> {
+        let updated_at = chrono::Utc::now().timestamp();
+        sqlx::query(
+            r"
+            INSERT INTO conversation_summary_cache (conversation_id, message_count, first_user_message, updated_at)
+            SELECT
+                c.id,
+                COUNT(m.id) AS message_count,
+                (
+                    SELECT content
+                    FROM messages m2
+                    WHERE m2.conversation_id = c.id
+                      AND m2.role = 'user'
+                    ORDER BY m2.idx ASC
+                    LIMIT 1
+                ) AS first_user_message,
+                ?
+            FROM conversations c
+            LEFT JOIN messages m ON m.conversation_id = c.id
+            WHERE c.id = ?
+            GROUP BY c.id
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                message_count = excluded.message_count,
+                first_user_message = excluded.first_user_message,
+                updated_at = excluded.updated_at
+            ",
+        )
+        .bind(updated_at)
+        .bind(conversation_id.to_string())
         .execute(&self.pool)
         .await?;
         Ok(())

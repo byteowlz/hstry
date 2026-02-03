@@ -162,6 +162,17 @@ pub struct ConversationSnapshot {
     pub messages: Vec<Message>,
 }
 
+/// Stored event for message ingestion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEvent {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub idx: i32,
+    pub payload_json: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub metadata: serde_json::Value,
+}
+
 /// Search hit for message-level queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {

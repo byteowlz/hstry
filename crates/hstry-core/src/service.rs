@@ -261,7 +261,7 @@ pub fn hit_from_proto(hit: proto::SearchHit) -> SearchHit {
 // Write Service Conversions
 // ============================================================================
 
-use crate::models::{Conversation, Message, MessageRole};
+use crate::models::{Conversation, Message, MessageEvent, MessageRole};
 
 /// Convert proto Conversation to domain model.
 pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
@@ -348,6 +348,20 @@ pub fn message_to_proto(msg: &Message) -> proto::Message {
         tokens: msg.tokens,
         cost_usd: msg.cost_usd,
         metadata_json: msg.metadata.to_string(),
+    }
+}
+
+pub fn message_event_to_proto(event: &MessageEvent) -> proto::MessageEvent {
+    proto::MessageEvent {
+        id: event.id.to_string(),
+        conversation_id: event.conversation_id.to_string(),
+        idx: event.idx,
+        payload_json: event.payload_json.clone(),
+        created_at_ms: event
+            .created_at
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0),
+        metadata_json: event.metadata.to_string(),
     }
 }
 

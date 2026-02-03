@@ -473,6 +473,70 @@ async fn count_messages_accurate() {
     assert_eq!(db.count_messages().await.expect("count"), 3);
 }
 
+#[tokio::test]
+async fn message_events_include_inserted_messages() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    let conv = setup_conversation(&db).await;
+
+    let msg = Message {
+        id: Uuid::new_v4(),
+        conversation_id: conv.id,
+        idx: 0,
+        role: MessageRole::User,
+        content: "Hello".to_string(),
+        parts_json: serde_json::json!([]),
+        created_at: Some(Utc::now()),
+        model: None,
+        tokens: None,
+        cost_usd: None,
+        metadata: serde_json::json!({ "source": "test" }),
+    };
+    db.insert_message(&msg).await.expect("insert");
+
+    let events = db
+        .get_message_events(conv.id, Some(-1), None, Some(10))
+        .await
+        .expect("events");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].idx, 0);
+    assert!(events[0].payload_json.contains("\"Hello\""));
+}
+
+#[tokio::test]
+async fn list_conversation_summaries_uses_cache() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    let conv = setup_conversation(&db).await;
+
+    let msg = Message {
+        id: Uuid::new_v4(),
+        conversation_id: conv.id,
+        idx: 0,
+        role: MessageRole::User,
+        content: "First message".to_string(),
+        parts_json: serde_json::json!([]),
+        created_at: None,
+        model: None,
+        tokens: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+    };
+    db.insert_message(&msg).await.expect("insert");
+
+    let summaries = db
+        .list_conversation_summaries(ListConversationsOptions::default())
+        .await
+        .expect("summaries");
+
+    let summary = summaries.iter().find(|s| s.conversation.id == conv.id);
+    assert!(summary.is_some());
+    let summary = summary.unwrap();
+    assert_eq!(summary.message_count, 1);
+    assert_eq!(summary.first_user_message.as_deref(), Some("First message"));
+}
+
 // ============================================================================
 // Search Operations
 // ============================================================================

@@ -25,8 +25,8 @@ use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::service::{
     ReadService, ReadServiceServer, SearchService, SearchServiceServer, WriteService,
     WriteServiceServer, conversation_from_proto, conversation_summary_to_proto,
-    conversation_to_proto, hit_to_proto, message_from_proto, message_to_proto,
-    search_request_to_opts,
+    conversation_to_proto, hit_to_proto, message_event_to_proto, message_from_proto,
+    message_to_proto, search_request_to_opts,
 };
 use hstry_core::{Config, Database, search_tantivy};
 use hstry_runtime::{AdapterRunner, Runtime};
@@ -311,6 +311,87 @@ impl ReadService for ServerState {
             conversation_id: conv.id.to_string(),
             messages: messages.iter().map(message_to_proto).collect(),
         };
+        Ok(tonic::Response::new(response))
+    }
+
+    async fn get_message_events(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::GetMessageEventsRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::GetMessageEventsResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        let conv = self
+            .db
+            .get_conversation_by_reference(
+                if request.source_id.is_empty() {
+                    None
+                } else {
+                    Some(request.source_id.as_str())
+                },
+                if request.external_id.is_empty() {
+                    None
+                } else {
+                    Some(request.external_id.as_str())
+                },
+                if request.readable_id.is_empty() {
+                    None
+                } else {
+                    Some(request.readable_id.as_str())
+                },
+                if request.conversation_id.is_empty() {
+                    None
+                } else {
+                    Some(request.conversation_id.as_str())
+                },
+                if request.workspace.is_empty() {
+                    None
+                } else {
+                    Some(request.workspace.as_str())
+                },
+            )
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to resolve conversation: {e}")))?;
+
+        let Some(conv) = conv else {
+            return Ok(tonic::Response::new(
+                hstry_core::service::proto::GetMessageEventsResponse {
+                    conversation_id: String::new(),
+                    events: Vec::new(),
+                },
+            ));
+        };
+
+        let events = self
+            .db
+            .get_message_events(
+                conv.id,
+                if request.after_idx > 0 {
+                    Some(request.after_idx)
+                } else {
+                    None
+                },
+                if request.after_created_at_ms > 0 {
+                    Some(request.after_created_at_ms)
+                } else {
+                    None
+                },
+                if request.limit > 0 {
+                    Some(request.limit)
+                } else {
+                    None
+                },
+            )
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to load events: {e}")))?;
+
+        let response = hstry_core::service::proto::GetMessageEventsResponse {
+            conversation_id: conv.id.to_string(),
+            events: events.iter().map(message_event_to_proto).collect(),
+        };
+
         Ok(tonic::Response::new(response))
     }
 

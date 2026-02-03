@@ -2,6 +2,9 @@
 
 ## Open
 
+### [trx-tatn] Add message event read API + summary cache (P1, task)
+Expose ReadService.GetMessageEvents for incremental history reads and add conversation_summary_cache to speed ListConversations. Update message ingestion to keep cache in sync.
+
 ### [trx-vg8v] Schema: store host_id/hostname on sessions + migrations (P1, task)
 
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)

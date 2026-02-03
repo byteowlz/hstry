@@ -26,6 +26,7 @@ service WriteService {
 service ReadService {
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  rpc GetMessageEvents(GetMessageEventsRequest) returns (GetMessageEventsResponse);
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
 }
 
@@ -166,6 +167,31 @@ message GetMessagesRequest {
 message GetMessagesResponse {
   string conversation_id = 1;
   repeated Message messages = 2;
+}
+
+message MessageEvent {
+  string id = 1;
+  string conversation_id = 2;
+  int32 idx = 3;
+  string payload_json = 4;
+  int64 created_at_ms = 5;
+  string metadata_json = 6;
+}
+
+message GetMessageEventsRequest {
+  string source_id = 1;
+  string external_id = 2;
+  string readable_id = 3;
+  string conversation_id = 4;
+  string workspace = 5;
+  int32 after_idx = 6;
+  int64 after_created_at_ms = 7;
+  int64 limit = 8;
+}
+
+message GetMessageEventsResponse {
+  string conversation_id = 1;
+  repeated MessageEvent events = 2;
 }
 
 message ListConversationsRequest {

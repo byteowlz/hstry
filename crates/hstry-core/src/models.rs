@@ -154,6 +154,14 @@ pub struct MessageWithExtras {
     pub attachments: Vec<Attachment>,
 }
 
+/// Cached snapshot of a conversation's messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSnapshot {
+    pub conversation_id: Uuid,
+    pub message_count: i64,
+    pub messages: Vec<Message>,
+}
+
 /// Search hit for message-level queries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchHit {

@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval};
 use tokio_stream::wrappers::TcpListenerStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
@@ -298,7 +298,7 @@ impl ReadService for ServerState {
 
         let mut messages = self
             .db
-            .get_messages(conv.id)
+            .get_messages_cached(conv.id)
             .await
             .map_err(|e| tonic::Status::internal(format!("Failed to load messages: {e}")))?;
 
@@ -705,6 +705,7 @@ struct ServiceState {
     auto_sync_by_id: HashMap<String, bool>,
     watcher: RecommendedWatcher,
     event_rx: mpsc::Receiver<PathBuf>,
+    last_remote_sync: Instant,
 }
 
 impl ServiceState {
@@ -737,6 +738,7 @@ impl ServiceState {
             auto_sync_by_id,
             watcher,
             event_rx,
+            last_remote_sync: Instant::now(),
         };
 
         state.refresh_watches().await?;
@@ -805,6 +807,7 @@ impl ServiceState {
         let _ = self.reload_config_if_needed().await?;
         self.discover_from_path(&path).await?;
         self.sync_existing_sources().await?;
+        self.sync_remotes_if_due().await?;
         Ok(())
     }
 
@@ -814,6 +817,56 @@ impl ServiceState {
         self.discover_default_sources().await?;
         self.discover_workspaces().await?;
         self.sync_existing_sources().await?;
+        self.sync_remotes_if_due().await?;
+        Ok(())
+    }
+
+    async fn sync_remotes_if_due(&mut self) -> Result<()> {
+        if !self.config.sync.auto_sync {
+            return Ok(());
+        }
+        if self.config.remotes.is_empty() {
+            return Ok(());
+        }
+
+        let interval_secs = self.config.sync.auto_sync_interval_secs.max(30);
+        if self.last_remote_sync.elapsed() < Duration::from_secs(interval_secs) {
+            return Ok(());
+        }
+        self.last_remote_sync = Instant::now();
+
+        let direction = match self.config.sync.mode {
+            hstry_core::config::SyncMode::Hub => hstry_core::remote::SyncDirection::Pull,
+            hstry_core::config::SyncMode::Satellite => hstry_core::remote::SyncDirection::Push,
+            hstry_core::config::SyncMode::Standalone => return Ok(()),
+        };
+
+        let remotes: Vec<_> = if let Some(ref name) = self.config.sync.hub_remote {
+            self.config
+                .remotes
+                .iter()
+                .filter(|r| r.enabled && &r.name == name)
+                .collect()
+        } else {
+            self.config.remotes.iter().filter(|r| r.enabled).collect()
+        };
+
+        for remote_config in remotes {
+            let _ = match direction {
+                hstry_core::remote::SyncDirection::Pull => {
+                    hstry_core::remote::sync_from_remote(&self.db, remote_config)
+                        .await
+                        .map(|_| ())
+                }
+                hstry_core::remote::SyncDirection::Push => {
+                    hstry_core::remote::sync_to_remote(&self.config.database, remote_config)
+                        .await
+                        .map(|_| ())
+                }
+                hstry_core::remote::SyncDirection::Bidirectional => Ok(()),
+            };
+        }
+
         Ok(())
     }
 

@@ -45,6 +45,9 @@ pub struct Config {
     /// Remote hosts for syncing history across machines.
     pub remotes: Vec<RemoteConfig>,
 
+    /// Sync configuration for hub/satellite mode.
+    pub sync: SyncConfig,
+
     /// Search configuration.
     pub search: SearchConfig,
 }
@@ -209,6 +212,7 @@ impl Default for Config {
             service: ServiceConfig::default(),
             sources: Vec::new(),
             remotes: Vec::new(),
+            sync: SyncConfig::default(),
             search: SearchConfig::default(),
         }
     }
@@ -219,6 +223,42 @@ impl Default for SearchConfig {
         Self {
             index_path: None,
             index_batch_size: default_index_batch_size(),
+        }
+    }
+}
+
+/// Hub/satellite sync configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncConfig {
+    /// Sync mode: standalone, hub, or satellite.
+    pub mode: SyncMode,
+    /// Optional device identifier for sync provenance.
+    pub device_id: Option<String>,
+    /// Preferred hub remote name (for satellite mode).
+    pub hub_remote: Option<String>,
+    /// Auto-sync remotes in the background service.
+    pub auto_sync: bool,
+    /// Auto-sync interval (seconds).
+    pub auto_sync_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    Standalone,
+    Hub,
+    Satellite,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            mode: SyncMode::Standalone,
+            device_id: None,
+            hub_remote: None,
+            auto_sync: false,
+            auto_sync_interval_secs: 300,
         }
     }
 }

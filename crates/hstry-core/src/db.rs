@@ -1,7 +1,7 @@
 //! Database operations for hstry.
 
 use crate::error::{Error, Result};
-use crate::models::{Conversation, Message, MessageRole, SearchHit, Source};
+use crate::models::{Conversation, ConversationSnapshot, Message, MessageRole, SearchHit, Source};
 use crate::schema::SCHEMA;
 use chrono::Utc;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -161,6 +161,10 @@ impl Database {
             (
                 "003_add_provider_index.sql",
                 include_str!("../migrations/003_add_provider_index.sql"),
+            ),
+            (
+                "004_add_events_and_snapshots.sql",
+                include_str!("../migrations/004_add_events_and_snapshots.sql"),
             ),
         ];
 
@@ -950,6 +954,9 @@ impl Database {
         .bind(msg.metadata.to_string())
         .execute(&self.pool)
         .await?;
+        self.insert_message_event(msg).await?;
+        self.invalidate_conversation_snapshot(msg.conversation_id)
+            .await?;
         Ok(())
     }
 
@@ -967,12 +974,124 @@ impl Database {
         Ok(messages)
     }
 
+    /// Get messages with snapshot caching.
+    pub async fn get_messages_cached(&self, conversation_id: Uuid) -> Result<Vec<Message>> {
+        let message_count = self.count_messages_for_conversation(conversation_id).await?;
+        if let Some(snapshot) = self.get_conversation_snapshot(conversation_id).await? {
+            if snapshot.message_count == message_count {
+                return Ok(snapshot.messages);
+            }
+        }
+
+        let messages = self.get_messages(conversation_id).await?;
+        self.upsert_conversation_snapshot(conversation_id, message_count, &messages)
+            .await?;
+        Ok(messages)
+    }
+
+    pub async fn count_messages_for_conversation(&self, conversation_id: Uuid) -> Result<i64> {
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM messages WHERE conversation_id = ?")
+                .bind(conversation_id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count.0)
+    }
+
     /// Get message count.
     pub async fn count_messages(&self) -> Result<i64> {
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
             .fetch_one(&self.pool)
             .await?;
         Ok(count.0)
+    }
+
+    // =========================================================================
+    // Message Events + Snapshots
+    // =========================================================================
+
+    async fn insert_message_event(&self, msg: &Message) -> Result<()> {
+        let payload = serde_json::to_string(msg)?;
+        sqlx::query(
+            r"
+            INSERT INTO message_events (id, conversation_id, idx, payload_json, created_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                conversation_id = excluded.conversation_id,
+                idx = excluded.idx,
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at,
+                metadata = excluded.metadata
+            ",
+        )
+        .bind(msg.id.to_string())
+        .bind(msg.conversation_id.to_string())
+        .bind(msg.idx)
+        .bind(payload)
+        .bind(msg.created_at.map(|dt| dt.timestamp()))
+        .bind(msg.metadata.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn invalidate_conversation_snapshot(&self, conversation_id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM conversation_snapshots WHERE conversation_id = ?")
+            .bind(conversation_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_conversation_snapshot(
+        &self,
+        conversation_id: Uuid,
+    ) -> Result<Option<ConversationSnapshot>> {
+        let row = sqlx::query(
+            "SELECT conversation_id, message_count, payload_json, updated_at FROM conversation_snapshots WHERE conversation_id = ?",
+        )
+        .bind(conversation_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let payload: String = row.get("payload_json");
+        let messages: Vec<Message> = serde_json::from_str(&payload).unwrap_or_default();
+        Ok(Some(ConversationSnapshot {
+            conversation_id,
+            message_count: row.get::<i64, _>("message_count"),
+            messages,
+        }))
+    }
+
+    async fn upsert_conversation_snapshot(
+        &self,
+        conversation_id: Uuid,
+        message_count: i64,
+        messages: &[Message],
+    ) -> Result<()> {
+        let payload = serde_json::to_string(messages)?;
+        let updated_at = chrono::Utc::now().timestamp();
+        sqlx::query(
+            r"
+            INSERT INTO conversation_snapshots (conversation_id, message_count, payload_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                message_count = excluded.message_count,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            ",
+        )
+        .bind(conversation_id.to_string())
+        .bind(message_count)
+        .bind(payload)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // =========================================================================

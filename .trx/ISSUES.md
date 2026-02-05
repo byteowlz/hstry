@@ -2,6 +2,33 @@
 
 ## Open
 
+### [trx-01fn] Update octo-protocol to re-export Sender from hstry-core instead of defining its own (P1, task)
+## Context
+
+Depends on: trx-7fh3 (Sender type in hstry-core)
+Repo: octo (not hstry) -- but tracked here as a dependency note
+
+...
+
+
+### [trx-7fh3] Add Sender type to hstry-core and update Message model (P1, task)
+## Context
+
+Depends on: trx-z2zy (migration must exist first)
+Parent epic: trx-en2q (Canonical part-based chat schema)
+
+...
+
+
+### [trx-z2zy] Migration 006: Add sender_json and provider columns to messages table (P1, task)
+## Context
+
+The Octo canonical protocol (octo-protocol crate) defines a Sender struct on Message to support:
+- Multi-user workspaces (who said what)
+- Cross-agent delegation (inline responses from other agents)
+...
+
+
 ### [trx-tatn] Add message event read API + summary cache (P1, task)
 Expose ReadService.GetMessageEvents for incremental history reads and add conversation_summary_cache to speed ListConversations. Update message ingestion to keep cache in sync.
 
@@ -10,6 +37,15 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
+
+### [trx-g91t] Update hstry adapters to populate sender field (P2, task)
+## Context
+
+Depends on: trx-7fh3 (Sender type + Message model update)
+Parent epic: trx-en2q (Canonical part-based chat schema)
+
+...
+
 
 ### [trx-t8dh] Pi adapter scan all sessions + service port fallback (P2, task)
 

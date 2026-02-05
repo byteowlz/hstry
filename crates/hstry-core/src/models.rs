@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::parts::Sender;
+
 /// A source of chat history (e.g., ChatGPT export, OpenCode local).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
@@ -47,6 +49,13 @@ pub struct Message {
     pub tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     pub metadata: serde_json::Value,
+    /// Attribution for multi-user/multi-agent scenarios.
+    /// NULL for single-user conversations (sender implied by role).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<Sender>,
+    /// Per-message provider override (falls back to conversation-level provider).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Message roles across different sources.

@@ -410,6 +410,8 @@ pub async fn merge_databases(
                     tokens: msg.tokens,
                     cost_usd: msg.cost_usd,
                     metadata: msg.metadata,
+                    sender: msg.sender,
+                    provider: msg.provider,
                 };
                 target.insert_message(&merged_msg).await?;
                 messages_added += 1;

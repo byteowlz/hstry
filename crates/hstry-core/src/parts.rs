@@ -344,6 +344,67 @@ fn generate_id() -> String {
     format!("part_{}", uuid::Uuid::new_v4().simple())
 }
 
+// =============================================================================
+// Sender attribution
+// =============================================================================
+
+/// The type of entity that sent a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SenderType {
+    User,
+    Agent,
+    System,
+}
+
+impl std::fmt::Display for SenderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::User => write!(f, "user"),
+            Self::Agent => write!(f, "agent"),
+            Self::System => write!(f, "system"),
+        }
+    }
+}
+
+impl From<&str> for SenderType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "user" | "human" => Self::User,
+            "agent" | "assistant" | "ai" | "bot" => Self::Agent,
+            "system" => Self::System,
+            _ => Self::User,
+        }
+    }
+}
+
+/// Attribution for a message sender.
+///
+/// Supports multi-user workspaces, cross-agent delegation, and group-chat
+/// scenarios. When `None` on a message, the sender is implied by the role
+/// (single-user, single-agent).
+///
+/// Wire format (JSON stored in `messages.sender_json`):
+/// ```json
+/// {"type":"agent","id":"ses_xyz","name":"pi:ses_xyz","runner_id":"local","session_id":"ses_xyz"}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sender {
+    /// The type of sender.
+    #[serde(rename = "type")]
+    pub sender_type: SenderType,
+    /// Unique identifier (user ID or session ID).
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Runner that executed this agent (e.g., "local", "remote").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<String>,
+    /// Agent session ID, if applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +487,75 @@ mod tests {
         assert!(json.contains("\"type\":\"image\""));
         assert!(json.contains("\"source\":\"attachmentRef\""));
         assert!(json.contains("\"attachmentId\":\"att_456\""));
+    }
+
+    #[test]
+    fn test_sender_type_display() {
+        assert_eq!(SenderType::User.to_string(), "user");
+        assert_eq!(SenderType::Agent.to_string(), "agent");
+        assert_eq!(SenderType::System.to_string(), "system");
+    }
+
+    #[test]
+    fn test_sender_type_from_str() {
+        assert_eq!(SenderType::from("user"), SenderType::User);
+        assert_eq!(SenderType::from("human"), SenderType::User);
+        assert_eq!(SenderType::from("agent"), SenderType::Agent);
+        assert_eq!(SenderType::from("assistant"), SenderType::Agent);
+        assert_eq!(SenderType::from("ai"), SenderType::Agent);
+        assert_eq!(SenderType::from("system"), SenderType::System);
+        // Unknown defaults to User
+        assert_eq!(SenderType::from("unknown"), SenderType::User);
+    }
+
+    #[test]
+    fn test_sender_serialization_roundtrip() {
+        let sender = Sender {
+            sender_type: SenderType::Agent,
+            id: "ses_xyz".to_string(),
+            name: "pi:ses_xyz".to_string(),
+            runner_id: Some("local".to_string()),
+            session_id: Some("ses_xyz".to_string()),
+        };
+
+        let json = serde_json::to_string(&sender).unwrap();
+        assert!(json.contains("\"type\":\"agent\""));
+        assert!(json.contains("\"id\":\"ses_xyz\""));
+        assert!(json.contains("\"name\":\"pi:ses_xyz\""));
+        assert!(json.contains("\"runner_id\":\"local\""));
+        assert!(json.contains("\"session_id\":\"ses_xyz\""));
+
+        let parsed: Sender = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, sender);
+    }
+
+    #[test]
+    fn test_sender_serialization_minimal() {
+        let sender = Sender {
+            sender_type: SenderType::User,
+            id: "user_1".to_string(),
+            name: "Alice".to_string(),
+            runner_id: None,
+            session_id: None,
+        };
+
+        let json = serde_json::to_string(&sender).unwrap();
+        // Optional fields should be omitted
+        assert!(!json.contains("runner_id"));
+        assert!(!json.contains("session_id"));
+
+        let parsed: Sender = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, sender);
+    }
+
+    #[test]
+    fn test_sender_deserialize_wire_format() {
+        let wire = r#"{"type":"agent","id":"ses_xyz","name":"pi:ses_xyz","runner_id":"local","session_id":"ses_xyz"}"#;
+        let sender: Sender = serde_json::from_str(wire).unwrap();
+        assert_eq!(sender.sender_type, SenderType::Agent);
+        assert_eq!(sender.id, "ses_xyz");
+        assert_eq!(sender.name, "pi:ses_xyz");
+        assert_eq!(sender.runner_id.as_deref(), Some("local"));
+        assert_eq!(sender.session_id.as_deref(), Some("ses_xyz"));
     }
 }

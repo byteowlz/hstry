@@ -131,6 +131,8 @@ pub async fn sync_source(
                     tokens: msg.tokens,
                     cost_usd: msg.cost_usd,
                     metadata: serde_json::Value::Object(serde_json::Map::default()),
+                    sender: None,
+                    provider: None,
                 };
                 db.insert_message(&hstry_msg).await?;
                 message_count += 1;

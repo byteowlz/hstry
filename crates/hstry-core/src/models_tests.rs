@@ -228,6 +228,7 @@ mod conversation_tests {
 #[cfg(test)]
 mod message_tests {
     use super::*;
+    use crate::parts::{Sender, SenderType};
     use uuid::Uuid;
 
     #[test]
@@ -244,6 +245,8 @@ mod message_tests {
             tokens: Some(5),
             cost_usd: Some(0.001),
             metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");
@@ -253,6 +256,61 @@ mod message_tests {
         assert_eq!(parsed.role, msg.role);
         assert_eq!(parsed.content, msg.content);
         assert_eq!(parsed.idx, msg.idx);
+        assert_eq!(parsed.sender, None);
+        assert_eq!(parsed.provider, None);
+    }
+
+    #[test]
+    fn serde_roundtrip_with_sender() {
+        let sender = Sender {
+            sender_type: SenderType::Agent,
+            id: "ses_abc".to_string(),
+            name: "pi:ses_abc".to_string(),
+            runner_id: Some("local".to_string()),
+            session_id: Some("ses_abc".to_string()),
+        };
+        let msg = Message {
+            id: Uuid::new_v4(),
+            conversation_id: Uuid::new_v4(),
+            idx: 1,
+            role: MessageRole::Assistant,
+            content: "Hello from agent".to_string(),
+            parts_json: serde_json::json!([]),
+            created_at: Some(chrono::Utc::now()),
+            model: Some("claude-4".to_string()),
+            tokens: Some(10),
+            cost_usd: Some(0.002),
+            metadata: serde_json::json!({}),
+            sender: Some(sender.clone()),
+            provider: Some("anthropic".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).expect("serialize");
+        let parsed: Message = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(parsed.sender, Some(sender));
+        assert_eq!(parsed.provider.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn deserialize_without_sender_fields() {
+        // Existing messages without sender/provider should deserialize fine
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "conversation_id": "00000000-0000-0000-0000-000000000000",
+            "idx": 0,
+            "role": "user",
+            "content": "hello",
+            "parts_json": [],
+            "created_at": null,
+            "model": null,
+            "tokens": null,
+            "cost_usd": null,
+            "metadata": {}
+        }"#;
+        let parsed: Message = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(parsed.sender, None);
+        assert_eq!(parsed.provider, None);
     }
 }
 

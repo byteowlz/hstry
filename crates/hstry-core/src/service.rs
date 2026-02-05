@@ -262,6 +262,7 @@ pub fn hit_from_proto(hit: proto::SearchHit) -> SearchHit {
 // ============================================================================
 
 use crate::models::{Conversation, Message, MessageEvent, MessageRole};
+use crate::parts::Sender;
 
 /// Convert proto Conversation to domain model.
 pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
@@ -293,6 +294,12 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
 
 /// Convert proto Message to domain model.
 pub fn message_from_proto(proto: proto::Message, conversation_id: Uuid) -> Message {
+    let sender: Option<Sender> = if proto.sender_json.is_empty() {
+        None
+    } else {
+        serde_json::from_str(&proto.sender_json).ok()
+    };
+
     Message {
         id: Uuid::new_v4(),
         conversation_id,
@@ -313,6 +320,8 @@ pub fn message_from_proto(proto: proto::Message, conversation_id: Uuid) -> Messa
         } else {
             serde_json::from_str(&proto.metadata_json).unwrap_or_default()
         },
+        sender,
+        provider: proto.provider,
     }
 }
 
@@ -348,6 +357,12 @@ pub fn message_to_proto(msg: &Message) -> proto::Message {
         tokens: msg.tokens,
         cost_usd: msg.cost_usd,
         metadata_json: msg.metadata.to_string(),
+        sender_json: msg
+            .sender
+            .as_ref()
+            .map(|s| serde_json::to_string(s).unwrap_or_default())
+            .unwrap_or_default(),
+        provider: msg.provider.clone(),
     }
 }
 

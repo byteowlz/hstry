@@ -359,6 +359,8 @@ async fn insert_message_creates_new() {
         tokens: Some(2),
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
 
     db.insert_message(&msg).await.expect("insert");
@@ -387,6 +389,8 @@ async fn insert_message_upserts_by_idx() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg_v1).await.expect("insert v1");
 
@@ -402,6 +406,8 @@ async fn insert_message_upserts_by_idx() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg_v2).await.expect("insert v2");
 
@@ -434,6 +440,8 @@ async fn get_messages_ordered_by_idx() {
             tokens: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -466,6 +474,8 @@ async fn count_messages_accurate() {
             tokens: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -491,6 +501,8 @@ async fn message_events_include_inserted_messages() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({ "source": "test" }),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -522,6 +534,8 @@ async fn list_conversation_summaries_uses_cache() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -559,6 +573,8 @@ async fn search_finds_matching_content() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -628,6 +644,8 @@ async fn search_with_source_filter() {
             tokens: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -669,6 +687,8 @@ async fn search_mode_code_explicit() {
         tokens: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
     };
     db.insert_message(&msg).await.expect("insert");
 

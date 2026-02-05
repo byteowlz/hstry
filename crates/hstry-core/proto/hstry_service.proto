@@ -98,6 +98,8 @@ message Message {
   optional int64 tokens = 7;
   optional double cost_usd = 8;
   string metadata_json = 9;       // JSON string
+  string sender_json = 10;        // JSON-encoded Sender object (empty string = no sender)
+  optional string provider = 11;  // Per-message provider override
 }
 
 message WriteConversationRequest {

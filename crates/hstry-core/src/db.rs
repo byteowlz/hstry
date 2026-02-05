@@ -168,6 +168,14 @@ impl Database {
                 "004_add_events_and_snapshots.sql",
                 include_str!("../migrations/004_add_events_and_snapshots.sql"),
             ),
+            (
+                "005_add_conversation_summary_cache.sql",
+                include_str!("../migrations/005_add_conversation_summary_cache.sql"),
+            ),
+            (
+                "006_add_sender_and_provider_to_messages.sql",
+                include_str!("../migrations/006_add_sender_and_provider_to_messages.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {
@@ -931,10 +939,14 @@ impl Database {
         let exists = self.message_exists(msg.conversation_id, msg.idx).await?;
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
+        let sender_json = msg
+            .sender
+            .as_ref()
+            .map(|s| serde_json::to_string(s).unwrap_or_default());
         sqlx::query(
             r"
-            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conversation_id, idx) DO UPDATE SET
                 role = excluded.role,
                 content = excluded.content,
@@ -943,7 +955,9 @@ impl Database {
                 model = excluded.model,
                 tokens = excluded.tokens,
                 cost_usd = excluded.cost_usd,
-                metadata = excluded.metadata
+                metadata = excluded.metadata,
+                sender_json = excluded.sender_json,
+                provider = excluded.provider
             ",
         )
         .bind(msg.id.to_string())
@@ -957,6 +971,8 @@ impl Database {
         .bind(msg.tokens)
         .bind(msg.cost_usd)
         .bind(msg.metadata.to_string())
+        .bind(&sender_json)
+        .bind(&msg.provider)
         .execute(&self.pool)
         .await?;
         self.insert_message_event(msg).await?;
@@ -1925,6 +1941,12 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Message {
             .get::<Option<String>, _>("metadata")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        sender: row
+            .try_get::<Option<String>, _>("sender_json")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        provider: row.try_get("provider").ok().flatten(),
     }
 }
 

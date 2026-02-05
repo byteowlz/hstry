@@ -2,15 +2,6 @@
 
 ## Open
 
-### [trx-01fn] Update octo-protocol to re-export Sender from hstry-core instead of defining its own (P1, task)
-## Context
-
-Depends on: trx-7fh3 (Sender type in hstry-core)
-Repo: octo (not hstry) -- but tracked here as a dependency note
-
-...
-
-
 ### [trx-tatn] Add message event read API + summary cache (P1, task)
 Expose ReadService.GetMessageEvents for incremental history reads and add conversation_summary_cache to speed ListConversations. Update message ingestion to keep cache in sync.
 
@@ -21,11 +12,11 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
 ### [trx-g91t] Update hstry adapters to populate sender field (P2, task)
-## Context
+Update hstry adapters to populate the new sender field on messages.
 
-Depends on: trx-7fh3 (Sender type + Message model update)
-Parent epic: trx-en2q (Canonical part-based chat schema)
+The Sender type is now available in hstry-core::parts (see trx-7fh3, completed).
 
+Adapter updates needed:
 ...
 
 
@@ -60,6 +51,7 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-01fn] Update octo-protocol to re-export Sender from hstry-core instead of defining its own (closed 2026-02-05)
 - [trx-7fh3] Add Sender type to hstry-core and update Message model (closed 2026-02-05)
 - [trx-z2zy] Migration 006: Add sender_json and provider columns to messages table (closed 2026-02-05)
 - [trx-qtb6] Add gRPC write API for external writers (Octo) (closed 2026-02-01)

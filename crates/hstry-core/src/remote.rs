@@ -391,6 +391,7 @@ pub async fn merge_databases(
                 tokens_out: conv.tokens_out,
                 cost_usd: conv.cost_usd,
                 metadata: conv.metadata,
+                harness: conv.harness,
             };
 
             target.upsert_conversation(&merged_conv).await?;
@@ -412,6 +413,7 @@ pub async fn merge_databases(
                     metadata: msg.metadata,
                     sender: msg.sender,
                     provider: msg.provider,
+                    harness: msg.harness,
                 };
                 target.insert_message(&merged_msg).await?;
                 messages_added += 1;

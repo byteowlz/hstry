@@ -2,6 +2,10 @@
 
 ## Open
 
+### [trx-5mf1] Add DeleteConversation gRPC RPC to remove conversations and their messages (P1, feature)
+
+### [trx-6yb5] Add UpdateConversation gRPC RPC for partial metadata updates (title, workspace, model, provider, metadata) (P1, feature)
+
 ### [trx-tatn] Add message event read API + summary cache (P1, task)
 Expose ReadService.GetMessageEvents for incremental history reads and add conversation_summary_cache to speed ListConversations. Update message ingestion to keep cache in sync.
 

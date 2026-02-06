@@ -108,6 +108,7 @@ pub async fn sync_source(
                     .metadata
                     .map(|m| serde_json::to_value(m).unwrap_or_default())
                     .unwrap_or_default(),
+                harness: None,
             };
 
             db.upsert_conversation(&hstry_conv).await?;
@@ -133,6 +134,7 @@ pub async fn sync_source(
                     metadata: serde_json::Value::Object(serde_json::Map::default()),
                     sender: None,
                     provider: None,
+                    harness: None,
                 };
                 db.insert_message(&hstry_msg).await?;
                 message_count += 1;

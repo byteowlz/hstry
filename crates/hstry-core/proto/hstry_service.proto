@@ -17,6 +17,13 @@ service WriteService {
   // Append messages to an existing conversation.
   rpc AppendMessages(AppendMessagesRequest) returns (AppendMessagesResponse);
   
+  // Partial update of conversation metadata (title, workspace, model, etc.).
+  // Only fields that are explicitly set will be updated; unset fields are left unchanged.
+  rpc UpdateConversation(UpdateConversationRequest) returns (UpdateConversationResponse);
+  
+  // Delete a conversation and all its messages.
+  rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
+  
   // Upload binary data (images, audio, etc.) to attachments table.
   // Returns attachment_id to use in MediaSource.AttachmentRef.
   rpc UploadAttachment(UploadAttachmentRequest) returns (UploadAttachmentResponse);
@@ -86,6 +93,7 @@ message Conversation {
   optional int64 tokens_out = 10;
   optional double cost_usd = 11;
   string metadata_json = 12;      // JSON string
+  optional string harness = 13;   // Agent harness (e.g., "pi", "claude")
 }
 
 message Message {
@@ -100,6 +108,7 @@ message Message {
   string metadata_json = 9;       // JSON string
   string sender_json = 10;        // JSON-encoded Sender object (empty string = no sender)
   optional string provider = 11;  // Per-message provider override
+  optional string harness = 12;   // Per-message harness override (e.g., "pi", "claude")
 }
 
 message WriteConversationRequest {
@@ -122,6 +131,33 @@ message AppendMessagesRequest {
 message AppendMessagesResponse {
   string conversation_id = 1;
   int32 messages_written = 2;
+}
+
+// Partial metadata update -- only set fields are applied.
+// Resolves conversation by source_id + external_id.
+message UpdateConversationRequest {
+  string source_id = 1;
+  string external_id = 2;
+  optional string title = 3;
+  optional string workspace = 4;
+  optional string model = 5;
+  optional string provider = 6;
+  optional string metadata_json = 7;
+  optional string readable_id = 8;
+  optional string harness = 9;
+}
+
+message UpdateConversationResponse {
+  string conversation_id = 1;
+}
+
+message DeleteConversationRequest {
+  string source_id = 1;
+  string external_id = 2;
+}
+
+message DeleteConversationResponse {
+  string conversation_id = 1;
 }
 
 message UploadAttachmentRequest {

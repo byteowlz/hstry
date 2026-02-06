@@ -38,6 +38,7 @@ async fn remove_source_deletes_conversations_and_messages() -> Result<()> {
         tokens_out: None,
         cost_usd: None,
         metadata: serde_json::Value::Object(Default::default()),
+        harness: None,
     };
     db.upsert_conversation(&conversation).await?;
 
@@ -55,6 +56,7 @@ async fn remove_source_deletes_conversations_and_messages() -> Result<()> {
         metadata: serde_json::Value::Object(Default::default()),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&message).await?;
 
@@ -111,6 +113,7 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         tokens_out: None,
         cost_usd: None,
         metadata: serde_json::Value::Object(Default::default()),
+        harness: None,
     };
     db.upsert_conversation(&conversation).await?;
 
@@ -128,6 +131,7 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         metadata: serde_json::Value::Object(Default::default()),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&message).await?;
 

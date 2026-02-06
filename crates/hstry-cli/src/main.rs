@@ -1289,6 +1289,7 @@ async fn cmd_import(
                 .metadata
                 .map(|m| serde_json::to_value(m).unwrap_or_default())
                 .unwrap_or_default(),
+            harness: None,
         };
 
         db.upsert_conversation(&hstry_conv).await?;
@@ -1315,6 +1316,7 @@ async fn cmd_import(
                 metadata: serde_json::Value::Object(serde_json::Map::default()),
                 sender: None,
                 provider: None,
+                harness: None,
             };
             db.insert_message(&hstry_msg).await?;
             imported_msgs += 1;

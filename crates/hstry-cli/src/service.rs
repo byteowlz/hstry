@@ -167,6 +167,92 @@ impl WriteService for ServerState {
         ))
     }
 
+    async fn update_conversation(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::UpdateConversationRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::UpdateConversationResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        if request.source_id.is_empty() || request.external_id.is_empty() {
+            return Err(tonic::Status::invalid_argument(
+                "source_id and external_id are required",
+            ));
+        }
+
+        let conv_id = self
+            .db
+            .get_conversation_id(&request.source_id, &request.external_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to find conversation: {e}")))?
+            .ok_or_else(|| tonic::Status::not_found("Conversation not found"))?;
+
+        let metadata_json = request
+            .metadata_json
+            .as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+        self.db
+            .update_conversation_metadata(
+                conv_id,
+                request.title.as_deref(),
+                request.workspace.as_deref(),
+                request.model.as_deref(),
+                request.provider.as_deref(),
+                metadata_json.as_ref(),
+                request.readable_id.as_deref(),
+                request.harness.as_deref(),
+            )
+            .await
+            .map_err(|e| {
+                tonic::Status::internal(format!("Failed to update conversation: {e}"))
+            })?;
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::UpdateConversationResponse {
+                conversation_id: conv_id.to_string(),
+            },
+        ))
+    }
+
+    async fn delete_conversation(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::DeleteConversationRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::DeleteConversationResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+
+        if request.source_id.is_empty() || request.external_id.is_empty() {
+            return Err(tonic::Status::invalid_argument(
+                "source_id and external_id are required",
+            ));
+        }
+
+        let conv_id = self
+            .db
+            .get_conversation_id(&request.source_id, &request.external_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to find conversation: {e}")))?
+            .ok_or_else(|| tonic::Status::not_found("Conversation not found"))?;
+
+        self.db
+            .delete_conversation(conv_id)
+            .await
+            .map_err(|e| {
+                tonic::Status::internal(format!("Failed to delete conversation: {e}"))
+            })?;
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::DeleteConversationResponse {
+                conversation_id: conv_id.to_string(),
+            },
+        ))
+    }
+
     async fn upload_attachment(
         &self,
         request: tonic::Request<hstry_core::service::proto::UploadAttachmentRequest>,

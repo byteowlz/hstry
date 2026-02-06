@@ -169,6 +169,7 @@ async fn upsert_conversation_creates_new() {
         tokens_out: Some(200),
         cost_usd: Some(0.05),
         metadata: serde_json::json!({}),
+        harness: None,
     };
 
     db.upsert_conversation(&conv).await.expect("upsert");
@@ -204,6 +205,7 @@ async fn upsert_conversation_updates_by_external_id() {
         tokens_out: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        harness: None,
     };
     db.upsert_conversation(&conv_v1).await.expect("upsert v1");
 
@@ -223,6 +225,7 @@ async fn upsert_conversation_updates_by_external_id() {
         tokens_out: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        harness: None,
     };
     db.upsert_conversation(&conv_v2).await.expect("upsert v2");
 
@@ -262,6 +265,7 @@ async fn list_conversations_with_filters() {
             tokens_out: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            harness: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -307,6 +311,7 @@ async fn count_conversations_accurate() {
             tokens_out: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            harness: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -336,6 +341,7 @@ async fn setup_conversation(db: &Database) -> Conversation {
         tokens_out: None,
         cost_usd: None,
         metadata: serde_json::json!({}),
+        harness: None,
     };
     db.upsert_conversation(&conv).await.expect("upsert conv");
     conv
@@ -361,6 +367,7 @@ async fn insert_message_creates_new() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
 
     db.insert_message(&msg).await.expect("insert");
@@ -391,6 +398,7 @@ async fn insert_message_upserts_by_idx() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg_v1).await.expect("insert v1");
 
@@ -408,6 +416,7 @@ async fn insert_message_upserts_by_idx() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg_v2).await.expect("insert v2");
 
@@ -442,6 +451,7 @@ async fn get_messages_ordered_by_idx() {
             metadata: serde_json::json!({}),
             sender: None,
             provider: None,
+            harness: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -476,6 +486,7 @@ async fn count_messages_accurate() {
             metadata: serde_json::json!({}),
             sender: None,
             provider: None,
+            harness: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -503,6 +514,7 @@ async fn message_events_include_inserted_messages() {
         metadata: serde_json::json!({ "source": "test" }),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -536,6 +548,7 @@ async fn list_conversation_summaries_uses_cache() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -575,6 +588,7 @@ async fn search_finds_matching_content() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -629,6 +643,7 @@ async fn search_with_source_filter() {
             tokens_out: None,
             cost_usd: None,
             metadata: serde_json::json!({}),
+            harness: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
 
@@ -646,6 +661,7 @@ async fn search_with_source_filter() {
             metadata: serde_json::json!({}),
             sender: None,
             provider: None,
+            harness: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -689,6 +705,7 @@ async fn search_mode_code_explicit() {
         metadata: serde_json::json!({}),
         sender: None,
         provider: None,
+        harness: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -726,6 +743,141 @@ async fn search_state_get_set() {
         db.get_search_state("key1").await.expect("get"),
         Some("value2".to_string())
     );
+}
+
+// ============================================================================
+// Partial Metadata Update
+// ============================================================================
+
+#[tokio::test]
+async fn update_conversation_metadata_partial_title() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    setup_source(&db).await;
+
+    let conv = Conversation {
+        id: Uuid::new_v4(),
+        source_id: "test-source".to_string(),
+        external_id: Some("ext-meta-1".to_string()),
+        readable_id: None,
+        title: Some("Original".to_string()),
+        created_at: Utc::now(),
+        updated_at: None,
+        model: Some("gpt-4".to_string()),
+        provider: Some("openai".to_string()),
+        workspace: Some("/project".to_string()),
+        tokens_in: None,
+        tokens_out: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        harness: Some("pi".to_string()),
+    };
+    db.upsert_conversation(&conv).await.expect("upsert");
+
+    // Update only title -- other fields should be preserved
+    db.update_conversation_metadata(
+        conv.id,
+        Some("Updated Title"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("update");
+
+    let fetched = db.get_conversation(conv.id).await.expect("get").expect("exists");
+    assert_eq!(fetched.title, Some("Updated Title".to_string()));
+    assert_eq!(fetched.model, Some("gpt-4".to_string())); // Preserved
+    assert_eq!(fetched.provider, Some("openai".to_string())); // Preserved
+    assert_eq!(fetched.workspace, Some("/project".to_string())); // Preserved
+    assert_eq!(fetched.harness, Some("pi".to_string())); // Preserved
+    assert!(fetched.updated_at.is_some()); // Bumped
+}
+
+#[tokio::test]
+async fn update_conversation_metadata_partial_harness() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    setup_source(&db).await;
+
+    let conv = Conversation {
+        id: Uuid::new_v4(),
+        source_id: "test-source".to_string(),
+        external_id: Some("ext-meta-2".to_string()),
+        readable_id: None,
+        title: Some("Keep This".to_string()),
+        created_at: Utc::now(),
+        updated_at: None,
+        model: None,
+        provider: None,
+        workspace: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        harness: Some("pi".to_string()),
+    };
+    db.upsert_conversation(&conv).await.expect("upsert");
+
+    // Update only harness -- title should be preserved
+    db.update_conversation_metadata(
+        conv.id,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("claude"),
+    )
+    .await
+    .expect("update");
+
+    let fetched = db.get_conversation(conv.id).await.expect("get").expect("exists");
+    assert_eq!(fetched.title, Some("Keep This".to_string())); // Preserved
+    assert_eq!(fetched.harness, Some("claude".to_string())); // Updated
+}
+
+#[tokio::test]
+async fn delete_conversation_removes_messages() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    let conv = setup_conversation(&db).await;
+
+    let msg = Message {
+        id: Uuid::new_v4(),
+        conversation_id: conv.id,
+        idx: 0,
+        role: MessageRole::User,
+        content: "hello".to_string(),
+        parts_json: serde_json::json!([]),
+        created_at: Some(Utc::now()),
+        model: None,
+        tokens: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        sender: None,
+        provider: None,
+        harness: None,
+    };
+    db.insert_message(&msg).await.expect("insert msg");
+
+    // Verify message exists
+    let messages = db.get_messages(conv.id).await.expect("get msgs");
+    assert_eq!(messages.len(), 1);
+
+    // Delete conversation
+    db.delete_conversation(conv.id).await.expect("delete");
+
+    // Verify conversation gone
+    assert!(db.get_conversation(conv.id).await.expect("get").is_none());
+
+    // Verify messages gone
+    let messages = db.get_messages(conv.id).await.expect("get msgs");
+    assert!(messages.is_empty());
 }
 
 // ============================================================================

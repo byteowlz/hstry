@@ -289,6 +289,7 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
         } else {
             serde_json::from_str(&proto.metadata_json).unwrap_or_default()
         },
+        harness: proto.harness,
     }
 }
 
@@ -322,6 +323,7 @@ pub fn message_from_proto(proto: proto::Message, conversation_id: Uuid) -> Messa
         },
         sender,
         provider: proto.provider,
+        harness: proto.harness,
     }
 }
 
@@ -343,6 +345,7 @@ pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
         tokens_out: conv.tokens_out,
         cost_usd: conv.cost_usd,
         metadata_json: conv.metadata.to_string(),
+        harness: conv.harness.clone(),
     }
 }
 
@@ -363,6 +366,7 @@ pub fn message_to_proto(msg: &Message) -> proto::Message {
             .map(|s| serde_json::to_string(s).unwrap_or_default())
             .unwrap_or_default(),
         provider: msg.provider.clone(),
+        harness: msg.harness.clone(),
     }
 }
 

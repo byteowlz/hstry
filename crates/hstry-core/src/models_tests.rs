@@ -186,6 +186,7 @@ mod conversation_tests {
             tokens_out: Some(200),
             cost_usd: Some(0.05),
             metadata: serde_json::json!({"tags": ["test"]}),
+            harness: Some("pi".to_string()),
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");
@@ -196,6 +197,7 @@ mod conversation_tests {
         assert_eq!(parsed.title, conv.title);
         assert_eq!(parsed.tokens_in, conv.tokens_in);
         assert_eq!(parsed.cost_usd, conv.cost_usd);
+        assert_eq!(parsed.harness, Some("pi".to_string()));
     }
 
     #[test]
@@ -215,6 +217,7 @@ mod conversation_tests {
             tokens_out: None,
             cost_usd: None,
             metadata: serde_json::Value::Object(Default::default()),
+            harness: None,
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");
@@ -222,6 +225,7 @@ mod conversation_tests {
 
         assert_eq!(parsed.external_id, None);
         assert_eq!(parsed.title, None);
+        assert_eq!(parsed.harness, None);
     }
 }
 
@@ -247,6 +251,7 @@ mod message_tests {
             metadata: serde_json::json!({}),
             sender: None,
             provider: None,
+            harness: None,
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");
@@ -258,6 +263,7 @@ mod message_tests {
         assert_eq!(parsed.idx, msg.idx);
         assert_eq!(parsed.sender, None);
         assert_eq!(parsed.provider, None);
+        assert_eq!(parsed.harness, None);
     }
 
     #[test]
@@ -283,6 +289,7 @@ mod message_tests {
             metadata: serde_json::json!({}),
             sender: Some(sender.clone()),
             provider: Some("anthropic".to_string()),
+            harness: Some("pi".to_string()),
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");

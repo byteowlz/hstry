@@ -33,6 +33,9 @@ pub struct Conversation {
     pub tokens_out: Option<i64>,
     pub cost_usd: Option<f64>,
     pub metadata: serde_json::Value,
+    /// Agent harness that owns this conversation (e.g., "pi", "claude").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
 }
 
 /// A message within a conversation.
@@ -56,6 +59,9 @@ pub struct Message {
     /// Per-message provider override (falls back to conversation-level provider).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Per-message harness override (falls back to conversation-level harness).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
 }
 
 /// Message roles across different sources.

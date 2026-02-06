@@ -176,6 +176,10 @@ impl Database {
                 "006_add_sender_and_provider_to_messages.sql",
                 include_str!("../migrations/006_add_sender_and_provider_to_messages.sql"),
             ),
+            (
+                "007_add_harness_column.sql",
+                include_str!("../migrations/007_add_harness_column.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {
@@ -272,6 +276,7 @@ impl Database {
                     tokens_out: None,
                     cost_usd: None,
                     metadata: metadata.clone(),
+                    harness: None,
                 })
             });
 
@@ -481,8 +486,8 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 title = excluded.title,
@@ -493,7 +498,8 @@ impl Database {
                 tokens_in = excluded.tokens_in,
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,
-                metadata = excluded.metadata
+                metadata = excluded.metadata,
+                harness = COALESCE(excluded.harness, conversations.harness)
             ",
         )
         .bind(conv.id.to_string())
@@ -510,6 +516,7 @@ impl Database {
         .bind(conv.tokens_out)
         .bind(conv.cost_usd)
         .bind(conv.metadata.to_string())
+        .bind(&conv.harness)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -930,6 +937,52 @@ impl Database {
         Ok(())
     }
 
+    /// Partial update of conversation metadata.
+    /// Only fields that are `Some` will be updated; `None` fields are left unchanged.
+    /// Always bumps `updated_at` to now.
+    pub async fn update_conversation_metadata(
+        &self,
+        id: Uuid,
+        title: Option<&str>,
+        workspace: Option<&str>,
+        model: Option<&str>,
+        provider: Option<&str>,
+        metadata_json: Option<&serde_json::Value>,
+        readable_id: Option<&str>,
+        harness: Option<&str>,
+    ) -> Result<()> {
+        // Use COALESCE pattern: each field only updates if a non-NULL value is provided.
+        // We pass NULL for fields that shouldn't change, and the COALESCE keeps the old value.
+        let now = Utc::now().timestamp();
+        let id_str = id.to_string();
+        let metadata_str = metadata_json.map(|v| v.to_string());
+
+        sqlx::query(
+            r"UPDATE conversations SET
+                title = COALESCE(?, title),
+                workspace = COALESCE(?, workspace),
+                model = COALESCE(?, model),
+                provider = COALESCE(?, provider),
+                metadata = COALESCE(?, metadata),
+                readable_id = COALESCE(?, readable_id),
+                harness = COALESCE(?, harness),
+                updated_at = ?
+            WHERE id = ?",
+        )
+        .bind(title)
+        .bind(workspace)
+        .bind(model)
+        .bind(provider)
+        .bind(metadata_str.as_deref())
+        .bind(readable_id)
+        .bind(harness)
+        .bind(now)
+        .bind(&id_str)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     // =========================================================================
     // Messages
     // =========================================================================
@@ -945,8 +998,8 @@ impl Database {
             .map(|s| serde_json::to_string(s).unwrap_or_default());
         sqlx::query(
             r"
-            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conversation_id, idx) DO UPDATE SET
                 role = excluded.role,
                 content = excluded.content,
@@ -957,7 +1010,8 @@ impl Database {
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata,
                 sender_json = excluded.sender_json,
-                provider = excluded.provider
+                provider = excluded.provider,
+                harness = excluded.harness
             ",
         )
         .bind(msg.id.to_string())
@@ -973,6 +1027,7 @@ impl Database {
         .bind(msg.metadata.to_string())
         .bind(&sender_json)
         .bind(&msg.provider)
+        .bind(&msg.harness)
         .execute(&self.pool)
         .await?;
         self.insert_message_event(msg).await?;
@@ -1916,6 +1971,7 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
             .get::<Option<String>, _>("metadata")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        harness: row.try_get("harness").ok().flatten(),
     }
 }
 
@@ -1947,6 +2003,7 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Message {
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok()),
         provider: row.try_get("provider").ok().flatten(),
+        harness: row.try_get("harness").ok().flatten(),
     }
 }
 

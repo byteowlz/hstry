@@ -998,8 +998,8 @@ impl Database {
             .map(|s| serde_json::to_string(s).unwrap_or_default());
         sqlx::query(
             r"
-            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness, client_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(conversation_id, idx) DO UPDATE SET
                 role = excluded.role,
                 content = excluded.content,
@@ -1011,7 +1011,8 @@ impl Database {
                 metadata = excluded.metadata,
                 sender_json = excluded.sender_json,
                 provider = excluded.provider,
-                harness = excluded.harness
+                harness = excluded.harness,
+                client_id = excluded.client_id
             ",
         )
         .bind(msg.id.to_string())
@@ -1028,6 +1029,7 @@ impl Database {
         .bind(&sender_json)
         .bind(&msg.provider)
         .bind(&msg.harness)
+        .bind(&msg.client_id)
         .execute(&self.pool)
         .await?;
         self.insert_message_event(msg).await?;
@@ -2004,6 +2006,7 @@ fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Message {
             .and_then(|s| serde_json::from_str(&s).ok()),
         provider: row.try_get("provider").ok().flatten(),
         harness: row.try_get("harness").ok().flatten(),
+        client_id: row.try_get("client_id").ok().flatten(),
     }
 }
 

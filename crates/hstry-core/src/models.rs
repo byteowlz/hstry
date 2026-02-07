@@ -62,6 +62,10 @@ pub struct Message {
     /// Per-message harness override (falls back to conversation-level harness).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// Client-generated ID for optimistic message matching.
+    /// Allows frontend to correlate provisional messages with persisted versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 /// Message roles across different sources.

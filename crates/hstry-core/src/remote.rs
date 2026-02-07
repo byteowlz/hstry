@@ -414,6 +414,7 @@ pub async fn merge_databases(
                     sender: msg.sender,
                     provider: msg.provider,
                     harness: msg.harness,
+                    client_id: msg.client_id,
                 };
                 target.insert_message(&merged_msg).await?;
                 messages_added += 1;

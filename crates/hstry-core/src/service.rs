@@ -324,6 +324,7 @@ pub fn message_from_proto(proto: proto::Message, conversation_id: Uuid) -> Messa
         sender,
         provider: proto.provider,
         harness: proto.harness,
+        client_id: proto.client_id,
     }
 }
 
@@ -367,6 +368,8 @@ pub fn message_to_proto(msg: &Message) -> proto::Message {
             .unwrap_or_default(),
         provider: msg.provider.clone(),
         harness: msg.harness.clone(),
+        client_id: msg.client_id.clone(),
+        id: Some(msg.id.to_string()),
     }
 }
 

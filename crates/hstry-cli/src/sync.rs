@@ -135,6 +135,7 @@ pub async fn sync_source(
                     sender: None,
                     provider: None,
                     harness: None,
+                    client_id: None,
                 };
                 db.insert_message(&hstry_msg).await?;
                 message_count += 1;

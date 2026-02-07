@@ -109,6 +109,8 @@ message Message {
   string sender_json = 10;        // JSON-encoded Sender object (empty string = no sender)
   optional string provider = 11;  // Per-message provider override
   optional string harness = 12;   // Per-message harness override (e.g., "pi", "claude")
+  optional string client_id = 13; // Client-generated ID for optimistic message matching
+  optional string id = 14;        // Server-assigned UUID (returned on read, ignored on write)
 }
 
 message WriteConversationRequest {

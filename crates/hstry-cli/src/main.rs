@@ -1317,6 +1317,7 @@ async fn cmd_import(
                 sender: None,
                 provider: None,
                 harness: None,
+                client_id: None,
             };
             db.insert_message(&hstry_msg).await?;
             imported_msgs += 1;

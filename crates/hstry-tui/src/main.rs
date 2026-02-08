@@ -1704,6 +1704,11 @@ fn handle_search_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                 query.insert(*cursor, c);
                 *cursor += 1;
             }
+            KeyAction::ToggleSelect => {
+                // Space key - insert space character in search mode
+                query.insert(*cursor, ' ');
+                *cursor += 1;
+            }
             KeyAction::Tab => {
                 app.search_scope = app.search_scope.next();
                 app.status_message = format!("Search scope: {}", app.search_scope.label());

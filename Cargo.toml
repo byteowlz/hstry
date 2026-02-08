@@ -101,10 +101,10 @@ print_stdout = "warn"
 print_stderr = "warn"
 
 # === ASYNC SAFETY ===
-await_holding_lock = "deny"       # Prevents deadlocks
+await_holding_lock = "deny" # Prevents deadlocks
 
 # === PROCESS SAFETY ===
-exit = "deny"                     # Libraries shouldn't exit
+exit = "deny" # Libraries shouldn't exit
 
 # === PEDANTIC RELAXATIONS ===
 # These are too noisy for most projects
@@ -115,3 +115,14 @@ must_use_candidate = "allow"
 module_name_repetitions = "allow"
 similar_names = "allow"
 too_many_lines = "allow"
+
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

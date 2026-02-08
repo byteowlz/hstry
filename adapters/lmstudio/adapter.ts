@@ -14,7 +14,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 // Platform-specific default paths
 const DEFAULT_PATHS = [
@@ -231,6 +231,7 @@ function extractMessages(raw: LMStudioConversation): Message[] {
     messages.push({
       role: mapRole(role),
       content,
+      parts: textOnlyParts(content),
       createdAt,
       model: msg.model,
     });

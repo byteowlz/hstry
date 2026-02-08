@@ -19,7 +19,12 @@ import type {
   ParseOptions,
   ToolCall,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  toolCallPart,
+  toolResultPart,
+} from '../types/index.ts';
 
 // Dynamic import for better-sqlite3 (optional dependency)
 let Database: typeof import('better-sqlite3') | null = null;
@@ -381,6 +386,7 @@ function parseSessionFromDb(row: {
     return {
       role: mapRole(m.role),
       content,
+      parts: textOnlyParts(content),
       createdAt: m.created_timestamp * 1000, // Convert seconds to milliseconds
     };
   }).filter((m): m is Message => m.content || m.tool_calls?.length);
@@ -422,9 +428,23 @@ function parseGooseMessage(msg: GooseMessage): Message | null {
     input: tc.function?.arguments ? safeJsonParse(tc.function.arguments) : undefined,
   }));
 
+  // Build parts: text + any tool calls
+  const canonParts = textOnlyParts(content) ?? [];
+  if (toolCalls?.length) {
+    for (const tc of msg.tool_calls ?? []) {
+      const callId = tc.id ?? tc.function?.name ?? 'unknown';
+      canonParts.push(toolCallPart(callId, tc.function?.name ?? 'unknown', tc.function?.arguments ? safeJsonParse(tc.function.arguments) : undefined));
+    }
+  }
+  // Tool result messages (role=tool with tool_call_id)
+  if (msg.tool_call_id) {
+    canonParts.push(toolResultPart(msg.tool_call_id, content, { name: msg.name ?? undefined }));
+  }
+
   return {
     role: mapRole(msg.role),
     content,
+    parts: canonParts.length > 0 ? canonParts : undefined,
     createdAt: parseTimestamp(msg.created_at),
     toolCalls: toolCalls?.length ? toolCalls : undefined,
     metadata: {
@@ -462,9 +482,11 @@ async function parseJsonlFile(filePath: string, opts?: ParseOptions): Promise<Co
           if (!lastTimestamp || timestamp > lastTimestamp) lastTimestamp = timestamp;
         }
 
+        const entryContent = extractContent(entry.content);
         messages.push({
           role: mapRole(entry.role),
-          content: extractContent(entry.content),
+          content: entryContent,
+          parts: textOnlyParts(entryContent),
           createdAt: timestamp,
         });
       }

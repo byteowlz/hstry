@@ -14,7 +14,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -218,6 +218,7 @@ function extractMessages(mapping?: ConversationMap): Message[] {
     messages.push({
       role: mapRole(msg.author.role),
       content,
+      parts: textOnlyParts(content),
       createdAt,
       model: extractModel(msg.metadata),
       metadata: {

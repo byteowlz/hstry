@@ -15,6 +15,7 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
@@ -24,7 +25,14 @@ import type {
   ExportResult,
   ExportFile,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import {
+  runAdapter,
+  textPart,
+  thinkingPart,
+  toolCallPart,
+  toolResultPart,
+  textOnlyParts,
+} from '../types/index.ts';
 
 const DEFAULT_PI_PATH = join(homedir(), '.pi', 'agent', 'sessions');
 
@@ -431,6 +439,30 @@ function randomId(prefix: string): string {
   return `${prefix}${uuid.replace(/-/g, '').slice(0, 12)}`;
 }
 
+/** Build CanonPart[] from Pi content blocks for user/assistant messages. */
+function buildContentParts(content?: PiContentBlock[], includeTools?: boolean): CanonPart[] | undefined {
+  if (!content || !Array.isArray(content) || content.length === 0) return undefined;
+  const parts: CanonPart[] = [];
+  for (const block of content) {
+    if (!block) continue;
+    if (block.type === 'text' && block.text) {
+      parts.push(textPart(block.text));
+    } else if (block.type === 'thinking' && block.thinking) {
+      parts.push(thinkingPart(block.thinking));
+    } else if (block.type === 'toolCall' && block.name && includeTools) {
+      parts.push(toolCallPart(block.id ?? block.name, block.name, block.arguments));
+    }
+  }
+  return parts.length > 0 ? parts : undefined;
+}
+
+/** Build CanonPart[] for a toolResult message. */
+function buildToolResultParts(msg: PiMessage): CanonPart[] | undefined {
+  const toolCallId = msg.toolCallId ?? msg.toolName ?? 'unknown';
+  const output = extractContent(msg.content) || undefined;
+  return [toolResultPart(toolCallId, output, { name: msg.toolName ?? undefined, isError: msg.isError ?? false })];
+}
+
 function extractMessages(entries: SessionEntry[], includeTools: boolean): Message[] {
   const messages: Message[] = [];
   let currentModel: string | undefined;
@@ -446,9 +478,11 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       currentProvider = modelEntry.provider;
       
       // Add as system message to preserve the event
+      const sysContent = `Model changed to ${modelEntry.provider}/${modelEntry.modelId}`;
       messages.push({
         role: 'system',
-        content: `Model changed to ${modelEntry.provider}/${modelEntry.modelId}`,
+        content: sysContent,
+        parts: textOnlyParts(sysContent),
         createdAt,
         model: modelEntry.modelId,
         metadata: {
@@ -468,6 +502,7 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       messages.push({
         role: 'system',
         content: compEntry.summary,
+        parts: textOnlyParts(compEntry.summary),
         createdAt,
         metadata: {
           entryType: 'compaction',
@@ -488,6 +523,7 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       messages.push({
         role: 'system',
         content: branchEntry.summary,
+        parts: textOnlyParts(branchEntry.summary),
         createdAt,
         metadata: {
           entryType: 'branch_summary',
@@ -503,9 +539,11 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
     // Thinking level changes
     if (entry.type === 'thinking_level_change') {
       const thinkingEntry = entry as ThinkingLevelChangeEntry;
+      const sysContent = `Thinking level changed to: ${thinkingEntry.thinkingLevel}`;
       messages.push({
         role: 'system',
-        content: `Thinking level changed to: ${thinkingEntry.thinkingLevel}`,
+        content: sysContent,
+        parts: textOnlyParts(sysContent),
         createdAt,
         metadata: {
           entryType: 'thinking_level_change',
@@ -531,9 +569,16 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
 
       const msgCreatedAt = msg.timestamp ?? createdAt;
 
+      // Build structured parts from Pi content blocks
+      const isToolResult = msg.role === 'toolResult';
+      const parts = isToolResult
+        ? buildToolResultParts(msg)
+        : buildContentParts(msg.content, includeTools) ?? textOnlyParts(content);
+
       messages.push({
         role: mapRole(msg.role),
         content,
+        parts,
         createdAt: msgCreatedAt,
         model: msg.model ?? currentModel,
         tokens: msg.usage?.totalTokens,

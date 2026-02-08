@@ -17,7 +17,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 // Dynamic import for better-sqlite3 (optional dependency)
 let Database: typeof import('better-sqlite3') | null = null;
@@ -258,6 +258,7 @@ function parseMessage(msg: OpenWebUIMessage): Message | null {
   return {
     role: mapRole(msg.role),
     content: msg.content,
+    parts: textOnlyParts(msg.content),
     createdAt: msg.timestamp ? msg.timestamp * 1000 : undefined,
     model: msg.model,
     metadata: {

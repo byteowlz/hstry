@@ -15,7 +15,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 // Platform-specific paths
 const DEFAULT_PATHS = [
@@ -214,6 +214,7 @@ function parseMessage(msg: JanMessage): Message | null {
   return {
     role: mapRole(msg.role),
     content,
+    parts: textOnlyParts(content),
     createdAt: parseTimestamp(msg.created ?? msg.created_at),
     model: msg.model,
     metadata: {

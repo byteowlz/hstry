@@ -14,7 +14,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -235,6 +235,7 @@ function parseMessageArray(entries: unknown[]): Message[] {
     messages.push({
       role: mapRole(role),
       content,
+      parts: textOnlyParts(content),
       createdAt,
       model: stringOrUndefined(msg.model ?? msg.model_name ?? msg.model_slug),
     });
@@ -268,6 +269,7 @@ function extractMessagesFromMapping(mapping: Record<string, unknown>): Message[]
     messages.push({
       role: mapRole(role),
       content,
+      parts: textOnlyParts(content),
       createdAt,
       model: stringOrUndefined((msg.metadata as Record<string, unknown> | undefined)?.model_slug),
     });

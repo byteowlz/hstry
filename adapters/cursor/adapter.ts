@@ -15,7 +15,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 // Dynamic import for better-sqlite3 (optional dependency)
 let Database: typeof import('better-sqlite3') | null = null;
@@ -252,6 +252,7 @@ function parseTabBubbles(bubbles?: CursorBubble[]): Message[] {
     messages.push({
       role,
       content,
+      parts: textOnlyParts(content),
       createdAt,
       model: bubble.modelType,
       metadata: {
@@ -290,6 +291,7 @@ function parsePrompts(value: string, workspaceId: string, opts?: ParseOptions): 
           messages.push({
             role: 'user',
             content: prompt.prompt,
+            parts: textOnlyParts(prompt.prompt),
             createdAt: prompt.createdAt,
           });
         }
@@ -297,6 +299,7 @@ function parsePrompts(value: string, workspaceId: string, opts?: ParseOptions): 
           messages.push({
             role: 'assistant',
             content: prompt.response,
+            parts: textOnlyParts(prompt.response),
             createdAt: prompt.createdAt,
             model: prompt.model,
           });

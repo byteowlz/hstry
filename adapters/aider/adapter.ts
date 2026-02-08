@@ -14,7 +14,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'projects'),
@@ -119,6 +119,7 @@ function parseMarkdownMessages(content: string): Message[] {
     messages.push({
       role: currentRole,
       content: text,
+      parts: textOnlyParts(text),
     });
   };
 

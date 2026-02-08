@@ -118,6 +118,53 @@ export interface ExportResult {
   metadata?: Record<string, unknown>;
 }
 
+// ============================================================================
+// CanonPart builder helpers for adapters
+// ============================================================================
+
+let _partCounter = 0;
+
+/** Generate a unique part ID. */
+export function partId(prefix = 'p'): string {
+  return `${prefix}-${++_partCounter}`;
+}
+
+/** Build a text CanonPart. */
+export function textPart(text: string, format?: 'markdown' | 'plain'): CanonPart {
+  return { id: partId(), type: 'text', text, ...(format ? { format } : {}) };
+}
+
+/** Build a thinking CanonPart. */
+export function thinkingPart(text: string): CanonPart {
+  return { id: partId(), type: 'thinking', text };
+}
+
+/** Build a tool_call CanonPart. */
+export function toolCallPart(toolCallId: string, name: string, input?: unknown): CanonPart {
+  return { id: partId(), type: 'tool_call', toolCallId, name, ...(input !== undefined ? { input } : {}) };
+}
+
+/** Build a tool_result CanonPart. */
+export function toolResultPart(toolCallId: string, output?: unknown, opts?: { name?: string; isError?: boolean }): CanonPart {
+  return {
+    id: partId(),
+    type: 'tool_result',
+    toolCallId,
+    ...(output !== undefined ? { output } : {}),
+    ...(opts?.name ? { name: opts.name } : {}),
+    ...(opts?.isError ? { isError: true } : {}),
+  };
+}
+
+/**
+ * Build a minimal text-only parts array from a content string.
+ * Use when the adapter has no richer structure available.
+ */
+export function textOnlyParts(content: string): CanonPart[] | undefined {
+  if (!content || !content.trim()) return undefined;
+  return [textPart(content)];
+}
+
 /** Adapter metadata */
 export interface AdapterInfo {
   name: string;

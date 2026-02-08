@@ -15,7 +15,7 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -216,6 +216,7 @@ function extractMessages(messagesMap?: Record<string, TeamsMessage>): Message[] 
     messages.push({
       role: mapRole(msg.role),
       content,
+      parts: textOnlyParts(content),
       model: msg.model,
       metadata: {
         id: msg.id,

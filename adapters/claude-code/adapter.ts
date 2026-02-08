@@ -10,11 +10,19 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import {
+  runAdapter,
+  textPart,
+  thinkingPart,
+  toolCallPart,
+  toolResultPart,
+  textOnlyParts,
+} from '../types/index.ts';
 
 const DEFAULT_CLAUDE_PATH = join(homedir(), '.claude', 'projects');
 
@@ -185,10 +193,12 @@ function extractMessages(entries: JsonlEntry[]): Message[] {
     if (!content) continue;
 
     const createdAt = parseTimestamp(entry.timestamp);
+    const parts = buildClaudeCodeParts(msg.content) ?? textOnlyParts(content);
 
     messages.push({
       role: mapRole(msg.role),
       content,
+      parts,
       createdAt,
       model: msg.model,
       metadata: {
@@ -200,6 +210,28 @@ function extractMessages(entries: JsonlEntry[]): Message[] {
 
   messages.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   return messages;
+}
+
+/** Build CanonPart[] from Claude Code content blocks. */
+function buildClaudeCodeParts(content?: string | ClaudeContentBlock[]): CanonPart[] | undefined {
+  if (!content || typeof content === 'string') return undefined;
+  const parts: CanonPart[] = [];
+  for (const block of content) {
+    if (!block) continue;
+    if (block.type === 'text' && block.text) {
+      parts.push(textPart(block.text));
+    } else if (block.type === 'thinking' && block.thinking) {
+      parts.push(thinkingPart(block.thinking));
+    } else if (block.type === 'tool_use' && block.name) {
+      const callId = (block as Record<string, unknown>).id as string ?? block.name;
+      parts.push(toolCallPart(callId, block.name, block.input));
+    } else if (block.type === 'tool_result') {
+      const callId = (block as Record<string, unknown>).tool_use_id as string ?? 'unknown';
+      const output = typeof block.content === 'string' ? block.content : JSON.stringify(block.output);
+      parts.push(toolResultPart(callId, output));
+    }
+  }
+  return parts.length > 0 ? parts : undefined;
 }
 
 function extractContent(content?: string | ClaudeContentBlock[]): string {

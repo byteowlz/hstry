@@ -15,7 +15,12 @@ import type {
   ParseOptions,
   ToolCall,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  toolCallPart,
+  toolResultPart,
+} from '../types/index.ts';
 
 const DEFAULT_CODEX_HOME = join(homedir(), '.codex');
 const DEFAULT_PATHS = [
@@ -206,6 +211,7 @@ async function parseRolloutFile(
           messages.push({
             role: mapRole(payload.role ?? 'assistant'),
             content,
+            parts: textOnlyParts(content),
             createdAt: timestampMs,
             model,
           });
@@ -213,9 +219,11 @@ async function parseRolloutFile(
         }
 
         if (payload.type === 'compacted' && typeof (payload as any).message === 'string') {
+          const compactedContent = (payload as any).message as string;
           messages.push({
             role: 'assistant',
-            content: (payload as any).message,
+            content: compactedContent,
+            parts: textOnlyParts(compactedContent),
             createdAt: timestampMs,
             model,
           });
@@ -225,10 +233,19 @@ async function parseRolloutFile(
         if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
           const callId = payload.call_id;
           if (callId && payload.name) {
+            const parsedInput = safeParseJson(payload.arguments ?? payload.input);
             pendingToolCalls.set(callId, {
               toolName: payload.name,
-              input: safeParseJson(payload.arguments ?? payload.input),
+              input: parsedInput,
               status: 'pending',
+            });
+            // Emit the tool_call as an assistant message part
+            messages.push({
+              role: 'assistant',
+              content: '',
+              parts: [toolCallPart(callId, payload.name, parsedInput)],
+              createdAt: timestampMs,
+              model,
             });
           }
           break;
@@ -245,9 +262,11 @@ async function parseRolloutFile(
           toolCall.status = 'success';
           toolCall.durationMs = undefined;
 
+          const resultOutput = toolCall.output ?? '';
           messages.push({
             role: 'tool',
-            content: toolCall.output ?? '',
+            content: resultOutput,
+            parts: [toolResultPart(callId, resultOutput, { name: toolCall.toolName })],
             createdAt: timestampMs,
             toolCalls: [toolCall],
           });
@@ -258,14 +277,20 @@ async function parseRolloutFile(
 
         if (payload.type === 'local_shell_call' || payload.type === 'web_search_call') {
           const toolName = payload.type === 'local_shell_call' ? 'shell' : 'web_search';
+          const shellCallId = `${toolName}-${timestampMs}`;
           const toolCall: ToolCall = {
             toolName,
             input: payload.action,
             status: payload.status as ToolCall['status'],
           };
+          const shellContent = stringifyOutput(payload.action);
           messages.push({
             role: 'tool',
-            content: stringifyOutput(payload.action),
+            content: shellContent,
+            parts: [
+              toolCallPart(shellCallId, toolName, payload.action),
+              toolResultPart(shellCallId, shellContent, { name: toolName }),
+            ],
             createdAt: timestampMs,
             toolCalls: [toolCall],
           });

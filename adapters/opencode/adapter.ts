@@ -22,12 +22,19 @@ import { homedir } from 'os';
 import type { 
   Adapter, 
   AdapterInfo, 
+  CanonPart,
   Conversation, 
   Message, 
   ParseOptions,
   ToolCall,
 } from '../types/index.ts';
-import { runAdapter } from '../types/index.ts';
+import {
+  runAdapter,
+  textPart,
+  toolCallPart,
+  toolResultPart,
+  textOnlyParts,
+} from '../types/index.ts';
 
 // OpenCode storage structures
 interface SessionInfo {
@@ -359,10 +366,12 @@ async function loadMessagesNew(
       }
 
       const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
+      const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
 
       messages.push({
         role: mapRole(msgInfo.role),
         content,
+        parts: canonParts,
         createdAt: msgInfo.time.created,
         model: msgInfo.modelID || undefined,
         tokens: tokens > 0 ? tokens : undefined,
@@ -581,10 +590,12 @@ async function loadMessagesOld(
       }
 
       const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
+      const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
 
       const msg: Message = {
         role: mapRole(msgInfo.role),
         content,
+        parts: canonParts,
         createdAt: msgInfo.time.created,
         model: msgInfo.modelID || undefined,
         tokens: tokens > 0 ? tokens : undefined,
@@ -646,6 +657,25 @@ async function loadPartsOld(
   parts.sort((a, b) => a.id.localeCompare(b.id));
 
   return parts;
+}
+
+/** Build CanonPart[] from opencode PartInfo[]. */
+function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean): CanonPart[] | undefined {
+  const canon: CanonPart[] = [];
+  for (const p of oparts) {
+    if (p.type === 'text' && p.text) {
+      canon.push(textPart(p.text));
+    } else if (p.type === 'tool' && p.tool && includeTools) {
+      // Tool parts in opencode represent both the call and result.
+      // The state has input, output, status.
+      const callId = p.id || p.tool;
+      canon.push(toolCallPart(callId, p.tool, p.state?.input));
+      if (p.state?.output !== undefined || p.state?.status === 'error') {
+        canon.push(toolResultPart(callId, p.state?.output, { name: p.tool, isError: p.state?.status === 'error' }));
+      }
+    }
+  }
+  return canon.length > 0 ? canon : undefined;
 }
 
 function mapRole(role: string): Message['role'] {

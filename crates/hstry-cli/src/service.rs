@@ -742,13 +742,39 @@ async fn run_service(config_path: &Path) -> Result<()> {
 
     let mut tick = interval(Duration::from_secs(state.config.service.poll_interval_secs));
 
+    // Debounce file-watcher events: collect events over a short window before syncing.
+    // This prevents a tight loop when watched directories see rapid writes.
+    const DEBOUNCE_SECS: u64 = 5;
+    let mut debounce_deadline: Option<Instant> = None;
+    let mut pending_paths: Vec<PathBuf> = Vec::new();
+
     loop {
+        let debounce_sleep = async {
+            match debounce_deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        };
+
         tokio::select! {
             _ = tick.tick() => {
+                // Clear any pending debounce since we're doing a full sync anyway
+                debounce_deadline = None;
+                pending_paths.clear();
                 state.sync_all().await?;
             }
             Some(event_path) = state.event_rx.recv() => {
-                state.handle_event(event_path).await?;
+                pending_paths.push(event_path);
+                // Set (or extend) the debounce window
+                if debounce_deadline.is_none() {
+                    debounce_deadline = Some(Instant::now() + Duration::from_secs(DEBOUNCE_SECS));
+                }
+            }
+            _ = debounce_sleep => {
+                // Debounce window expired: process the accumulated events as a single batch
+                let paths: Vec<PathBuf> = pending_paths.drain(..).collect();
+                debounce_deadline = None;
+                state.handle_events_batch(paths).await?;
             }
             _ = tokio::signal::ctrl_c() => {
                 println!("Service shutting down.");
@@ -873,6 +899,9 @@ struct ServiceState {
     watcher: RecommendedWatcher,
     event_rx: mpsc::Receiver<PathBuf>,
     last_remote_sync: Instant,
+    /// Track consecutive failures per source for exponential backoff.
+    /// Maps source_id -> (consecutive_failures, next_retry_after).
+    source_backoff: HashMap<String, (u32, Instant)>,
 }
 
 impl ServiceState {
@@ -906,6 +935,7 @@ impl ServiceState {
             watcher,
             event_rx,
             last_remote_sync: Instant::now(),
+            source_backoff: HashMap::new(),
         };
 
         state.refresh_watches().await?;
@@ -970,9 +1000,15 @@ impl ServiceState {
         Ok(())
     }
 
-    async fn handle_event(&mut self, path: PathBuf) -> Result<()> {
+    /// Process a batch of file-watcher events efficiently: discover new sources
+    /// from all paths, then sync once.
+    async fn handle_events_batch(&mut self, paths: Vec<PathBuf>) -> Result<()> {
         let _ = self.reload_config_if_needed().await?;
-        self.discover_from_path(&path).await?;
+        // Deduplicate paths
+        let unique_paths: HashSet<PathBuf> = paths.into_iter().collect();
+        for path in unique_paths {
+            self.discover_from_path(&path).await?;
+        }
         self.sync_existing_sources().await?;
         self.sync_remotes_if_due().await?;
         Ok(())
@@ -1219,8 +1255,10 @@ impl ServiceState {
         Ok(())
     }
 
-    async fn sync_existing_sources(&self) -> Result<()> {
+    async fn sync_existing_sources(&mut self) -> Result<()> {
         let sources = self.db.list_sources().await?;
+        let now = Instant::now();
+
         for source in sources {
             if !self.enabled_adapters.contains(&source.adapter) {
                 continue;
@@ -1231,6 +1269,22 @@ impl ServiceState {
                 continue;
             }
 
+            // Check backoff: skip sources that have been failing recently
+            if let Some((failures, retry_after)) = self.source_backoff.get(&source.id) {
+                if now < *retry_after {
+                    // Still in backoff period, skip this source
+                    if *failures == 1 {
+                        // Only log once when backoff starts
+                        println!(
+                            "Skipping {id} ({adapter}): backing off after failure",
+                            id = source.id,
+                            adapter = source.adapter
+                        );
+                    }
+                    continue;
+                }
+            }
+
             println!(
                 "Syncing {id} ({adapter})...",
                 id = source.id,
@@ -1238,6 +1292,8 @@ impl ServiceState {
             );
             match sync::sync_source(&self.db, &self.runner, &source).await {
                 Ok(result) => {
+                    // Clear backoff on success
+                    self.source_backoff.remove(&source.id);
                     if result.conversations > 0 {
                         println!(
                             "  Synced {count} conversations",
@@ -1249,6 +1305,21 @@ impl ServiceState {
                 }
                 Err(err) => {
                     eprintln!("  Error: {err}");
+                    // Exponential backoff: 30s, 60s, 120s, 240s, capped at 300s
+                    let (prev_failures, _) = self
+                        .source_backoff
+                        .get(&source.id)
+                        .copied()
+                        .unwrap_or((0, now));
+                    let failures = prev_failures + 1;
+                    let backoff_secs =
+                        (30u64 * 2u64.saturating_pow(failures.saturating_sub(1))).min(300);
+                    let retry_after = now + Duration::from_secs(backoff_secs);
+                    self.source_backoff
+                        .insert(source.id.clone(), (failures, retry_after));
+                    eprintln!(
+                        "  Will retry in {backoff_secs}s (failure #{failures})",
+                    );
                 }
             }
         }

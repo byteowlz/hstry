@@ -2,24 +2,38 @@
 
 #[cfg(test)]
 mod runtime_tests {
-    use super::super::Runtime;
+    use super::super::{Runtime, RuntimeKind};
+
+    fn bun() -> Runtime {
+        Runtime::from_kind(RuntimeKind::Bun)
+    }
+    fn deno() -> Runtime {
+        Runtime::from_kind(RuntimeKind::Deno)
+    }
+    fn node() -> Runtime {
+        Runtime::from_kind(RuntimeKind::Node)
+    }
 
     #[test]
     fn binary_names() {
-        assert_eq!(Runtime::Bun.binary(), "bun");
-        assert_eq!(Runtime::Deno.binary(), "deno");
-        assert_eq!(Runtime::Node.binary(), "node");
+        // binary() returns a Path; the file_name (or full path) should end with the runtime name
+        let bun_bin = bun().binary().to_string_lossy().to_string();
+        let deno_bin = deno().binary().to_string_lossy().to_string();
+        let node_bin = node().binary().to_string_lossy().to_string();
+        assert!(bun_bin.contains("bun"), "expected 'bun' in {bun_bin}");
+        assert!(deno_bin.contains("deno"), "expected 'deno' in {deno_bin}");
+        assert!(node_bin.contains("node"), "expected 'node' in {node_bin}");
     }
 
     #[test]
     fn run_args_bun() {
-        let args = Runtime::Bun.run_args();
+        let args = bun().run_args();
         assert_eq!(args, vec!["run"]);
     }
 
     #[test]
     fn run_args_deno() {
-        let args = Runtime::Deno.run_args();
+        let args = deno().run_args();
         assert!(args.contains(&"run"));
         assert!(args.contains(&"--allow-read"));
         assert!(args.contains(&"--allow-env"));
@@ -27,41 +41,51 @@ mod runtime_tests {
 
     #[test]
     fn run_args_node() {
-        let args = Runtime::Node.run_args();
+        let args = node().run_args();
         assert!(args.contains(&"--experimental-strip-types"));
     }
 
     #[test]
     fn parse_bun() {
-        assert_eq!(Runtime::parse("bun"), Some(Runtime::Bun));
-        assert_eq!(Runtime::parse("Bun"), Some(Runtime::Bun));
-        assert_eq!(Runtime::parse("BUN"), Some(Runtime::Bun));
+        let parsed = Runtime::parse("bun").expect("bun");
+        assert_eq!(parsed.kind, RuntimeKind::Bun);
+        let parsed = Runtime::parse("Bun").expect("Bun");
+        assert_eq!(parsed.kind, RuntimeKind::Bun);
+        let parsed = Runtime::parse("BUN").expect("BUN");
+        assert_eq!(parsed.kind, RuntimeKind::Bun);
     }
 
     #[test]
     fn parse_deno() {
-        assert_eq!(Runtime::parse("deno"), Some(Runtime::Deno));
-        assert_eq!(Runtime::parse("Deno"), Some(Runtime::Deno));
+        let parsed = Runtime::parse("deno").expect("deno");
+        assert_eq!(parsed.kind, RuntimeKind::Deno);
+        let parsed = Runtime::parse("Deno").expect("Deno");
+        assert_eq!(parsed.kind, RuntimeKind::Deno);
     }
 
     #[test]
     fn parse_node() {
-        assert_eq!(Runtime::parse("node"), Some(Runtime::Node));
-        assert_eq!(Runtime::parse("Node"), Some(Runtime::Node));
+        let parsed = Runtime::parse("node").expect("node");
+        assert_eq!(parsed.kind, RuntimeKind::Node);
+        let parsed = Runtime::parse("Node").expect("Node");
+        assert_eq!(parsed.kind, RuntimeKind::Node);
     }
 
     #[test]
     fn parse_unknown_returns_none() {
-        assert_eq!(Runtime::parse("unknown"), None);
-        assert_eq!(Runtime::parse("python"), None);
-        assert_eq!(Runtime::parse(""), None);
+        assert!(Runtime::parse("unknown").is_none());
+        assert!(Runtime::parse("python").is_none());
+        assert!(Runtime::parse("").is_none());
     }
 
     #[test]
     fn from_str_works() {
-        assert_eq!("bun".parse::<Runtime>(), Ok(Runtime::Bun));
-        assert_eq!("deno".parse::<Runtime>(), Ok(Runtime::Deno));
-        assert_eq!("node".parse::<Runtime>(), Ok(Runtime::Node));
+        let bun: Runtime = "bun".parse().expect("bun");
+        assert_eq!(bun.kind, RuntimeKind::Bun);
+        let deno: Runtime = "deno".parse().expect("deno");
+        assert_eq!(deno.kind, RuntimeKind::Deno);
+        let node: Runtime = "node".parse().expect("node");
+        assert_eq!(node.kind, RuntimeKind::Node);
         assert!("unknown".parse::<Runtime>().is_err());
     }
 }
@@ -411,9 +435,13 @@ mod parsed_message_tests {
 
 #[cfg(test)]
 mod adapter_runner_tests {
-    use super::super::{AdapterRunner, Runtime};
+    use super::super::{AdapterRunner, Runtime, RuntimeKind};
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn test_runtime() -> Runtime {
+        Runtime::from_kind(RuntimeKind::Bun)
+    }
 
     fn create_test_adapter(dir: &TempDir, name: &str) -> PathBuf {
         let adapter_dir = dir.path().join(name);
@@ -428,7 +456,7 @@ mod adapter_runner_tests {
         let dir = TempDir::new().expect("tempdir");
         create_test_adapter(&dir, "test-adapter");
 
-        let runner = AdapterRunner::new(Runtime::Bun, vec![dir.path().to_path_buf()]);
+        let runner = AdapterRunner::new(test_runtime(), vec![dir.path().to_path_buf()]);
         let found = runner.find_adapter("test-adapter");
         assert!(found.is_some());
         assert!(
@@ -442,7 +470,7 @@ mod adapter_runner_tests {
     #[test]
     fn find_adapter_returns_none_for_missing() {
         let dir = TempDir::new().expect("tempdir");
-        let runner = AdapterRunner::new(Runtime::Bun, vec![dir.path().to_path_buf()]);
+        let runner = AdapterRunner::new(test_runtime(), vec![dir.path().to_path_buf()]);
         assert!(runner.find_adapter("nonexistent").is_none());
     }
 
@@ -453,7 +481,7 @@ mod adapter_runner_tests {
         create_test_adapter(&dir, "adapter-b");
         create_test_adapter(&dir, "adapter-c");
 
-        let runner = AdapterRunner::new(Runtime::Bun, vec![dir.path().to_path_buf()]);
+        let runner = AdapterRunner::new(test_runtime(), vec![dir.path().to_path_buf()]);
         let adapters = runner.list_adapters();
         assert_eq!(adapters.len(), 3);
         assert!(adapters.contains(&"adapter-a".to_string()));
@@ -473,7 +501,7 @@ mod adapter_runner_tests {
         create_test_adapter(&dir2, "alpha");
 
         let runner = AdapterRunner::new(
-            Runtime::Bun,
+            test_runtime(),
             vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()],
         );
         let adapters = runner.list_adapters();
@@ -502,7 +530,7 @@ mod adapter_runner_tests {
         std::fs::create_dir_all(&invalid_dir).expect("create");
         std::fs::write(invalid_dir.join("other.ts"), "// not an adapter").expect("write");
 
-        let runner = AdapterRunner::new(Runtime::Bun, vec![dir.path().to_path_buf()]);
+        let runner = AdapterRunner::new(test_runtime(), vec![dir.path().to_path_buf()]);
         let adapters = runner.list_adapters();
 
         assert_eq!(adapters.len(), 1);

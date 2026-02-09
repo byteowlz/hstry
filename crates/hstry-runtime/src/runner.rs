@@ -2,49 +2,79 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tokio::process::Command as AsyncCommand;
 
-/// JavaScript runtime to use for adapters.
+/// JavaScript runtime kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Runtime {
+pub enum RuntimeKind {
     Bun,
     Deno,
     Node,
 }
 
+/// JavaScript runtime to use for adapters.
+///
+/// Stores the resolved absolute path to the binary so that daemon processes
+/// (which may have a stripped-down `PATH`) can still find the runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Runtime {
+    pub kind: RuntimeKind,
+    /// Absolute path to the runtime binary (resolved via `which` at construction).
+    /// Falls back to the bare binary name if resolution fails.
+    pub binary_path: PathBuf,
+}
+
 impl Runtime {
-    /// Get the binary name for this runtime.
-    pub fn binary(&self) -> &'static str {
-        match self {
-            Runtime::Bun => "bun",
-            Runtime::Deno => "deno",
-            Runtime::Node => "node",
+    /// Get the bare binary name for this runtime kind.
+    fn bare_binary(kind: RuntimeKind) -> &'static str {
+        match kind {
+            RuntimeKind::Bun => "bun",
+            RuntimeKind::Deno => "deno",
+            RuntimeKind::Node => "node",
         }
     }
 
-    /// Get the run flag for this runtime.
+    /// Resolve the absolute path to a runtime binary, falling back to the bare name.
+    fn resolve_binary(kind: RuntimeKind) -> PathBuf {
+        let name = Self::bare_binary(kind);
+        which::which(name).unwrap_or_else(|_| PathBuf::from(name))
+    }
+
+    /// Build a `Runtime` from a kind, resolving the binary path.
+    pub fn from_kind(kind: RuntimeKind) -> Self {
+        Self {
+            binary_path: Self::resolve_binary(kind),
+            kind,
+        }
+    }
+
+    /// Get the binary path as a string for spawning.
+    pub fn binary(&self) -> &Path {
+        &self.binary_path
+    }
+
+    /// Get the run flags for this runtime.
     pub fn run_args(&self) -> Vec<&'static str> {
-        match self {
-            Runtime::Bun => vec!["run"],
-            Runtime::Deno => vec!["run", "--allow-read", "--allow-env"],
-            Runtime::Node => vec!["--experimental-strip-types"],
+        match self.kind {
+            RuntimeKind::Bun => vec!["run"],
+            RuntimeKind::Deno => vec!["run", "--allow-read", "--allow-env"],
+            RuntimeKind::Node => vec!["--experimental-strip-types"],
         }
     }
 
     /// Detect the best available runtime.
     pub fn detect() -> Option<Self> {
         // Try bun first (fastest)
-        if Command::new("bun").arg("--version").output().is_ok() {
-            return Some(Runtime::Bun);
+        if which::which("bun").is_ok() {
+            return Some(Self::from_kind(RuntimeKind::Bun));
         }
         // Then deno (good TS support)
-        if Command::new("deno").arg("--version").output().is_ok() {
-            return Some(Runtime::Deno);
+        if which::which("deno").is_ok() {
+            return Some(Self::from_kind(RuntimeKind::Deno));
         }
         // Finally node (most common)
-        if Command::new("node").arg("--version").output().is_ok() {
-            return Some(Runtime::Node);
+        if which::which("node").is_ok() {
+            return Some(Self::from_kind(RuntimeKind::Node));
         }
         None
     }
@@ -52,9 +82,9 @@ impl Runtime {
     /// Parse runtime from string.
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "bun" => Some(Runtime::Bun),
-            "deno" => Some(Runtime::Deno),
-            "node" => Some(Runtime::Node),
+            "bun" => Some(Self::from_kind(RuntimeKind::Bun)),
+            "deno" => Some(Self::from_kind(RuntimeKind::Deno)),
+            "node" => Some(Self::from_kind(RuntimeKind::Node)),
             "auto" => Self::detect(),
             _ => None,
         }

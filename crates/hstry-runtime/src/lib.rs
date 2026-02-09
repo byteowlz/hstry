@@ -13,3 +13,4 @@ pub use runner::ExportOptions;
 pub use runner::ExportResult;
 pub use runner::ParsedMessage;
 pub use runner::Runtime;
+pub use runner::RuntimeKind;

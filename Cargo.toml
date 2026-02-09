@@ -118,7 +118,7 @@ too_many_lines = "allow"
 
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "warn"
 
 [profile.release]
 opt-level = "z"

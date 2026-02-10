@@ -26,16 +26,10 @@ mod path_expansion_tests {
 
     #[test]
     fn expand_path_handles_env_vars() {
-        // SAFETY: Test runs single-threaded; no other code accesses this env var
-        unsafe {
-            std::env::set_var("HSTRY_TEST_VAR", "/test/path");
-        }
-        let result = Config::expand_path("$HSTRY_TEST_VAR/subdir");
-        assert!(result.to_string_lossy().contains("/test/path"));
-        // SAFETY: Test runs single-threaded; cleanup of test env var
-        unsafe {
-            std::env::remove_var("HSTRY_TEST_VAR");
-        }
+        temp_env::with_var("HSTRY_TEST_VAR", Some("/test/path"), || {
+            let result = Config::expand_path("$HSTRY_TEST_VAR/subdir");
+            assert!(result.to_string_lossy().contains("/test/path"));
+        });
     }
 }
 

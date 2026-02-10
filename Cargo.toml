@@ -41,6 +41,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 # Utils
 tempfile = "3.14"
 which = "7.0"
+nix = { version = "0.29", features = ["signal", "process"] }
+temp-env = "0.3"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -118,7 +120,7 @@ too_many_lines = "allow"
 
 
 [workspace.lints.rust]
-unsafe_code = "warn"
+unsafe_code = "forbid"
 
 [profile.release]
 opt-level = "z"

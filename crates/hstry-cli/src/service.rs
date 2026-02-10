@@ -603,14 +603,7 @@ fn start_service(config_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        cmd.process_group(0);
     }
 
     let child = cmd.spawn().context("Failed to start service process")?;
@@ -628,9 +621,9 @@ fn stop_service() -> Result<()> {
 
     if is_process_running(pid) {
         if let Ok(pid_i32) = i32::try_from(pid) {
-            unsafe {
-                libc::kill(pid_i32, libc::SIGTERM);
-            }
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            let _ = kill(Pid::from_raw(pid_i32), Signal::SIGTERM);
             println!("Sent SIGTERM to service (pid {pid}).");
         } else {
             println!("Service not running.");
@@ -644,8 +637,10 @@ fn stop_service() -> Result<()> {
 }
 
 fn is_process_running(pid: u32) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
     i32::try_from(pid)
-        .map(|pid_i32| unsafe { libc::kill(pid_i32, 0) == 0 })
+        .map(|pid_i32| kill(Pid::from_raw(pid_i32), None).is_ok())
         .unwrap_or(false)
 }
 
@@ -1450,50 +1445,27 @@ fn is_candidate_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_temp_env<F: FnOnce()>(f: F) {
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock");
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let state_home = temp_dir.path().join("state");
         let config_home = temp_dir.path().join("config");
         std::fs::create_dir_all(&state_home).expect("state dir");
         std::fs::create_dir_all(&config_home).expect("config dir");
 
-        let prev_state = std::env::var("XDG_STATE_HOME").ok();
-        let prev_config = std::env::var("XDG_CONFIG_HOME").ok();
-
-        unsafe {
-            std::env::set_var("XDG_STATE_HOME", &state_home);
-            std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        }
-
-        f();
-
-        if let Some(value) = prev_state {
-            unsafe {
-                std::env::set_var("XDG_STATE_HOME", value);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("XDG_STATE_HOME");
-            }
-        }
-
-        if let Some(value) = prev_config {
-            unsafe {
-                std::env::set_var("XDG_CONFIG_HOME", value);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("XDG_CONFIG_HOME");
-            }
-        }
+        temp_env::with_vars(
+            [
+                (
+                    "XDG_STATE_HOME",
+                    Some(state_home.to_string_lossy().as_ref()),
+                ),
+                (
+                    "XDG_CONFIG_HOME",
+                    Some(config_home.to_string_lossy().as_ref()),
+                ),
+            ],
+            f,
+        );
     }
 
     #[test]

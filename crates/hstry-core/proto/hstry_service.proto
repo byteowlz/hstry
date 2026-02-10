@@ -94,6 +94,7 @@ message Conversation {
   optional double cost_usd = 11;
   string metadata_json = 12;      // JSON string
   optional string harness = 13;   // Agent harness (e.g., "pi", "claude")
+  optional string readable_id = 14; // Human-readable ID (e.g., "cold-lamp")
 }
 
 message Message {

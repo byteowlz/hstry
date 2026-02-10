@@ -80,10 +80,34 @@ pub async fn sync_source(
 
         for conv in batch.conversations {
             let mut conv_id = uuid::Uuid::new_v4();
-            if let Some(external_id) = conv.external_id.as_deref()
-                && let Some(existing) = db.get_conversation_id(&source.id, external_id).await?
-            {
-                conv_id = existing;
+
+            if let Some(external_id) = conv.external_id.as_deref() {
+                if let Some(existing) =
+                    db.get_conversation_id(&source.id, external_id).await?
+                {
+                    // Exact match on (source_id, external_id) -- update in place
+                    conv_id = existing;
+                } else {
+                    // Check if the session already exists under a different
+                    // external_id (e.g., written by Octo with a different ID).
+                    let created_at_secs = chrono::DateTime::from_timestamp_millis(conv.created_at)
+                        .map(|dt| dt.timestamp());
+                    if db
+                        .conversation_exists_for_session_ext(
+                            &source.id,
+                            external_id,
+                            conv.workspace.as_deref(),
+                            created_at_secs,
+                        )
+                        .await?
+                    {
+                        tracing::debug!(
+                            "Skipping session {} - already exists under different external_id",
+                            external_id
+                        );
+                        continue;
+                    }
+                }
             }
 
             let hstry_conv = hstry_core::models::Conversation {

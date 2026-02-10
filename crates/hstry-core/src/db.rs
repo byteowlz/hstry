@@ -779,6 +779,118 @@ impl Database {
         Ok(row.map(|row| Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default()))
     }
 
+    /// Check if a conversation already exists for a given adapter source that
+    /// references the same underlying session, even if stored under a different
+    /// `external_id`.
+    ///
+    /// This prevents duplicates when the same session is written by two different
+    /// paths (e.g., Octo writes with its own session UUID as `external_id`, and
+    /// the hstry adapter sync later imports the same session file with the native
+    /// session header ID as `external_id`).
+    ///
+    /// Checks:
+    /// 1. Direct match on `(source_id, external_id)` -- the fast path.
+    /// 2. Any conversation with the same `source_id` whose `metadata` JSON
+    ///    contains `"canonical_id": "<external_id>"`.
+    /// 3. Any conversation with the same `source_id` whose `metadata` JSON
+    ///    contains `"pi_session_id": "<external_id>"` (the Pi native session
+    ///    ID stored by Octo for deduplication).
+    /// 4. Any conversation with the same `source_id` whose `metadata` JSON
+    ///    contains a `"file"` value ending with `_<external_id>.jsonl`.
+    /// 5. Any conversation with the same `source_id`, same `workspace`, and
+    ///    created within 60 seconds of the given timestamp (catches duplicates
+    ///    before `pi_session_id` metadata is available).
+    pub async fn conversation_exists_for_session(
+        &self,
+        source_id: &str,
+        external_id: &str,
+    ) -> Result<bool> {
+        self.conversation_exists_for_session_ext(source_id, external_id, None, None)
+            .await
+    }
+
+    /// Extended version of `conversation_exists_for_session` that also checks
+    /// workspace + timestamp proximity when metadata-based dedup fails.
+    pub async fn conversation_exists_for_session_ext(
+        &self,
+        source_id: &str,
+        external_id: &str,
+        workspace: Option<&str>,
+        created_at_secs: Option<i64>,
+    ) -> Result<bool> {
+        // Fast path: exact match
+        let direct = sqlx::query(
+            "SELECT 1 FROM conversations WHERE source_id = ? AND external_id = ? LIMIT 1",
+        )
+        .bind(source_id)
+        .bind(external_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if direct.is_some() {
+            return Ok(true);
+        }
+
+        // Check if another conversation has this external_id in its metadata
+        // as canonical_id (written by Octo/runner) or pi_session_id
+        let canonical_pattern = format!("\"canonical_id\":\"{}\"", external_id);
+        let pi_sid_pattern = format!("\"pi_session_id\":\"{}\"", external_id);
+        let meta_match = sqlx::query(
+            "SELECT 1 FROM conversations WHERE source_id = ? AND (metadata LIKE ? OR metadata LIKE ?) LIMIT 1",
+        )
+        .bind(source_id)
+        .bind(format!("%{}%", canonical_pattern))
+        .bind(format!("%{}%", pi_sid_pattern))
+        .fetch_optional(&self.pool)
+        .await?;
+        if meta_match.is_some() {
+            return Ok(true);
+        }
+
+        // Check if another conversation has this external_id in its file
+        // metadata (imported by adapter sync). The file path ends with
+        // `_{external_id}.jsonl`.
+        let file_suffix = format!("_{}.jsonl", external_id);
+        let file_match = sqlx::query(
+            "SELECT 1 FROM conversations WHERE source_id = ? AND metadata LIKE ? LIMIT 1",
+        )
+        .bind(source_id)
+        .bind(format!("%{}%", file_suffix))
+        .fetch_optional(&self.pool)
+        .await?;
+        if file_match.is_some() {
+            return Ok(true);
+        }
+
+        // Workspace + timestamp proximity check: if a conversation exists with
+        // the same source_id, same workspace, and was created within 60 seconds,
+        // it's very likely the same session written by a different writer (e.g.,
+        // Octo vs. adapter sync). This catches the race condition where Octo
+        // hasn't yet stored the pi_session_id in metadata.
+        if let (Some(workspace), Some(ts)) = (workspace, created_at_secs) {
+            let window = 60i64; // seconds
+            let proximity_match = sqlx::query(
+                "SELECT 1 FROM conversations \
+                 WHERE source_id = ? \
+                 AND workspace = ? \
+                 AND external_id != ? \
+                 AND ABS(created_at - ?) <= ? \
+                 LIMIT 1",
+            )
+            .bind(source_id)
+            .bind(workspace)
+            .bind(external_id)
+            .bind(ts)
+            .bind(window)
+            .fetch_optional(&self.pool)
+            .await?;
+            if proximity_match.is_some() {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     async fn get_conversation_readable_id(
         &self,
         source_id: &str,

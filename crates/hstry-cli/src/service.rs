@@ -732,6 +732,11 @@ async fn run_service(config_path: &Path) -> Result<()> {
     } else {
         None
     };
+    // Set up filesystem watches after the server is accepting connections.
+    // notify 8.x watch() with RecursiveMode::Recursive blocks the current
+    // thread while it walks the directory tree to register inotify watches,
+    // so this must happen after the gRPC server has been spawned.
+    state.refresh_watches().await?;
 
     state.sync_all().await?;
 
@@ -918,7 +923,7 @@ impl ServiceState {
         let (event_tx, event_rx) = mpsc::channel(64);
         let watcher = build_watcher(event_tx)?;
 
-        let mut state = Self {
+        let state = Self {
             config_path: config_path.to_path_buf(),
             config,
             config_mtime,
@@ -933,7 +938,10 @@ impl ServiceState {
             source_backoff: HashMap::new(),
         };
 
-        state.refresh_watches().await?;
+        // NOTE: refresh_watches() is called separately by the caller after
+        // the search server has been started.  notify 8.x watch() with
+        // RecursiveMode::Recursive blocks the current thread while it walks
+        // the directory tree, which would delay gRPC server startup.
 
         Ok(state)
     }
@@ -983,13 +991,21 @@ impl ServiceState {
             let _ = self.watcher.unwatch(path);
         }
 
+        // notify 8.x `watch()` with RecursiveMode::Recursive performs a
+        // synchronous directory walk to register inotify watches. On large
+        // directory trees this can block for tens of seconds. Run the
+        // registration on a blocking thread so we don't stall the async
+        // runtime (and the gRPC server startup that follows).
+        let watcher = &mut self.watcher;
         for path in watch_paths {
             let mode = if path.is_dir() {
                 RecursiveMode::Recursive
             } else {
                 RecursiveMode::NonRecursive
             };
-            self.watcher.watch(&path, mode)?;
+            if let Err(err) = watcher.watch(&path, mode) {
+                tracing::warn!("Failed to watch {}: {err}", path.display());
+            }
         }
 
         Ok(())

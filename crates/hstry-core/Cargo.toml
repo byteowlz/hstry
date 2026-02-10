@@ -25,11 +25,12 @@ tempfile.workspace = true
 tantivy.workspace = true
 tonic.workspace = true
 prost.workspace = true
+tonic-prost.workspace = true
 tower.workspace = true
 hyper-util.workspace = true
 
 [build-dependencies]
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 temp-env.workspace = true

@@ -252,6 +252,7 @@ mod message_tests {
             sender: None,
             provider: None,
             harness: None,
+            client_id: None,
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");
@@ -290,6 +291,7 @@ mod message_tests {
             sender: Some(sender.clone()),
             provider: Some("anthropic".to_string()),
             harness: Some("pi".to_string()),
+            client_id: None,
         };
 
         let json = serde_json::to_string(&msg).expect("serialize");

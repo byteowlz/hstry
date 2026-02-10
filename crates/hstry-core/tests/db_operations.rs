@@ -368,6 +368,7 @@ async fn insert_message_creates_new() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
 
     db.insert_message(&msg).await.expect("insert");
@@ -399,6 +400,7 @@ async fn insert_message_upserts_by_idx() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg_v1).await.expect("insert v1");
 
@@ -417,6 +419,7 @@ async fn insert_message_upserts_by_idx() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg_v2).await.expect("insert v2");
 
@@ -452,6 +455,7 @@ async fn get_messages_ordered_by_idx() {
             sender: None,
             provider: None,
             harness: None,
+            client_id: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -487,6 +491,7 @@ async fn count_messages_accurate() {
             sender: None,
             provider: None,
             harness: None,
+            client_id: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -515,6 +520,7 @@ async fn message_events_include_inserted_messages() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -549,6 +555,7 @@ async fn list_conversation_summaries_uses_cache() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -589,6 +596,7 @@ async fn search_finds_matching_content() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -662,6 +670,7 @@ async fn search_with_source_filter() {
             sender: None,
             provider: None,
             harness: None,
+            client_id: None,
         };
         db.insert_message(&msg).await.expect("insert");
     }
@@ -706,6 +715,7 @@ async fn search_mode_code_explicit() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg).await.expect("insert");
 
@@ -862,6 +872,7 @@ async fn delete_conversation_removes_messages() {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&msg).await.expect("insert msg");
 

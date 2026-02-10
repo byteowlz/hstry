@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Parser};
 use rmcp::{
-    ServerHandler, ServiceExt,
-    model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
-    tool,
+    ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{ServerCapabilities, ServerInfo},
     transport::io::stdio,
 };
 
@@ -53,18 +53,28 @@ struct CommonOpts {
     config: Option<PathBuf>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct EchoRequest {
+    #[schemars(description = "The message to echo back")]
+    message: String,
+}
+
 #[derive(Clone)]
 struct McpServer {
     config: Config,
+    tool_router: ToolRouter<Self>,
 }
 
 impl McpServer {
     fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            tool_router: Self::tool_router(),
+        }
     }
 }
 
-#[tool(tool_box)]
+#[tool_router]
 impl McpServer {
     /// Get the current configuration profile
     #[tool(description = "Returns the active configuration profile name")]
@@ -75,9 +85,9 @@ impl McpServer {
 
     /// Echo a message back
     #[tool(description = "Echoes the provided message back")]
-    async fn echo(&self, #[tool(param)] message: String) -> String {
+    async fn echo(&self, Parameters(req): Parameters<EchoRequest>) -> String {
         tokio::task::yield_now().await;
-        format!("Echo: {message}")
+        format!("Echo: {}", req.message)
     }
 
     /// Get service configuration
@@ -88,17 +98,13 @@ impl McpServer {
     }
 }
 
-#[tool(tool_box)]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "hstry-mcp".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            instructions: Some("MCP server for rust-workspace template".to_string()),
+            instructions: Some("MCP server for hstry - Universal AI chat history".to_string()),
+            ..Default::default()
         }
     }
 }

@@ -31,10 +31,10 @@ uuid.workspace = true
 dirs.workspace = true
 which.workspace = true
 reqwest.workspace = true
-notify = "6.1"
+notify = "8.0"
 walkdir = "2.5"
 nix.workspace = true
-console = "0.15"
+console = "0.16"
 textwrap = "0.16"
 
 [dev-dependencies]

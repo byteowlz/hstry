@@ -57,6 +57,7 @@ async fn remove_source_deletes_conversations_and_messages() -> Result<()> {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&message).await?;
 
@@ -132,6 +133,7 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         sender: None,
         provider: None,
         harness: None,
+        client_id: None,
     };
     db.insert_message(&message).await?;
 

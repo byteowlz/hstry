@@ -1372,7 +1372,10 @@ fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     rt: &tokio::runtime::Runtime,
-) -> Result<()> {
+) -> Result<()>
+where
+    B::Error: Send + Sync + 'static,
+{
     // Load initial messages if we have conversations
     if !app.filtered_conversations.is_empty() {
         app.load_messages(rt);

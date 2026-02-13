@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-api"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-cli"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-core"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1440,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-mcp"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1453,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-runtime"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "hstry-core",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-tui"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "chrono",

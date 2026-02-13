@@ -180,6 +180,14 @@ impl Database {
                 "007_add_harness_column.sql",
                 include_str!("../migrations/007_add_harness_column.sql"),
             ),
+            (
+                "008_add_client_id_to_messages.sql",
+                include_str!("../migrations/008_add_client_id_to_messages.sql"),
+            ),
+            (
+                "009_performance_indexes.sql",
+                include_str!("../migrations/009_performance_indexes.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {
@@ -779,116 +787,30 @@ impl Database {
         Ok(row.map(|row| Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default()))
     }
 
-    /// Check if a conversation already exists for a given adapter source that
-    /// references the same underlying session, even if stored under a different
-    /// `external_id`.
+    /// Check if a conversation already exists for a given adapter source.
     ///
-    /// This prevents duplicates when the same session is written by two different
-    /// paths (e.g., Octo writes with its own session UUID as `external_id`, and
-    /// the hstry adapter sync later imports the same session file with the native
-    /// session header ID as `external_id`).
-    ///
-    /// Checks:
-    /// 1. Direct match on `(source_id, external_id)` -- the fast path.
-    /// 2. Any conversation with the same `source_id` whose `metadata` JSON
-    ///    contains `"canonical_id": "<external_id>"`.
-    /// 3. Any conversation with the same `source_id` whose `metadata` JSON
-    ///    contains `"pi_session_id": "<external_id>"` (the Pi native session
-    ///    ID stored by Octo for deduplication).
-    /// 4. Any conversation with the same `source_id` whose `metadata` JSON
-    ///    contains a `"file"` value ending with `_<external_id>.jsonl`.
-    /// 5. Any conversation with the same `source_id`, same `workspace`, and
-    ///    created within 60 seconds of the given timestamp (catches duplicates
-    ///    before `pi_session_id` metadata is available).
+    /// Checks `external_id` (primary key for dedup) and `readable_id` (which
+    /// Octo uses to store its session UUID for reverse-lookup). This handles
+    /// both new sessions (where Octo writes `external_id` = Pi native ID) and
+    /// legacy sessions (where `external_id` was Octo's UUID and `readable_id`
+    /// might not be set yet).
     pub async fn conversation_exists_for_session(
         &self,
         source_id: &str,
         external_id: &str,
     ) -> Result<bool> {
-        self.conversation_exists_for_session_ext(source_id, external_id, None, None)
-            .await
-    }
-
-    /// Extended version of `conversation_exists_for_session` that also checks
-    /// workspace + timestamp proximity when metadata-based dedup fails.
-    pub async fn conversation_exists_for_session_ext(
-        &self,
-        source_id: &str,
-        external_id: &str,
-        workspace: Option<&str>,
-        created_at_secs: Option<i64>,
-    ) -> Result<bool> {
-        // Fast path: exact match
-        let direct = sqlx::query(
-            "SELECT 1 FROM conversations WHERE source_id = ? AND external_id = ? LIMIT 1",
+        let exists = sqlx::query(
+            "SELECT 1 FROM conversations \
+             WHERE source_id = ? \
+             AND (external_id = ? OR readable_id = ?) \
+             LIMIT 1",
         )
         .bind(source_id)
         .bind(external_id)
+        .bind(external_id)
         .fetch_optional(&self.pool)
         .await?;
-        if direct.is_some() {
-            return Ok(true);
-        }
-
-        // Check if another conversation has this external_id in its metadata
-        // as canonical_id (written by Octo/runner) or pi_session_id
-        let canonical_pattern = format!("\"canonical_id\":\"{}\"", external_id);
-        let pi_sid_pattern = format!("\"pi_session_id\":\"{}\"", external_id);
-        let meta_match = sqlx::query(
-            "SELECT 1 FROM conversations WHERE source_id = ? AND (metadata LIKE ? OR metadata LIKE ?) LIMIT 1",
-        )
-        .bind(source_id)
-        .bind(format!("%{}%", canonical_pattern))
-        .bind(format!("%{}%", pi_sid_pattern))
-        .fetch_optional(&self.pool)
-        .await?;
-        if meta_match.is_some() {
-            return Ok(true);
-        }
-
-        // Check if another conversation has this external_id in its file
-        // metadata (imported by adapter sync). The file path ends with
-        // `_{external_id}.jsonl`.
-        let file_suffix = format!("_{}.jsonl", external_id);
-        let file_match = sqlx::query(
-            "SELECT 1 FROM conversations WHERE source_id = ? AND metadata LIKE ? LIMIT 1",
-        )
-        .bind(source_id)
-        .bind(format!("%{}%", file_suffix))
-        .fetch_optional(&self.pool)
-        .await?;
-        if file_match.is_some() {
-            return Ok(true);
-        }
-
-        // Workspace + timestamp proximity check: if a conversation exists with
-        // the same source_id, same workspace, and was created within 60 seconds,
-        // it's very likely the same session written by a different writer (e.g.,
-        // Octo vs. adapter sync). This catches the race condition where Octo
-        // hasn't yet stored the pi_session_id in metadata.
-        if let (Some(workspace), Some(ts)) = (workspace, created_at_secs) {
-            let window = 60i64; // seconds
-            let proximity_match = sqlx::query(
-                "SELECT 1 FROM conversations \
-                 WHERE source_id = ? \
-                 AND workspace = ? \
-                 AND external_id != ? \
-                 AND ABS(created_at - ?) <= ? \
-                 LIMIT 1",
-            )
-            .bind(source_id)
-            .bind(workspace)
-            .bind(external_id)
-            .bind(ts)
-            .bind(window)
-            .fetch_optional(&self.pool)
-            .await?;
-            if proximity_match.is_some() {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+        Ok(exists.is_some())
     }
 
     async fn get_conversation_readable_id(
@@ -1035,6 +957,71 @@ impl Database {
         Ok(())
     }
 
+    /// Delete multiple conversations and all their associated data in a single transaction.
+    /// Much faster than calling `delete_conversation` in a loop because it avoids
+    /// per-row transaction overhead.
+    pub async fn delete_conversations_batch(&self, ids: &[Uuid]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        // Process in chunks to stay within SQLite variable limits (max 999)
+        for chunk in ids.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+            // Delete related tables first (message_events, snapshots, summary cache, messages)
+            let sql = format!(
+                "DELETE FROM message_events WHERE conversation_id IN ({placeholders})"
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            query.execute(&mut *tx).await?;
+
+            let sql = format!(
+                "DELETE FROM conversation_snapshots WHERE conversation_id IN ({placeholders})"
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            query.execute(&mut *tx).await?;
+
+            let sql = format!(
+                "DELETE FROM conversation_summary_cache WHERE conversation_id IN ({placeholders})"
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            query.execute(&mut *tx).await?;
+
+            let sql = format!(
+                "DELETE FROM messages WHERE conversation_id IN ({placeholders})"
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            query.execute(&mut *tx).await?;
+
+            let sql = format!(
+                "DELETE FROM conversations WHERE id IN ({placeholders})"
+            );
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            query.execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(ids.len())
+    }
+
     /// Update a conversation's updated_at timestamp.
     pub async fn update_conversation_updated_at(
         &self,
@@ -1152,6 +1139,130 @@ impl Database {
                 .await?;
         } else {
             self.bump_conversation_summary(msg, &content).await?;
+        }
+        Ok(())
+    }
+
+    /// Begin an explicit transaction. The caller must call `commit()` or `rollback()`.
+    /// Use this to wrap multiple operations (e.g., bulk sync) in a single transaction.
+    pub async fn begin(&self) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+        Ok(self.pool.begin().await?)
+    }
+
+    /// Insert a message within an existing transaction, skipping per-message
+    /// event/snapshot/summary bookkeeping. Call `rebuild_conversation_summaries`
+    /// after committing the transaction to reconcile caches.
+    pub async fn insert_message_in_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        msg: &Message,
+    ) -> Result<()> {
+        let parts_json = normalize_parts_json(&msg.parts_json);
+        let content = project_content(&msg.content, &parts_json);
+        let sender_json = msg
+            .sender
+            .as_ref()
+            .map(|s| serde_json::to_string(s).unwrap_or_default());
+        sqlx::query(
+            r"
+            INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness, client_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conversation_id, idx) DO UPDATE SET
+                role = excluded.role,
+                content = excluded.content,
+                parts_json = excluded.parts_json,
+                created_at = excluded.created_at,
+                model = excluded.model,
+                tokens = excluded.tokens,
+                cost_usd = excluded.cost_usd,
+                metadata = excluded.metadata,
+                sender_json = excluded.sender_json,
+                provider = excluded.provider,
+                harness = excluded.harness,
+                client_id = excluded.client_id
+            ",
+        )
+        .bind(msg.id.to_string())
+        .bind(msg.conversation_id.to_string())
+        .bind(msg.idx)
+        .bind(msg.role.to_string())
+        .bind(&content)
+        .bind(parts_json.to_string())
+        .bind(msg.created_at.map(|dt| dt.timestamp()))
+        .bind(&msg.model)
+        .bind(msg.tokens)
+        .bind(msg.cost_usd)
+        .bind(msg.metadata.to_string())
+        .bind(&sender_json)
+        .bind(&msg.provider)
+        .bind(&msg.harness)
+        .bind(&msg.client_id)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Upsert a conversation within an existing transaction.
+    pub async fn upsert_conversation_in_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        conv: &Conversation,
+    ) -> Result<()> {
+        let readable_id = if let Some(id) = conv.readable_id.clone() {
+            Some(id)
+        } else {
+            let from_meta = readable_id_from_metadata(&conv.metadata);
+            if from_meta.is_some() {
+                from_meta
+            } else {
+                Some(generate_readable_id(conv))
+            }
+        };
+
+        sqlx::query(
+            r"
+            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, external_id) DO UPDATE SET
+                readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
+                title = excluded.title,
+                updated_at = excluded.updated_at,
+                model = excluded.model,
+                provider = excluded.provider,
+                workspace = excluded.workspace,
+                tokens_in = excluded.tokens_in,
+                tokens_out = excluded.tokens_out,
+                cost_usd = excluded.cost_usd,
+                metadata = excluded.metadata,
+                harness = COALESCE(excluded.harness, conversations.harness)
+            ",
+        )
+        .bind(conv.id.to_string())
+        .bind(&conv.source_id)
+        .bind(&conv.external_id)
+        .bind(&readable_id)
+        .bind(&conv.title)
+        .bind(conv.created_at.timestamp())
+        .bind(conv.updated_at.map(|dt| dt.timestamp()))
+        .bind(&conv.model)
+        .bind(&conv.provider)
+        .bind(&conv.workspace)
+        .bind(conv.tokens_in)
+        .bind(conv.tokens_out)
+        .bind(conv.cost_usd)
+        .bind(conv.metadata.to_string())
+        .bind(&conv.harness)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Rebuild conversation summary caches for the given conversation IDs.
+    /// Call this after bulk-inserting messages via `insert_message_in_tx`.
+    pub async fn rebuild_conversation_summaries(&self, conversation_ids: &[Uuid]) -> Result<()> {
+        for id in conversation_ids {
+            self.rebuild_conversation_summary(*id).await?;
+            self.invalidate_conversation_snapshot(*id).await?;
         }
         Ok(())
     }

@@ -33,6 +33,7 @@ pub async fn sync_source(
 
     let mut new_count = 0usize;
     let mut message_count = 0usize;
+    let mut affected_conversation_ids: Vec<uuid::Uuid> = Vec::new();
 
     let mut cursor = source.config.get("cursor").cloned();
 
@@ -78,35 +79,77 @@ pub async fn sync_source(
             cursor = Some(next_cursor);
         }
 
+        // Collect all conversations and messages for this batch, then write
+        // them inside a single transaction to avoid per-row commit overhead.
+        let mut batch_convs: Vec<hstry_core::models::Conversation> = Vec::new();
+        let mut batch_msgs: Vec<hstry_core::models::Message> = Vec::new();
+
         for conv in batch.conversations {
             let mut conv_id = uuid::Uuid::new_v4();
+            let mut existing_conv: Option<hstry_core::models::Conversation> = None;
 
             if let Some(external_id) = conv.external_id.as_deref() {
                 if let Some(existing) =
                     db.get_conversation_id(&source.id, external_id).await?
                 {
-                    // Exact match on (source_id, external_id) -- update in place
                     conv_id = existing;
-                } else {
-                    // Check if the session already exists under a different
-                    // external_id (e.g., written by Octo with a different ID).
-                    let created_at_secs = chrono::DateTime::from_timestamp_millis(conv.created_at)
-                        .map(|dt| dt.timestamp());
-                    if db
-                        .conversation_exists_for_session_ext(
-                            &source.id,
-                            external_id,
-                            conv.workspace.as_deref(),
-                            created_at_secs,
+                    existing_conv = db
+                        .get_conversation_by_reference(
+                            Some(&source.id),
+                            Some(external_id),
+                            None,
+                            None,
+                            None,
                         )
-                        .await?
-                    {
-                        tracing::debug!(
-                            "Skipping session {} - already exists under different external_id",
-                            external_id
-                        );
-                        continue;
+                        .await?;
+                } else if db
+                    .conversation_exists_for_session(&source.id, external_id)
+                    .await?
+                {
+                    tracing::debug!(
+                        "Skipping session {} - already exists in hstry",
+                        external_id
+                    );
+                    continue;
+                }
+            }
+
+            let mut metadata = conv
+                .metadata
+                .map(|m| serde_json::to_value(m).unwrap_or_default())
+                .unwrap_or_default();
+            let mut readable_id = conv.readable_id;
+            let mut title = conv.title;
+            let mut model = conv.model;
+            let mut provider = conv.provider;
+            let mut workspace = conv.workspace;
+
+            if let Some(existing) = existing_conv {
+                if let serde_json::Value::Object(mut existing_map) = existing.metadata {
+                    if let serde_json::Value::Object(new_map) = metadata {
+                        for (k, v) in new_map {
+                            existing_map.entry(k).or_insert(v);
+                        }
+                        metadata = serde_json::Value::Object(existing_map);
+                    } else {
+                        metadata = serde_json::Value::Object(existing_map);
                     }
+                }
+
+                if readable_id.as_deref().unwrap_or_default().is_empty() {
+                    readable_id = existing.readable_id;
+                }
+                if title.as_deref().unwrap_or_default().is_empty() {
+                    title = existing.title;
+                }
+                if model.is_none() {
+                    model = existing.model;
+                }
+                if provider.is_none() {
+                    provider = existing.provider;
+                }
+                if workspace.is_none() {
+                    workspace = existing.workspace;
                 }
             }
 
@@ -114,28 +157,26 @@ pub async fn sync_source(
                 id: conv_id,
                 source_id: source.id.clone(),
                 external_id: conv.external_id,
-                readable_id: conv.readable_id,
-                title: conv.title,
+                readable_id,
+                title,
                 created_at: chrono::DateTime::from_timestamp_millis(conv.created_at)
                     .unwrap_or_default()
                     .with_timezone(&Utc),
                 updated_at: conv.updated_at.and_then(|ts| {
                     chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.with_timezone(&Utc))
                 }),
-                model: conv.model,
-                provider: conv.provider,
-                workspace: conv.workspace,
+                model,
+                provider,
+                workspace,
                 tokens_in: conv.tokens_in,
                 tokens_out: conv.tokens_out,
                 cost_usd: conv.cost_usd,
-                metadata: conv
-                    .metadata
-                    .map(|m| serde_json::to_value(m).unwrap_or_default())
-                    .unwrap_or_default(),
+                metadata,
                 harness: None,
             };
 
-            db.upsert_conversation(&hstry_conv).await?;
+            affected_conversation_ids.push(hstry_conv.id);
+            batch_convs.push(hstry_conv.clone());
 
             for (idx, msg) in conv.messages.iter().enumerate() {
                 let Ok(idx) = i32::try_from(idx) else {
@@ -161,11 +202,25 @@ pub async fn sync_source(
                     harness: None,
                     client_id: None,
                 };
-                db.insert_message(&hstry_msg).await?;
-                message_count += 1;
+                batch_msgs.push(hstry_msg);
             }
 
             new_count += 1;
+        }
+
+        // Write the entire batch inside a single transaction
+        if !batch_convs.is_empty() {
+            let mut tx = db.begin().await?;
+
+            for conv in &batch_convs {
+                db.upsert_conversation_in_tx(&mut tx, conv).await?;
+            }
+            for msg in &batch_msgs {
+                db.insert_message_in_tx(&mut tx, msg).await?;
+                message_count += 1;
+            }
+
+            tx.commit().await?;
         }
 
         let done = batch.done.unwrap_or(false);
@@ -190,6 +245,12 @@ pub async fn sync_source(
         if parsed_stream.is_none() {
             break;
         }
+    }
+
+    // Rebuild summary caches for all affected conversations in one pass
+    if !affected_conversation_ids.is_empty() {
+        db.rebuild_conversation_summaries(&affected_conversation_ids)
+            .await?;
     }
 
     let mut updated = source.clone();

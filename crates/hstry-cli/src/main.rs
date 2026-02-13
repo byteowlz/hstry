@@ -2812,20 +2812,19 @@ async fn cmd_dedup(
         println!("Found {} duplicate conversations", duplicates_found);
     }
 
+    // Count messages that will be removed (use lightweight count query)
     let mut messages_removed = 0usize;
+    for conv_id in &to_remove {
+        let count = db.count_messages_for_conversation(*conv_id).await?;
+        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        {
+            messages_removed += count as usize;
+        }
+    }
 
     if !dry_run && !to_remove.is_empty() {
-        for conv_id in &to_remove {
-            let msg_count = db.get_messages(*conv_id).await?.len();
-            messages_removed += msg_count;
-            db.delete_conversation(*conv_id).await?;
-        }
-    } else if dry_run && !to_remove.is_empty() {
-        // Count messages that would be removed
-        for conv_id in &to_remove {
-            let msg_count = db.get_messages(*conv_id).await?.len();
-            messages_removed += msg_count;
-        }
+        // Batch delete all duplicates in a single transaction
+        db.delete_conversations_batch(&to_remove).await?;
     }
 
     let result = DedupResult {

@@ -337,6 +337,11 @@ pub async fn merge_databases(
         .list_conversations(crate::db::ListConversationsOptions::default())
         .await?;
 
+    // Collect conversations and messages to insert, then write in a single transaction
+    let mut batch_convs: Vec<Conversation> = Vec::new();
+    let mut batch_msgs: Vec<Message> = Vec::new();
+    let mut affected_ids: Vec<Uuid> = Vec::new();
+
     for conv in source_conversations {
         // Namespace the source_id
         let namespaced_source_id = format!("{}:{}", remote_name, conv.source_id);
@@ -394,13 +399,14 @@ pub async fn merge_databases(
                 harness: conv.harness,
             };
 
-            target.upsert_conversation(&merged_conv).await?;
+            affected_ids.push(conv_id);
+            batch_convs.push(merged_conv);
 
-            // Merge messages
+            // Collect messages
             let source_messages = source.get_messages(conv.id).await?;
             for msg in source_messages {
                 let merged_msg = Message {
-                    id: Uuid::new_v4(), // Generate new ID for target
+                    id: Uuid::new_v4(),
                     conversation_id: conv_id,
                     idx: msg.idx,
                     role: msg.role,
@@ -416,10 +422,25 @@ pub async fn merge_databases(
                     harness: msg.harness,
                     client_id: msg.client_id,
                 };
-                target.insert_message(&merged_msg).await?;
+                batch_msgs.push(merged_msg);
                 messages_added += 1;
             }
         }
+    }
+
+    // Write everything in a single transaction
+    if !batch_convs.is_empty() {
+        let mut tx = target.begin().await?;
+        for conv in &batch_convs {
+            target.upsert_conversation_in_tx(&mut tx, conv).await?;
+        }
+        for msg in &batch_msgs {
+            target.insert_message_in_tx(&mut tx, msg).await?;
+        }
+        tx.commit().await?;
+
+        // Rebuild caches outside the transaction
+        target.rebuild_conversation_summaries(&affected_ids).await?;
     }
 
     source.close().await;

@@ -188,6 +188,10 @@ impl Database {
                 "009_performance_indexes.sql",
                 include_str!("../migrations/009_performance_indexes.sql"),
             ),
+            (
+                "010_add_platform_id.sql",
+                include_str!("../migrations/010_add_platform_id.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {

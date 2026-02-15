@@ -78,6 +78,7 @@ async fn conversation_persists_across_reopen() {
             source_id: "test-source".to_string(),
             external_id: Some("persist-conv-1".to_string()),
             readable_id: None,
+            platform_id: None,
             title: Some("Persisted Conversation".to_string()),
             created_at: Utc::now(),
             updated_at: None,
@@ -143,6 +144,7 @@ async fn messages_persist_across_reopen() {
             source_id: "test-source".to_string(),
             external_id: Some("persist-msgs-conv".to_string()),
             readable_id: None,
+            platform_id: None,
             title: Some("Message Persistence Test".to_string()),
             created_at: Utc::now(),
             updated_at: None,
@@ -243,6 +245,7 @@ async fn full_scenario_persists_across_multiple_reopens() {
             source_id: "scenario-source".to_string(),
             external_id: Some("scenario-conv".to_string()),
             readable_id: None,
+            platform_id: None,
             title: Some("Full Persistence Scenario".to_string()),
             created_at: Utc::now(),
             updated_at: None,
@@ -421,6 +424,7 @@ async fn partial_update_persists_across_reopen() {
             source_id: "partial-source".to_string(),
             external_id: Some("partial-conv".to_string()),
             readable_id: None,
+            platform_id: None,
             title: Some("Original Title".to_string()),
             created_at: Utc::now(),
             updated_at: None,
@@ -451,6 +455,7 @@ async fn partial_update_persists_across_reopen() {
             None,
             None,
             Some("new-harness"),
+            None,
         )
         .await
         .expect("update");

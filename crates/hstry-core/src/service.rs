@@ -275,6 +275,7 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
             Some(proto.external_id)
         },
         readable_id: proto.readable_id,
+        platform_id: proto.platform_id,
         title: proto.title,
         created_at: ts_from_ms(proto.created_at_ms).unwrap_or_else(Utc::now),
         updated_at: proto.updated_at_ms.and_then(ts_from_ms),
@@ -348,6 +349,7 @@ pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
         metadata_json: conv.metadata.to_string(),
         harness: conv.harness.clone(),
         readable_id: conv.readable_id.clone(),
+        platform_id: conv.platform_id.clone(),
     }
 }
 

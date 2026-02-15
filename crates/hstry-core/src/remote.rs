@@ -386,6 +386,7 @@ pub async fn merge_databases(
                 source_id: namespaced_source_id.clone(),
                 external_id: conv.external_id,
                 readable_id: conv.readable_id,
+                platform_id: conv.platform_id,
                 title: conv.title,
                 created_at: conv.created_at,
                 updated_at: conv.updated_at,

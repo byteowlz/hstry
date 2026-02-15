@@ -1272,6 +1272,7 @@ async fn cmd_import(
             source_id: source_id.clone(),
             external_id: conv.external_id,
             readable_id: conv.readable_id,
+            platform_id: None,
             title: conv.title,
             created_at: chrono::DateTime::from_timestamp_millis(conv.created_at)
                 .unwrap_or_default()

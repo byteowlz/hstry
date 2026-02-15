@@ -23,6 +23,10 @@ pub struct Conversation {
     pub source_id: String,
     pub external_id: Option<String>,
     pub readable_id: Option<String>,
+    /// Platform/orchestrator session ID (e.g., "octo-xxx").
+    /// Distinct from `external_id` which holds the agent-native session ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_id: Option<String>,
     pub title: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,

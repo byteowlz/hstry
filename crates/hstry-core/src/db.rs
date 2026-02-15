@@ -274,6 +274,7 @@ impl Database {
                     source_id: source_id.clone(),
                     external_id: external_id.clone(),
                     readable_id: None,
+                    platform_id: None,
                     title: title.clone(),
                     created_at: Utc::now(),
                     updated_at: None,
@@ -494,10 +495,11 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
+                platform_id = COALESCE(excluded.platform_id, conversations.platform_id),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,
@@ -514,6 +516,7 @@ impl Database {
         .bind(&conv.source_id)
         .bind(&conv.external_id)
         .bind(&readable_id)
+        .bind(&conv.platform_id)
         .bind(&conv.title)
         .bind(conv.created_at.timestamp())
         .bind(conv.updated_at.map(|dt| dt.timestamp()))
@@ -713,26 +716,34 @@ impl Database {
             return Ok(None);
         }
 
+        // Build OR clause matching any of: external_id, readable_id, id (UUID),
+        // or platform_id.  The same value is tested against all applicable columns
+        // so callers can pass a single identifier without knowing which column
+        // it belongs to.
         sql.push_str(" AND (");
         let mut or_count = 0;
+
+        // Helper macro to append "column = ?" with proper OR separator.
+        macro_rules! or_clause {
+            ($col:expr) => {
+                if or_count > 0 {
+                    write!(sql, " OR {} = ?", $col).unwrap();
+                } else {
+                    write!(sql, "{} = ?", $col).unwrap();
+                }
+                or_count += 1;
+            };
+        }
+
         if external_id.is_some() {
-            sql.push_str("external_id = ?");
-            or_count += 1;
+            or_clause!("external_id");
+            or_clause!("platform_id"); // also try platform_id with the same value
         }
         if readable_id.is_some() {
-            if or_count > 0 {
-                sql.push_str(" OR readable_id = ?");
-            } else {
-                sql.push_str("readable_id = ?");
-            }
-            or_count += 1;
+            or_clause!("readable_id");
         }
         if conversation_id.is_some() {
-            if or_count > 0 {
-                sql.push_str(" OR id = ?");
-            } else {
-                sql.push_str("id = ?");
-            }
+            or_clause!("id");
         }
         sql.push_str(") LIMIT 1");
 
@@ -746,6 +757,7 @@ impl Database {
         }
         if let Some(external_id) = external_id {
             query = query.bind(external_id);
+            query = query.bind(external_id); // bind for platform_id check too
         }
         if let Some(readable_id) = readable_id {
             query = query.bind(readable_id);
@@ -771,18 +783,20 @@ impl Database {
         }
     }
 
-    /// Get conversation ID by source_id + external_id.
+    /// Get conversation ID by source_id + external_id (or platform_id).
     pub async fn get_conversation_id(
         &self,
         source_id: &str,
         external_id: &str,
     ) -> Result<Option<Uuid>> {
-        let row =
-            sqlx::query("SELECT id FROM conversations WHERE source_id = ? AND external_id = ?")
-                .bind(source_id)
-                .bind(external_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query(
+            "SELECT id FROM conversations WHERE source_id = ? AND (external_id = ? OR platform_id = ?)",
+        )
+        .bind(source_id)
+        .bind(external_id)
+        .bind(external_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         Ok(row.map(|row| Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default()))
     }
@@ -1049,6 +1063,7 @@ impl Database {
         metadata_json: Option<&serde_json::Value>,
         readable_id: Option<&str>,
         harness: Option<&str>,
+        platform_id: Option<&str>,
     ) -> Result<()> {
         // Use COALESCE pattern: each field only updates if a non-NULL value is provided.
         // We pass NULL for fields that shouldn't change, and the COALESCE keeps the old value.
@@ -1065,6 +1080,7 @@ impl Database {
                 metadata = COALESCE(?, metadata),
                 readable_id = COALESCE(?, readable_id),
                 harness = COALESCE(?, harness),
+                platform_id = COALESCE(?, platform_id),
                 updated_at = ?
             WHERE id = ?",
         )
@@ -1075,6 +1091,7 @@ impl Database {
         .bind(metadata_str.as_deref())
         .bind(readable_id)
         .bind(harness)
+        .bind(platform_id)
         .bind(now)
         .bind(&id_str)
         .execute(&self.pool)
@@ -1221,10 +1238,11 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
+                platform_id = COALESCE(excluded.platform_id, conversations.platform_id),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,
@@ -1241,6 +1259,7 @@ impl Database {
         .bind(&conv.source_id)
         .bind(&conv.external_id)
         .bind(&readable_id)
+        .bind(&conv.platform_id)
         .bind(&conv.title)
         .bind(conv.created_at.timestamp())
         .bind(conv.updated_at.map(|dt| dt.timestamp()))
@@ -2178,6 +2197,7 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
         source_id: row.get("source_id"),
         external_id: row.get("external_id"),
         readable_id: row.try_get("readable_id").ok(),
+        platform_id: row.try_get("platform_id").ok().flatten(),
         title: row.get("title"),
         created_at: chrono::DateTime::from_timestamp(row.get::<i64, _>("created_at"), 0)
             .unwrap_or_default()

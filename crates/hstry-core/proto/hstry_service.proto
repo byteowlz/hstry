@@ -95,6 +95,7 @@ message Conversation {
   string metadata_json = 12;      // JSON string
   optional string harness = 13;   // Agent harness (e.g., "pi", "claude")
   optional string readable_id = 14; // Human-readable ID (e.g., "cold-lamp")
+  optional string platform_id = 15; // Platform/orchestrator session ID (e.g., "octo-xxx")
 }
 
 message Message {
@@ -148,6 +149,7 @@ message UpdateConversationRequest {
   optional string metadata_json = 7;
   optional string readable_id = 8;
   optional string harness = 9;
+  optional string platform_id = 10;
 }
 
 message UpdateConversationResponse {

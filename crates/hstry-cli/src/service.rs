@@ -204,6 +204,7 @@ impl WriteService for ServerState {
                 metadata_json.as_ref(),
                 request.readable_id.as_deref(),
                 request.harness.as_deref(),
+                request.platform_id.as_deref(),
             )
             .await
             .map_err(|e| {

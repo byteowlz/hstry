@@ -18,14 +18,53 @@ Universal AI chat history database. Aggregates conversations from multiple AI to
 
 ## Installation
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap byteowlz/tap
+brew install hstry
+```
+
+### Arch Linux (AUR)
+
+```bash
+# Using yay (recommended)
+yay -S hstry
+
+# Using paru
+paru -S hstry
+
+# Using makepkg (manual)
+git clone https://aur.archlinux.org/hstry.git
+cd hstry
+makepkg -si
+```
+
+### Cargo
+
 ```bash
 cargo install --path crates/hstry-cli
 ```
 
-Or build from source:
+### Pre-built Binaries
+
+Download pre-built binaries from the [GitHub Releases](https://github.com/byteowlz/hstry/releases) page.
+
+Available platforms:
+- Linux x86_64 and ARM64
+- macOS Intel and Apple Silicon
+
+### Build from Source
 
 ```bash
-cargo build --release
+git clone https://github.com/byteowlz/hstry.git
+cd hstry
+cargo build --release --workspace
+```
+
+To install all binaries (CLI, TUI, MCP):
+```bash
+cargo install --path .
 ```
 
 ## Quick Start
@@ -234,6 +273,20 @@ just test            # Run tests only
 just clippy          # Lint only
 just update-adapters # Copy latest adapters to ~/.config/hstry/adapters
 ```
+
+## Contributing
+
+Contributions are welcome! Please see [docs/RELEASE.md](docs/RELEASE.md) for information about the release process.
+
+## Release Process
+
+The release process is fully automated via GitHub Actions:
+
+1. **GitHub Releases**: Automatic builds for Linux (x86_64/ARM64) and macOS (Intel/Apple Silicon)
+2. **Homebrew**: Automatic formula updates in `byteowlz/homebrew-tap`
+3. **AUR**: Automatic PKGBUILD updates
+
+See [docs/RELEASE.md](docs/RELEASE.md) for detailed release instructions.
 
 ## Attribution
 

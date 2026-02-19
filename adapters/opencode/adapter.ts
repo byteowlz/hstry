@@ -3,7 +3,10 @@
  * 
  * Parses OpenCode session history from ~/.local/share/opencode/
  * 
- * Supports two layouts:
+ * Supports three layouts:
+ * 
+ * SQLITE (v1.1.45+):
+ *   opencode.db (SQLite database with session, message, part, project tables)
  * 
  * NEW (v1.1.25+): 
  *   storage/session/<project-id>/<session-id>.json
@@ -17,6 +20,7 @@
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import type { 
@@ -36,6 +40,34 @@ import {
   toolResultPart,
   textOnlyParts,
 } from '../types/index.ts';
+
+// Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node)
+let openDb: ((path: string) => SqliteDb) | null = null;
+
+interface SqliteDb {
+  prepare(sql: string): SqliteStatement;
+  close(): void;
+}
+interface SqliteStatement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+}
+
+try {
+  if (typeof Bun !== 'undefined') {
+    // @ts-ignore - bun:sqlite is Bun-only
+    const { Database: BunDb } = await import('bun:sqlite');
+    openDb = (path: string) => new BunDb(path, { readonly: true }) as unknown as SqliteDb;
+  } else {
+    const mod = await import('better-sqlite3');
+    const BetterSqlite = mod.default;
+    openDb = (path: string) => BetterSqlite(path, { readonly: true }) as unknown as SqliteDb;
+  }
+} catch {
+  // SQLite not available - sqlite layout will be skipped
+}
+
+declare const Bun: unknown;
 
 // OpenCode storage structures
 interface SessionInfo {
@@ -161,9 +193,14 @@ async function enumerateSessionRefs(basePath: string): Promise<SessionRef[]> {
 }
 
 // Detect which layout is being used
-type LayoutType = 'new' | 'old' | 'none';
+type LayoutType = 'sqlite' | 'new' | 'old' | 'none';
 
 async function detectLayout(basePath: string): Promise<LayoutType> {
+  // Check SQLite layout first (newest, v1.1.45+)
+  if (openDb && existsSync(join(basePath, 'opencode.db'))) {
+    return 'sqlite';
+  }
+
   // Check new layout: storage/session/<project-id>/
   const newStoragePath = join(basePath, 'storage', 'session');
   try {
@@ -212,7 +249,7 @@ const adapter: Adapter = {
     return {
       name: 'opencode',
       displayName: 'OpenCode',
-      version: '2.0.0',
+      version: '3.0.0',
       defaultPaths: [DEFAULT_OPENCODE_PATH],
     };
   },
@@ -225,7 +262,9 @@ const adapter: Adapter = {
   async parse(path: string, opts?: ParseOptions): Promise<Conversation[]> {
     const layout = await detectLayout(path);
     
-    if (layout === 'new') {
+    if (layout === 'sqlite') {
+      return parseSqliteLayout(path, opts);
+    } else if (layout === 'new') {
       return parseNewLayout(path, opts);
     } else if (layout === 'old') {
       return parseOldLayout(path, opts);
@@ -241,6 +280,14 @@ const adapter: Adapter = {
   },
 
   async parseStream(path: string, opts?: ParseOptions): Promise<ParseStreamResult> {
+    const layout = await detectLayout(path);
+
+    // SQLite layout: use LIMIT/OFFSET for efficient batching
+    if (layout === 'sqlite') {
+      return parseSqliteStream(path, opts);
+    }
+
+    // JSON layouts: enumerate session refs and batch through them
     const batchSize = opts?.batchSize ?? 5;
     const cursor = opts?.cursor as { index: number; total: number } | undefined;
 
@@ -311,6 +358,308 @@ const adapter: Adapter = {
  * Parse a single session from either layout, given a SessionRef.
  * Used by parseStream to process one session at a time.
  */
+
+// ============================================================================
+// SQLite layout (v1.1.45+)
+// ============================================================================
+
+/** SQLite row types matching the opencode schema */
+interface SqliteSessionRow {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  slug: string;
+  directory: string;
+  title: string;
+  version: string;
+  summary_additions: number | null;
+  summary_deletions: number | null;
+  summary_files: number | null;
+  time_created: number;
+  time_updated: number;
+}
+
+interface SqliteMessageRow {
+  id: string;
+  session_id: string;
+  time_created: number;
+  time_updated: number;
+  data: string; // JSON blob
+}
+
+interface SqlitePartRow {
+  id: string;
+  message_id: string;
+  session_id: string;
+  time_created: number;
+  time_updated: number;
+  data: string; // JSON blob
+}
+
+interface SqliteProjectRow {
+  id: string;
+  worktree: string;
+}
+
+/**
+ * Parse all conversations from the SQLite layout.
+ */
+async function parseSqliteLayout(basePath: string, opts?: ParseOptions): Promise<Conversation[]> {
+  const result = await parseSqliteStream(basePath, { ...opts, batchSize: 999999 });
+  return result.conversations;
+}
+
+/**
+ * Parse conversations from SQLite in batches using LIMIT/OFFSET.
+ */
+async function parseSqliteStream(basePath: string, opts?: ParseOptions): Promise<ParseStreamResult> {
+  if (!openDb) {
+    return { conversations: [], done: true };
+  }
+
+  const dbPath = join(basePath, 'opencode.db');
+  const batchSize = opts?.batchSize ?? 25;
+  const cursor = opts?.cursor as { offset: number } | undefined;
+  const offset = cursor?.offset ?? 0;
+
+  const db = openDb(dbPath);
+  try {
+    // Build session query with optional time filter
+    let sessionQuery = `
+      SELECT s.id, s.project_id, s.parent_id, s.slug, s.directory, s.title,
+             s.version, s.summary_additions, s.summary_deletions, s.summary_files,
+             s.time_created, s.time_updated
+      FROM session s
+    `;
+    const params: unknown[] = [];
+
+    if (opts?.since) {
+      sessionQuery += ` WHERE s.time_created >= ? OR s.time_updated >= ?`;
+      params.push(opts.since, opts.since);
+    }
+
+    sessionQuery += ` ORDER BY s.time_created DESC LIMIT ? OFFSET ?`;
+    params.push(batchSize + 1, offset); // fetch one extra to check if done
+
+    const sessionRows = db.prepare(sessionQuery).all(...params) as SqliteSessionRow[];
+
+    const hasMore = sessionRows.length > batchSize;
+    const rows = hasMore ? sessionRows.slice(0, batchSize) : sessionRows;
+
+    if (rows.length === 0) {
+      return { conversations: [], done: true };
+    }
+
+    // Build a project worktree lookup
+    const projectIds = [...new Set(rows.map(r => r.project_id))];
+    const projectMap = new Map<string, string>();
+    if (projectIds.length > 0) {
+      const placeholders = projectIds.map(() => '?').join(',');
+      const projects = db.prepare(
+        `SELECT id, worktree FROM project WHERE id IN (${placeholders})`
+      ).all(...projectIds) as SqliteProjectRow[];
+      for (const p of projects) {
+        projectMap.set(p.id, p.worktree);
+      }
+    }
+
+    // Load messages and parts for all sessions in this batch
+    const sessionIds = rows.map(r => r.id);
+    const placeholders = sessionIds.map(() => '?').join(',');
+
+    const messageRows = db.prepare(
+      `SELECT id, session_id, time_created, time_updated, data
+       FROM message WHERE session_id IN (${placeholders})
+       ORDER BY session_id, time_created`
+    ).all(...sessionIds) as SqliteMessageRow[];
+
+    // Group messages by session
+    const messagesBySession = new Map<string, SqliteMessageRow[]>();
+    for (const row of messageRows) {
+      let list = messagesBySession.get(row.session_id);
+      if (!list) {
+        list = [];
+        messagesBySession.set(row.session_id, list);
+      }
+      list.push(row);
+    }
+
+    // Load parts for all messages
+    const messageIds = messageRows.map(r => r.id);
+    const partsByMessage = new Map<string, SqlitePartRow[]>();
+    if (messageIds.length > 0) {
+      // Process in chunks to avoid SQLite variable limit
+      const chunkSize = 500;
+      for (let i = 0; i < messageIds.length; i += chunkSize) {
+        const chunk = messageIds.slice(i, i + chunkSize);
+        const ph = chunk.map(() => '?').join(',');
+        const partRows = db.prepare(
+          `SELECT id, message_id, session_id, time_created, time_updated, data
+           FROM part WHERE message_id IN (${ph})
+           ORDER BY message_id, id`
+        ).all(...chunk) as SqlitePartRow[];
+
+        for (const row of partRows) {
+          let list = partsByMessage.get(row.message_id);
+          if (!list) {
+            list = [];
+            partsByMessage.set(row.message_id, list);
+          }
+          list.push(row);
+        }
+      }
+    }
+
+    // Build conversations
+    const conversations: Conversation[] = [];
+    for (const session of rows) {
+      try {
+        const conv = buildSqliteConversation(
+          session,
+          messagesBySession.get(session.id) ?? [],
+          partsByMessage,
+          projectMap.get(session.project_id),
+          opts,
+        );
+        if (conv) conversations.push(conv);
+      } catch (err) {
+        console.error(`Error building conversation for session ${session.id}: ${err}`);
+      }
+    }
+
+    const done = !hasMore;
+
+    return {
+      conversations,
+      cursor: done ? undefined : { offset: offset + batchSize },
+      done,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Build a Conversation from SQLite rows.
+ */
+function buildSqliteConversation(
+  session: SqliteSessionRow,
+  messageRows: SqliteMessageRow[],
+  partsByMessage: Map<string, SqlitePartRow[]>,
+  worktree: string | undefined,
+  opts?: ParseOptions,
+): Conversation | null {
+  const messages: Message[] = [];
+
+  for (const msgRow of messageRows) {
+    try {
+      const msgData = JSON.parse(msgRow.data);
+      const role = msgData.role ?? 'assistant';
+
+      // Reconstruct parts from the part table
+      const partRows = partsByMessage.get(msgRow.id) ?? [];
+      const parts: PartInfo[] = [];
+
+      for (const partRow of partRows) {
+        try {
+          const partData = JSON.parse(partRow.data);
+          // The data blob stores type/text/tool/state etc. directly
+          parts.push({
+            id: partRow.id,
+            messageID: msgRow.id,
+            sessionID: msgRow.session_id,
+            type: partData.type ?? 'text',
+            text: partData.text,
+            tool: partData.tool,
+            state: partData.state,
+          });
+        } catch {
+          // Skip corrupted part
+        }
+      }
+
+      const textParts = parts.filter(p => p.type === 'text' && p.text);
+      const content = textParts.map(p => p.text).join('\n');
+
+      let toolCalls: ToolCall[] | undefined;
+      if (opts?.includeTools !== false) {
+        const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
+        if (toolParts.length > 0) {
+          toolCalls = toolParts.map(p => ({
+            toolName: p.tool!,
+            input: p.state?.input,
+            output: p.state?.output ?? p.state?.error,
+            status: mapToolStatus(p.state?.status),
+          }));
+        }
+      }
+
+      const canonParts = buildCanonParts(parts, role, opts?.includeTools !== false) ?? textOnlyParts(content);
+
+      // Extract token info from assistant message data
+      const tokens = (msgData.tokens?.input || 0) + (msgData.tokens?.output || 0) + (msgData.tokens?.reasoning || 0);
+
+      messages.push({
+        role: mapRole(role),
+        content,
+        parts: canonParts,
+        createdAt: msgData.time?.created ?? msgRow.time_created,
+        model: msgData.modelID || undefined,
+        tokens: tokens > 0 ? tokens : undefined,
+        costUsd: msgData.cost || undefined,
+        toolCalls,
+        metadata: {
+          id: msgRow.id,
+          parentId: msgData.parentID,
+          provider: msgData.providerID,
+          agent: msgData.agent,
+        },
+      });
+    } catch (err) {
+      console.error(`Skipping corrupted message ${msgRow.id}: ${err}`);
+    }
+  }
+
+  return buildConversation(
+    {
+      id: session.id,
+      version: session.version,
+      slug: session.slug,
+      title: session.title,
+      parentID: session.parent_id ?? undefined,
+      directory: session.directory,
+      projectID: session.project_id,
+      time: {
+        created: session.time_created,
+        updated: session.time_updated,
+      },
+      summary: (session.summary_additions !== null || session.summary_deletions !== null) ? {
+        additions: session.summary_additions ?? undefined,
+        deletions: session.summary_deletions ?? undefined,
+        files: session.summary_files ?? undefined,
+      } : undefined,
+    },
+    messages,
+    session.directory || worktree,
+    session.project_id,
+  );
+}
+
+/** Map opencode tool status to hstry ToolStatus. */
+function mapToolStatus(status?: string): 'pending' | 'success' | 'error' | undefined {
+  switch (status) {
+    case 'completed': return 'success';
+    case 'error': return 'error';
+    case 'pending':
+    case 'running': return 'pending';
+    default: return undefined;
+  }
+}
+
+// ============================================================================
+// JSON layout helpers (shared by new/old layouts and parseStream)
+// ============================================================================
+
 async function parseSingleSession(
   basePath: string,
   ref: SessionRef,

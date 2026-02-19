@@ -372,7 +372,10 @@ impl AdapterRunner {
             anyhow::bail!("Adapter failed: {stderr}");
         }
 
-        let stdout = String::from_utf8(output.stdout)?;
+        // Use lossy conversion to handle adapters that emit invalid UTF-8
+        // (e.g., JSON files containing Unicode surrogate pairs in tool output
+        // that get re-encoded as WTF-8 by the JS runtime).
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let response: AdapterResponse = serde_json::from_str(&stdout)?;
 
         Ok(response)

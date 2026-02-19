@@ -266,7 +266,7 @@ function sanitizeJson(obj: unknown): unknown {
  */
 export function runAdapter(adapter: Adapter): void {
   const useStdin = process.env.HSTRY_REQUEST_STDIN === '1' || 
-                   Bun?.env?.HSTRY_REQUEST_STDIN === '1' ||
+                   (typeof Bun !== 'undefined' && Bun?.env?.HSTRY_REQUEST_STDIN === '1') ||
                    (typeof Deno !== 'undefined' && Deno?.env?.get?.('HSTRY_REQUEST_STDIN') === '1');
 
   (async () => {
@@ -277,7 +277,7 @@ export function runAdapter(adapter: Adapter): void {
         requestJson = await readStdin();
       } else {
         requestJson = process.env.HSTRY_REQUEST || 
-                      Bun?.env?.HSTRY_REQUEST || 
+                      (typeof Bun !== 'undefined' ? Bun?.env?.HSTRY_REQUEST : undefined) || 
                       (typeof Deno !== 'undefined' ? Deno?.env?.get?.('HSTRY_REQUEST') : undefined) || 
                       '';
       }
@@ -318,12 +318,13 @@ export function runAdapter(adapter: Adapter): void {
           response = { error: `Unknown method: ${(request as any).method}` };
       }
 
-      // JSON.stringify may create invalid escape sequences from corrupted Unicode
-      // in the source data. We stringify first, then clean up any broken surrogates.
-      let jsonStr = JSON.stringify(response);
-      // Replace lone surrogates that JSON.stringify may have created (e.g., \ud83d not followed by \uDCxx)
-      jsonStr = jsonStr.replace(/\\ud[89ab][0-9a-f]{2}(?!\\ud[c-f][0-9a-f]{2})/gi, '\\ufffd');
-      console.log(jsonStr);
+      // Sanitize any unpaired surrogates that may exist in strings parsed from
+      // source files (e.g., OpenCode parts containing mathematical Unicode
+      // symbols stored as JSON surrogate pairs). Without this, JSON.stringify
+      // can produce WTF-8 bytes that are invalid UTF-8, causing the Rust
+      // runtime to reject the output.
+      const sanitized = sanitizeJson(response);
+      console.log(JSON.stringify(sanitized));
     } catch (err) {
       console.log(JSON.stringify({ error: String(err) }));
       process.exit(1);

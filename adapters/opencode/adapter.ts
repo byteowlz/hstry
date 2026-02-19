@@ -26,6 +26,7 @@ import type {
   Conversation, 
   Message, 
   ParseOptions,
+  ParseStreamResult,
   ToolCall,
 } from '../types/index.ts';
 import {
@@ -95,6 +96,69 @@ interface PartInfo {
 }
 
 const DEFAULT_OPENCODE_PATH = join(homedir(), '.local/share/opencode');
+
+/** A lightweight reference to a session, used for streaming enumeration. */
+interface SessionRef {
+  /** Path to the session JSON file. */
+  path: string;
+  /** 'new' or 'old' layout. */
+  layout: 'new' | 'old';
+  /** For old layout: the project name directory. */
+  projectName?: string;
+}
+
+/**
+ * Enumerate all session file references without loading their contents.
+ * Deduplicates sessions that appear in both layouts (prefers new layout).
+ */
+async function enumerateSessionRefs(basePath: string): Promise<SessionRef[]> {
+  const refs: SessionRef[] = [];
+  const seenIds = new Set<string>();
+
+  // Enumerate new layout first (preferred)
+  const newSessionDir = join(basePath, 'storage', 'session');
+  try {
+    const projectIds = await readdir(newSessionDir);
+    for (const projectId of projectIds) {
+      const projectPath = join(newSessionDir, projectId);
+      try {
+        const projectStats = await stat(projectPath);
+        if (!projectStats.isDirectory()) continue;
+        const sessionFiles = await readdir(projectPath);
+        for (const f of sessionFiles) {
+          if (f.startsWith('ses_') && f.endsWith('.json')) {
+            const sessionId = f.replace('.json', '');
+            seenIds.add(sessionId);
+            refs.push({ path: join(projectPath, f), layout: 'new' });
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* no new layout */ }
+
+  // Enumerate old layout (skip sessions already seen in new layout)
+  const oldProjectDir = join(basePath, 'project');
+  try {
+    const projects = await readdir(oldProjectDir);
+    for (const projectName of projects) {
+      const infoDir = join(oldProjectDir, projectName, 'storage/session/info');
+      try {
+        const sessionFiles = await readdir(infoDir);
+        for (const f of sessionFiles) {
+          if (f.startsWith('ses_') && f.endsWith('.json')) {
+            const sessionId = f.replace('.json', '');
+            if (!seenIds.has(sessionId)) {
+              seenIds.add(sessionId);
+              refs.push({ path: join(infoDir, f), layout: 'old', projectName });
+            }
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* no old layout */ }
+
+  return refs;
+}
 
 // Detect which layout is being used
 type LayoutType = 'new' | 'old' | 'none';
@@ -176,6 +240,40 @@ const adapter: Adapter = {
     return this.parse(path, { since });
   },
 
+  async parseStream(path: string, opts?: ParseOptions): Promise<ParseStreamResult> {
+    const batchSize = opts?.batchSize ?? 5;
+    const cursor = opts?.cursor as { index: number; total: number } | undefined;
+
+    // Always re-enumerate refs (lightweight - just readdir, no file reads).
+    // The cursor only carries the index to keep it small.
+    const refs = await enumerateSessionRefs(path);
+    const startIndex = cursor?.index ?? 0;
+
+    const conversations: Conversation[] = [];
+    const endIndex = Math.min(startIndex + batchSize, refs.length);
+
+    for (let i = startIndex; i < endIndex; i++) {
+      const ref = refs[i];
+      try {
+        const conv = await parseSingleSession(path, ref, opts);
+        if (conv) {
+          conversations.push(conv);
+        }
+      } catch (err) {
+        // Skip individual session errors to avoid blocking the whole sync
+        console.error(`Error parsing session ${ref.path}: ${err}`);
+      }
+    }
+
+    const done = endIndex >= refs.length;
+
+    return {
+      conversations,
+      cursor: done ? undefined : { index: endIndex, total: refs.length },
+      done,
+    };
+  },
+
   async export(conversations, opts) {
     if (opts.format === 'markdown') {
       return {
@@ -208,6 +306,95 @@ const adapter: Adapter = {
     };
   },
 };
+
+/**
+ * Parse a single session from either layout, given a SessionRef.
+ * Used by parseStream to process one session at a time.
+ */
+async function parseSingleSession(
+  basePath: string,
+  ref: SessionRef,
+  opts?: ParseOptions,
+): Promise<Conversation | null> {
+  const sessionContent = await readFile(ref.path, 'utf-8');
+  const session: SessionInfo = JSON.parse(sessionContent);
+
+  // Apply time filter
+  if (opts?.since) {
+    const lastModified = session.time.updated ?? session.time.created;
+    if (session.time.created < opts.since && lastModified < opts.since) {
+      return null;
+    }
+  }
+
+  let messages: Message[];
+  let workspace: string | undefined;
+
+  if (ref.layout === 'new') {
+    const storageDir = join(basePath, 'storage');
+    const messageDir = join(storageDir, 'message');
+    const partDir = join(storageDir, 'part');
+    messages = await loadMessagesNew(session.id, messageDir, partDir, opts);
+    workspace = session.directory;
+  } else {
+    const projectPath = join(basePath, 'project', ref.projectName!);
+    const sessionMessageDir = join(projectPath, 'storage/session/message');
+    const sessionPartDir = join(projectPath, 'storage/session/part');
+    messages = await loadMessagesOld(session.id, sessionMessageDir, sessionPartDir, opts);
+    workspace = session.directory || projectNameToPath(ref.projectName!);
+  }
+
+  return buildConversation(session, messages, workspace, ref.projectName);
+}
+
+/** Build a Conversation from a parsed session and its messages. */
+function buildConversation(
+  session: SessionInfo,
+  messages: Message[],
+  workspace: string | undefined,
+  projectName?: string,
+): Conversation {
+  const conv: Conversation = {
+    externalId: session.id,
+    title: session.title || undefined,
+    createdAt: session.time.created,
+    updatedAt: session.time.updated,
+    workspace,
+    messages,
+    metadata: {
+      version: session.version,
+      slug: session.slug,
+      parentId: session.parentID,
+      projectId: session.projectID ?? projectName,
+    },
+  };
+
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let cost = 0;
+  let model: string | undefined;
+  let provider: string | undefined;
+
+  for (const msg of messages) {
+    if (msg.tokens) {
+      if (msg.role === 'user') tokensIn += msg.tokens;
+      else tokensOut += msg.tokens;
+    }
+    if (msg.costUsd) cost += msg.costUsd;
+    if (msg.model && !model) model = msg.model;
+    if (!provider && msg.metadata && typeof msg.metadata.provider === 'string') {
+      provider = msg.metadata.provider;
+    }
+  }
+
+  if (tokensIn > 0) conv.tokensIn = tokensIn;
+  if (tokensOut > 0) conv.tokensOut = tokensOut;
+  if (cost > 0) conv.costUsd = cost;
+  if (model) conv.model = model;
+  if (provider) conv.provider = provider;
+
+  return conv;
+}
 
 /**
  * Parse NEW layout (v1.1.25+):
@@ -342,49 +529,56 @@ async function loadMessagesNew(
       }
 
       const messagePath = join(sessionMessagePath, messageFile);
-      const messageContent = await readFile(messagePath, 'utf-8');
-      const msgInfo: MessageInfo = JSON.parse(messageContent);
+      try {
+        const messageContent = await readFile(messagePath, 'utf-8');
+        if (!messageContent.trim()) continue; // skip empty files
+        const msgInfo: MessageInfo = JSON.parse(messageContent);
 
-      // Load parts - in new layout: part/<msg-id>/<part-id>.json
-      const msgPartDir = join(partDir, msgInfo.id);
-      const parts = await loadPartsNew(msgPartDir, opts);
+        // Load parts - in new layout: part/<msg-id>/<part-id>.json
+        const msgPartDir = join(partDir, msgInfo.id);
+        const parts = await loadPartsNew(msgPartDir, opts);
 
-      const textParts = parts.filter(p => p.type === 'text' && p.text);
-      const content = textParts.map(p => p.text).join('\n');
+        const textParts = parts.filter(p => p.type === 'text' && p.text);
+        const content = textParts.map(p => p.text).join('\n');
 
-      let toolCalls: ToolCall[] | undefined;
-      if (opts?.includeTools !== false) {
-        const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
-        if (toolParts.length > 0) {
-          toolCalls = toolParts.map(p => ({
-            toolName: p.tool!,
-            input: p.state?.input,
-            output: p.state?.output,
-            status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
-          }));
+        let toolCalls: ToolCall[] | undefined;
+        if (opts?.includeTools !== false) {
+          const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
+          if (toolParts.length > 0) {
+            toolCalls = toolParts.map(p => ({
+              toolName: p.tool!,
+              input: p.state?.input,
+              output: p.state?.output,
+              status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
+            }));
+          }
         }
+
+        const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
+        const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
+
+        messages.push({
+          role: mapRole(msgInfo.role),
+          content,
+          parts: canonParts,
+          createdAt: msgInfo.time.created,
+          model: msgInfo.modelID || undefined,
+          tokens: tokens > 0 ? tokens : undefined,
+          costUsd: msgInfo.cost || undefined,
+          toolCalls,
+          metadata: {
+            id: msgInfo.id,
+            parentId: msgInfo.parentID,
+            provider: msgInfo.providerID,
+            agent: msgInfo.agent,
+            summaryTitle: msgInfo.summary?.title,
+          },
+        });
+      } catch (msgErr) {
+        // Skip corrupted/empty message files
+        console.error(`Skipping corrupted message ${messagePath}: ${msgErr}`);
+        continue;
       }
-
-      const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
-      const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
-
-      messages.push({
-        role: mapRole(msgInfo.role),
-        content,
-        parts: canonParts,
-        createdAt: msgInfo.time.created,
-        model: msgInfo.modelID || undefined,
-        tokens: tokens > 0 ? tokens : undefined,
-        costUsd: msgInfo.cost || undefined,
-        toolCalls,
-        metadata: {
-          id: msgInfo.id,
-          parentId: msgInfo.parentID,
-          provider: msgInfo.providerID,
-          agent: msgInfo.agent,
-          summaryTitle: msgInfo.summary?.title,
-        },
-      });
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -411,9 +605,15 @@ async function loadPartsNew(msgPartDir: string, opts?: ParseOptions): Promise<Pa
       }
 
       const partPath = join(msgPartDir, partFile);
-      const partContent = await readFile(partPath, 'utf-8');
-      const part: PartInfo = JSON.parse(partContent);
-      parts.push(part);
+      try {
+        const partContent = await readFile(partPath, 'utf-8');
+        if (!partContent.trim()) continue; // skip empty files
+        const part: PartInfo = JSON.parse(partContent);
+        parts.push(part);
+      } catch (partErr) {
+        console.error(`Skipping corrupted part ${partPath}: ${partErr}`);
+        continue;
+      }
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -565,52 +765,59 @@ async function loadMessagesOld(
       }
 
       const messagePath = join(sessionMessagePath, messageFile);
-      const messageContent = await readFile(messagePath, 'utf-8');
-      const msgInfo: MessageInfo = JSON.parse(messageContent);
+      try {
+        const messageContent = await readFile(messagePath, 'utf-8');
+        if (!messageContent.trim()) continue; // skip empty files
+        const msgInfo: MessageInfo = JSON.parse(messageContent);
 
-      // Load parts for this message
-      const parts = await loadPartsOld(sessionId, msgInfo.id, sessionPartPath, opts);
+        // Load parts for this message
+        const parts = await loadPartsOld(sessionId, msgInfo.id, sessionPartPath, opts);
 
-      // Combine text parts into content
-      const textParts = parts.filter(p => p.type === 'text' && p.text);
-      const content = textParts.map(p => p.text).join('\n');
+        // Combine text parts into content
+        const textParts = parts.filter(p => p.type === 'text' && p.text);
+        const content = textParts.map(p => p.text).join('\n');
 
-      // Extract tool calls if requested
-      let toolCalls: ToolCall[] | undefined;
-      if (opts?.includeTools !== false) {
-        const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
-        if (toolParts.length > 0) {
-          toolCalls = toolParts.map(p => ({
-            toolName: p.tool!,
-            input: p.state?.input,
-            output: p.state?.output,
-            status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
-          }));
+        // Extract tool calls if requested
+        let toolCalls: ToolCall[] | undefined;
+        if (opts?.includeTools !== false) {
+          const toolParts = parts.filter(p => p.type === 'tool' && p.tool);
+          if (toolParts.length > 0) {
+            toolCalls = toolParts.map(p => ({
+              toolName: p.tool!,
+              input: p.state?.input,
+              output: p.state?.output,
+              status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
+            }));
+          }
         }
+
+        const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
+        const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
+
+        const msg: Message = {
+          role: mapRole(msgInfo.role),
+          content,
+          parts: canonParts,
+          createdAt: msgInfo.time.created,
+          model: msgInfo.modelID || undefined,
+          tokens: tokens > 0 ? tokens : undefined,
+          costUsd: msgInfo.cost || undefined,
+          toolCalls,
+          metadata: {
+            id: msgInfo.id,
+            parentId: msgInfo.parentID,
+            provider: msgInfo.providerID,
+            agent: msgInfo.agent,
+            summaryTitle: msgInfo.summary?.title,
+          },
+        };
+
+        messages.push(msg);
+      } catch (msgErr) {
+        // Skip corrupted/empty message files
+        console.error(`Skipping corrupted message ${messagePath}: ${msgErr}`);
+        continue;
       }
-
-      const tokens = (msgInfo.tokens?.input || 0) + (msgInfo.tokens?.output || 0) + (msgInfo.tokens?.reasoning || 0);
-      const canonParts = buildCanonParts(parts, msgInfo.role, opts?.includeTools !== false) ?? textOnlyParts(content);
-
-      const msg: Message = {
-        role: mapRole(msgInfo.role),
-        content,
-        parts: canonParts,
-        createdAt: msgInfo.time.created,
-        model: msgInfo.modelID || undefined,
-        tokens: tokens > 0 ? tokens : undefined,
-        costUsd: msgInfo.cost || undefined,
-        toolCalls,
-        metadata: {
-          id: msgInfo.id,
-          parentId: msgInfo.parentID,
-          provider: msgInfo.providerID,
-          agent: msgInfo.agent,
-          summaryTitle: msgInfo.summary?.title,
-        },
-      };
-
-      messages.push(msg);
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -643,9 +850,15 @@ async function loadPartsOld(
       }
 
       const partPath = join(messagePartDir, partFile);
-      const partContent = await readFile(partPath, 'utf-8');
-      const part: PartInfo = JSON.parse(partContent);
-      parts.push(part);
+      try {
+        const partContent = await readFile(partPath, 'utf-8');
+        if (!partContent.trim()) continue; // skip empty files
+        const part: PartInfo = JSON.parse(partContent);
+        parts.push(part);
+      } catch (partErr) {
+        console.error(`Skipping corrupted part ${partPath}: ${partErr}`);
+        continue;
+      }
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {

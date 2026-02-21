@@ -482,6 +482,16 @@ impl Database {
 
     /// Insert a conversation (upsert by source_id + external_id).
     pub async fn upsert_conversation(&self, conv: &Conversation) -> Result<()> {
+        // Auto-create the source if it doesn't exist. Without this row the
+        // FK constraint on conversations.source_id fails.
+        sqlx::query(
+            "INSERT OR IGNORE INTO sources (id, adapter, path, config) VALUES (?, ?, NULL, '{}')",
+        )
+        .bind(&conv.source_id)
+        .bind(&conv.source_id)
+        .execute(&self.pool)
+        .await?;
+
         let readable_id = if let Some(id) = conv.readable_id.clone() {
             Some(id)
         } else {
@@ -1229,6 +1239,15 @@ impl Database {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         conv: &Conversation,
     ) -> Result<()> {
+        // Auto-create the source if it doesn't exist.
+        sqlx::query(
+            "INSERT OR IGNORE INTO sources (id, adapter, path, config) VALUES (?, ?, NULL, '{}')",
+        )
+        .bind(&conv.source_id)
+        .bind(&conv.source_id)
+        .execute(&mut **tx)
+        .await?;
+
         let readable_id = if let Some(id) = conv.readable_id.clone() {
             Some(id)
         } else {

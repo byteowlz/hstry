@@ -513,7 +513,7 @@ impl Database {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
-                platform_id = COALESCE(excluded.platform_id, conversations.platform_id),
+                platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,
@@ -1094,7 +1094,7 @@ impl Database {
                 metadata = COALESCE(?, metadata),
                 readable_id = COALESCE(?, readable_id),
                 harness = COALESCE(?, harness),
-                platform_id = COALESCE(?, platform_id),
+                platform_id = COALESCE(NULLIF(?, ''), NULLIF(platform_id, '')),
                 updated_at = ?
             WHERE id = ?",
         )
@@ -1265,7 +1265,7 @@ impl Database {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
-                platform_id = COALESCE(excluded.platform_id, conversations.platform_id),
+                platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
                 title = excluded.title,
                 updated_at = excluded.updated_at,
                 model = excluded.model,

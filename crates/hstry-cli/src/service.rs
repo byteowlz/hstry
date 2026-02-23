@@ -84,6 +84,11 @@ impl WriteService for ServerState {
 
         // Convert and upsert conversation
         let conv = conversation_from_proto(conv_proto);
+        tracing::debug!(
+            external_id = ?conv.external_id,
+            platform_id = ?conv.platform_id,
+            "write_conversation: about to upsert"
+        );
         self.db
             .upsert_conversation(&conv)
             .await
@@ -181,6 +186,13 @@ impl WriteService for ServerState {
                 "source_id and external_id are required",
             ));
         }
+
+        tracing::debug!(
+            source_id = %request.source_id,
+            external_id = %request.external_id,
+            platform_id = ?request.platform_id,
+            "update_conversation: received request"
+        );
 
         let conv_id = self
             .db

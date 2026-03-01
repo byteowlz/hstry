@@ -16,6 +16,10 @@ install-all:
         echo "Installing $crate..."; \
         cargo install --path crates/$crate; \
     done
+    @if command -v hstry >/dev/null 2>&1; then \
+        echo "Updating adapters..."; \
+        hstry adapters update; \
+    fi
 
 # Install a specific crate
 install-crate CRATE:

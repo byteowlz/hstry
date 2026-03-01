@@ -59,6 +59,7 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-1qkv] Add quickstart command for auto scan+ingest (closed 2026-03-01)
 - [trx-kdcw] Pin adapters to hstry version and enforce manifest compatibility (closed 2026-03-01)
 - [trx-0jah] Document sync parallelism and performance changes (closed 2026-02-27)
 - [trx-4x3e] Optimize FTS integrity-check overhead during sync (closed 2026-02-27)

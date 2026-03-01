@@ -70,6 +70,9 @@ cargo install --path .
 ## Quick Start
 
 ```bash
+# Quickstart: scan, add sources, and sync
+hstry quickstart
+
 # Scan for supported chat history sources
 hstry scan
 
@@ -102,6 +105,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 
 | Command | Description |
 |---------|-------------|
+| `quickstart` | Scan known paths, add sources, and sync everything |
 | `scan` | Detect chat history sources on the system |
 | `sync` | Import conversations from all configured sources in parallel (resets cursor if source is empty) |
 | `import <path>` | One-off import with auto-detected adapter |

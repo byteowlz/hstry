@@ -277,6 +277,9 @@ enum Command {
     /// Scan for chat history sources
     Scan,
 
+    /// Quickstart: scan, add sources, and sync
+    Quickstart,
+
     /// Export conversations to another format
     Export {
         /// Target format (pi, opencode, codex, claude-code, markdown, json)
@@ -856,6 +859,14 @@ async fn main() -> Result<()> {
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_scan(&runner, &config, cli.json).await
         }
+        Command::Quickstart => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_quickstart(&db, &runner, &config, &config_path, cli.json).await
+        }
         Command::Export {
             format,
             conversations,
@@ -957,14 +968,14 @@ fn default_sync_parallelism() -> usize {
         .unwrap_or(4)
 }
 
-async fn cmd_sync(
+async fn sync_sources(
     db: &Database,
     runner: &AdapterRunner,
     config: &Config,
     source_filter: Option<String>,
     parallel: Option<usize>,
-    json: bool,
-) -> Result<()> {
+    print: bool,
+) -> Result<Vec<sync::SyncStats>> {
     adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
 
     // Ensure sources from config are in the database
@@ -973,20 +984,10 @@ async fn cmd_sync(
     let sources = db.list_sources().await?;
 
     if sources.is_empty() {
-        if json {
-            return emit_json(JsonResponse::<SyncSummary> {
-                ok: true,
-                result: Some(SyncSummary {
-                    sources: Vec::new(),
-                    total_sources: 0,
-                    total_conversations: 0,
-                    total_messages: 0,
-                }),
-                error: None,
-            });
+        if print {
+            println!("No sources configured. Use 'hstry source add <path>' to add a source.");
         }
-        println!("No sources configured. Use 'hstry source add <path>' to add a source.");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let mut sources_to_sync = Vec::new();
@@ -998,7 +999,7 @@ async fn cmd_sync(
         }
 
         if !config.adapter_enabled(&source.adapter) {
-            if !json {
+            if print {
                 println!(
                     "Syncing {id} ({adapter})...",
                     id = source.id,
@@ -1013,19 +1014,7 @@ async fn cmd_sync(
     }
 
     if sources_to_sync.is_empty() {
-        if json {
-            return emit_json(JsonResponse::<SyncSummary> {
-                ok: true,
-                result: Some(SyncSummary {
-                    sources: Vec::new(),
-                    total_sources: 0,
-                    total_conversations: 0,
-                    total_messages: 0,
-                }),
-                error: None,
-            });
-        }
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let parallelism = parallel.unwrap_or_else(default_sync_parallelism).max(1);
@@ -1036,7 +1025,7 @@ async fn cmd_sync(
         .for_each_concurrent(parallelism, |mut source| {
             let stats = Arc::clone(&stats);
             async move {
-                if !json {
+                if print {
                     println!(
                         "Syncing {id} ({adapter})...",
                         id = source.id,
@@ -1048,7 +1037,7 @@ async fn cmd_sync(
                     match db.count_source_data(&source.id).await {
                         Ok((conv_count, _)) => {
                             if conv_count == 0 {
-                                if !json {
+                                if print {
                                     println!("  No existing conversations; resetting sync cursor");
                                 }
                                 source.last_sync_at = None;
@@ -1060,7 +1049,7 @@ async fn cmd_sync(
                             }
                         }
                         Err(err) => {
-                            if !json {
+                            if print {
                                 eprintln!("  Error: {err}");
                             }
                             return;
@@ -1070,7 +1059,7 @@ async fn cmd_sync(
 
                 match sync::sync_source(db, runner, &source).await {
                     Ok(result) => {
-                        if !json {
+                        if print {
                             if result.conversations > 0 {
                                 println!(
                                     "  Synced {count} conversations",
@@ -1084,7 +1073,7 @@ async fn cmd_sync(
                         stats.push(result);
                     }
                     Err(err) => {
-                        if !json {
+                        if print {
                             eprintln!("  Error: {err}");
                         }
                     }
@@ -1093,7 +1082,18 @@ async fn cmd_sync(
         })
         .await;
 
-    let stats = stats.lock().await.clone();
+    Ok(stats.lock().await.clone())
+}
+
+async fn cmd_sync(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    source_filter: Option<String>,
+    parallel: Option<usize>,
+    json: bool,
+) -> Result<()> {
+    let stats = sync_sources(db, runner, config, source_filter, parallel, !json).await?;
 
     if json {
         let total_sources = stats.len();
@@ -2357,6 +2357,189 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+struct QuickstartSummary {
+    sources_added: Vec<serde_json::Value>,
+    sources_skipped: usize,
+    sync: SyncSummary,
+}
+
+async fn cmd_quickstart(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    config_path: &Path,
+    json: bool,
+) -> Result<()> {
+    let mut config = config.clone();
+
+    if adapter_manifest::validate_adapter_manifest(&config.adapter_paths).is_err() {
+        ensure_adapter_updates(&mut config, config_path, json)?;
+    }
+
+    let hits = scan_hits(runner, &config).await?;
+    if hits.is_empty() {
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(QuickstartSummary {
+                    sources_added: Vec::new(),
+                    sources_skipped: 0,
+                    sync: SyncSummary {
+                        sources: Vec::new(),
+                        total_sources: 0,
+                        total_conversations: 0,
+                        total_messages: 0,
+                    },
+                }),
+                error: None,
+            });
+        }
+        println!("No sources detected.");
+        return Ok(());
+    }
+
+    let mut sources_added = Vec::new();
+    let mut sources_skipped = 0usize;
+
+    for hit in &hits {
+        if config
+            .sources
+            .iter()
+            .any(|source| source.adapter == hit.adapter && source.path == hit.path)
+        {
+            sources_skipped += 1;
+            continue;
+        }
+
+        if let Ok(Some(_)) = db.get_source_by_adapter_path(&hit.adapter, &hit.path).await {
+            sources_skipped += 1;
+            continue;
+        }
+
+        let source_id = generate_source_id(&config, &hit.adapter);
+        config.sources.push(hstry_core::config::SourceConfig {
+            id: source_id.clone(),
+            adapter: hit.adapter.clone(),
+            path: hit.path.clone(),
+            auto_sync: true,
+        });
+
+        sources_added.push(serde_json::json!({
+            "id": source_id,
+            "adapter": hit.adapter,
+            "path": hit.path,
+        }));
+    }
+
+    if !sources_added.is_empty() {
+        config.save_to_path(config_path)?;
+    }
+
+    ensure_config_sources(db, &config).await?;
+
+    let stats = sync_sources(db, runner, &config, None, None, !json).await?;
+    let sync_summary = SyncSummary {
+        total_sources: stats.len(),
+        total_conversations: stats.iter().map(|s| s.conversations).sum(),
+        total_messages: stats.iter().map(|s| s.messages).sum(),
+        sources: stats,
+    };
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(QuickstartSummary {
+                sources_added,
+                sources_skipped,
+                sync: sync_summary,
+            }),
+            error: None,
+        });
+    }
+
+    println!(
+        "Quickstart added {} sources (skipped {}).",
+        sources_added.len(),
+        sources_skipped
+    );
+    Ok(())
+}
+
+fn generate_source_id(config: &Config, adapter: &str) -> String {
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let short = uuid.split('-').next().unwrap_or(uuid.as_str());
+    let mut candidate = format!("{adapter}-{short}");
+
+    let mut idx = 1u32;
+    while config.sources.iter().any(|s| s.id == candidate) {
+        candidate = format!("{adapter}-{short}-{idx}");
+        idx += 1;
+    }
+
+    candidate
+}
+
+fn ensure_adapter_updates(config: &mut Config, config_path: &Path, json: bool) -> Result<()> {
+    let expected_ref = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let mut repos_to_update: Vec<_> = config
+        .adapter_repos
+        .iter()
+        .filter(|r| r.enabled)
+        .cloned()
+        .collect();
+
+    if repos_to_update.is_empty() {
+        anyhow::bail!("No enabled adapter repositories. Run 'hstry adapters repo add-git'.");
+    }
+
+    let mut config_changed = false;
+    for repo in &mut repos_to_update {
+        if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source {
+            if url == hstry_core::config::DEFAULT_ADAPTER_REPO && git_ref == "main" {
+                *git_ref = expected_ref.clone();
+                config_changed = true;
+            }
+        }
+    }
+
+    if config_changed {
+        for r in &mut config.adapter_repos {
+            if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
+                && url == hstry_core::config::DEFAULT_ADAPTER_REPO
+                && git_ref == "main"
+            {
+                *git_ref = expected_ref.clone();
+            }
+        }
+        config.save_to_path(config_path)?;
+    }
+
+    let adapter_root = adapter_root_dir(config)?;
+    std::fs::create_dir_all(&adapter_root)?;
+
+    let mut updated_repos = Vec::new();
+    for repo in &repos_to_update {
+        let repo_result = update_repo_adapters(repo, &adapter_root, None, false)?;
+        updated_repos.push(repo_result);
+    }
+
+    adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
+
+    if !json {
+        println!("Updated adapters in {}", adapter_root.display());
+        for repo_result in &updated_repos {
+            println!(
+                "  {name}: {count} adapters",
+                name = repo_result.name,
+                count = repo_result.adapters.len()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn cmd_adapter_repo(
     config: &mut Config,
     config_path: &Path,
@@ -2567,11 +2750,7 @@ fn cmd_adapter_repo(
     Ok(())
 }
 
-async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result<()> {
-    if !json {
-        println!("Scanning for chat history sources...\n");
-    }
-
+async fn scan_hits(runner: &AdapterRunner, config: &Config) -> Result<Vec<ScanHit>> {
     let mut hits = Vec::new();
     for adapter_name in runner.list_adapters() {
         if !config.adapter_enabled(&adapter_name) {
@@ -2588,25 +2767,26 @@ async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result
                         .await
                     && confidence > 0.5
                 {
-                    if json {
-                        hits.push(ScanHit {
-                            adapter: adapter_name.clone(),
-                            display_name: info.display_name.clone(),
-                            path: expanded.to_string_lossy().to_string(),
-                            confidence,
-                        });
-                    } else {
-                        println!(
-                            "  {} {} (confidence: {:.0}%)",
-                            info.display_name,
-                            expanded.display(),
-                            confidence * 100.0
-                        );
-                    }
+                    hits.push(ScanHit {
+                        adapter: adapter_name.clone(),
+                        display_name: info.display_name.clone(),
+                        path: expanded.to_string_lossy().to_string(),
+                        confidence,
+                    });
                 }
             }
         }
     }
+
+    Ok(hits)
+}
+
+async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result<()> {
+    if !json {
+        println!("Scanning for chat history sources...\n");
+    }
+
+    let hits = scan_hits(runner, config).await?;
 
     if json {
         return emit_json(JsonResponse {
@@ -2614,6 +2794,15 @@ async fn cmd_scan(runner: &AdapterRunner, config: &Config, json: bool) -> Result
             result: Some(hits),
             error: None,
         });
+    }
+
+    for hit in hits {
+        println!(
+            "  {} {} (confidence: {:.0}%)",
+            hit.display_name,
+            hit.path,
+            hit.confidence * 100.0
+        );
     }
 
     Ok(())

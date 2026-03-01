@@ -5,13 +5,17 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use futures::stream::{self, StreamExt};
 use hstry_core::config::{AdapterRepo, AdapterRepoSource};
 use hstry_core::models::{Conversation, Message, MessageRole, SearchHit, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
+
+mod adapter_manifest;
 use serde::{Serialize, de::DeserializeOwned};
 
 mod pretty;
@@ -21,6 +25,7 @@ mod sync;
 #[derive(Debug, serde::Deserialize)]
 struct SyncInput {
     source: Option<String>,
+    parallel: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -137,6 +142,10 @@ enum Command {
         /// Only sync a specific source
         #[arg(long)]
         source: Option<String>,
+
+        /// Max number of sources to sync in parallel
+        #[arg(long)]
+        parallel: Option<usize>,
 
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
@@ -681,12 +690,9 @@ async fn main() -> Result<()> {
         1 => "debug",
         _ => "trace",
     };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            tracing_subscriber::EnvFilter::new(format!(
-                "{level},tantivy=warn,tantivy_common=warn"
-            ))
-        });
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(format!("{level},tantivy=warn,tantivy_common=warn"))
+    });
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -743,15 +749,20 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Command::Sync { source, input } => {
+        Command::Sync {
+            source,
+            parallel,
+            input,
+        } => {
             let db = Database::open(&config.database).await?;
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             let input = read_input::<SyncInput>(input)?;
-            let source = input.and_then(|v| v.source).or(source);
-            cmd_sync(&db, &runner, &config, source, cli.json).await
+            let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
+            let parallel = input.and_then(|v| v.parallel).or(parallel);
+            cmd_sync(&db, &runner, &config, source, parallel, cli.json).await
         }
         Command::Import {
             path,
@@ -940,13 +951,22 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
     Ok(())
 }
 
+fn default_sync_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get().min(4))
+        .unwrap_or(4)
+}
+
 async fn cmd_sync(
     db: &Database,
     runner: &AdapterRunner,
     config: &Config,
     source_filter: Option<String>,
+    parallel: Option<usize>,
     json: bool,
 ) -> Result<()> {
+    adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
+
     // Ensure sources from config are in the database
     ensure_config_sources(db, config).await?;
 
@@ -969,7 +989,7 @@ async fn cmd_sync(
         return Ok(());
     }
 
-    let mut stats = Vec::new();
+    let mut sources_to_sync = Vec::new();
     for source in sources {
         if let Some(ref filter) = source_filter
             && &source.id != filter
@@ -989,49 +1009,91 @@ async fn cmd_sync(
             continue;
         }
 
-        let mut source = source;
-        if !json {
-            println!(
-                "Syncing {id} ({adapter})...",
-                id = source.id,
-                adapter = source.adapter
-            );
-        }
-        if source.last_sync_at.is_some() {
-            let (conv_count, _) = db.count_source_data(&source.id).await?;
-            if conv_count == 0 {
-                if !json {
-                    println!("  No existing conversations; resetting sync cursor");
-                }
-                source.last_sync_at = None;
-                if let serde_json::Value::Object(mut config) = source.config.clone() {
-                    config.remove("cursor");
-                    source.config = serde_json::Value::Object(config);
-                }
-            }
-        }
+        sources_to_sync.push(source);
+    }
 
-        match sync::sync_source(db, runner, &source).await {
-            Ok(result) => {
+    if sources_to_sync.is_empty() {
+        if json {
+            return emit_json(JsonResponse::<SyncSummary> {
+                ok: true,
+                result: Some(SyncSummary {
+                    sources: Vec::new(),
+                    total_sources: 0,
+                    total_conversations: 0,
+                    total_messages: 0,
+                }),
+                error: None,
+            });
+        }
+        return Ok(());
+    }
+
+    let parallelism = parallel.unwrap_or_else(default_sync_parallelism).max(1);
+    let parallelism = parallelism.min(sources_to_sync.len().max(1));
+    let stats = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    stream::iter(sources_to_sync)
+        .for_each_concurrent(parallelism, |mut source| {
+            let stats = Arc::clone(&stats);
+            async move {
                 if !json {
-                    if result.conversations > 0 {
-                        println!(
-                            "  Synced {count} conversations",
-                            count = result.conversations
-                        );
-                    } else {
-                        println!("  No new conversations");
+                    println!(
+                        "Syncing {id} ({adapter})...",
+                        id = source.id,
+                        adapter = source.adapter
+                    );
+                }
+
+                if source.last_sync_at.is_some() {
+                    match db.count_source_data(&source.id).await {
+                        Ok((conv_count, _)) => {
+                            if conv_count == 0 {
+                                if !json {
+                                    println!("  No existing conversations; resetting sync cursor");
+                                }
+                                source.last_sync_at = None;
+                                if let serde_json::Value::Object(mut config) = source.config.clone()
+                                {
+                                    config.remove("cursor");
+                                    source.config = serde_json::Value::Object(config);
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            if !json {
+                                eprintln!("  Error: {err}");
+                            }
+                            return;
+                        }
                     }
                 }
-                stats.push(result);
-            }
-            Err(err) => {
-                if !json {
-                    eprintln!("  Error: {err}");
+
+                match sync::sync_source(db, runner, &source).await {
+                    Ok(result) => {
+                        if !json {
+                            if result.conversations > 0 {
+                                println!(
+                                    "  Synced {count} conversations",
+                                    count = result.conversations
+                                );
+                            } else {
+                                println!("  No new conversations");
+                            }
+                        }
+                        let mut stats = stats.lock().await;
+                        stats.push(result);
+                    }
+                    Err(err) => {
+                        if !json {
+                            eprintln!("  Error: {err}");
+                        }
+                    }
                 }
             }
-        }
-    }
+        })
+        .await;
+
+    let stats = stats.lock().await.clone();
 
     if json {
         let total_sources = stats.len();
@@ -2033,13 +2095,14 @@ fn cmd_adapters(
             repo,
             force,
         } => {
-            // TODO: Implement actual download/update logic
-            // For now, just report what would be updated
-            let repos_to_update: Vec<_> = config
+            let expected_ref = format!("v{}", env!("CARGO_PKG_VERSION"));
+
+            let mut repos_to_update: Vec<_> = config
                 .adapter_repos
                 .iter()
                 .filter(|r| r.enabled)
                 .filter(|r| repo.as_ref().is_none_or(|name| &r.name == name))
+                .cloned()
                 .collect();
 
             if repos_to_update.is_empty() {
@@ -2054,47 +2117,240 @@ fn cmd_adapters(
                 return Ok(());
             }
 
-            if json {
-                #[derive(Serialize)]
-                struct UpdateResult {
-                    repos: Vec<String>,
-                    adapter: Option<String>,
-                    force: bool,
-                    message: String,
+            let mut config_changed = false;
+            for repo in &mut repos_to_update {
+                if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source {
+                    if url == hstry_core::config::DEFAULT_ADAPTER_REPO && git_ref == "main" {
+                        *git_ref = expected_ref.clone();
+                        config_changed = true;
+                    }
                 }
+            }
+
+            if config_changed {
+                if let Some(repo_override) = repo.as_ref() {
+                    config
+                        .adapter_repos
+                        .iter_mut()
+                        .filter(|r| &r.name == repo_override)
+                        .for_each(|r| {
+                            if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
+                                && url == hstry_core::config::DEFAULT_ADAPTER_REPO
+                                && git_ref == "main"
+                            {
+                                *git_ref = expected_ref.clone();
+                            }
+                        });
+                } else {
+                    for r in &mut config.adapter_repos {
+                        if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
+                            && url == hstry_core::config::DEFAULT_ADAPTER_REPO
+                            && git_ref == "main"
+                        {
+                            *git_ref = expected_ref.clone();
+                        }
+                    }
+                }
+                config.save_to_path(config_path)?;
+            }
+
+            let adapter_root = adapter_root_dir(&config)?;
+            std::fs::create_dir_all(&adapter_root)?;
+
+            let mut updated_repos = Vec::new();
+
+            for repo in &repos_to_update {
+                let repo_result =
+                    update_repo_adapters(repo, &adapter_root, adapter.as_deref(), force)?;
+                updated_repos.push(repo_result);
+            }
+
+            adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
+
+            if json {
                 return emit_json(JsonResponse {
                     ok: true,
-                    result: Some(UpdateResult {
-                        repos: repos_to_update.iter().map(|r| r.name.clone()).collect(),
-                        adapter,
-                        force,
-                        message: "Update functionality not yet implemented".to_string(),
-                    }),
+                    result: Some(serde_json::json!({
+                        "adapter_root": adapter_root,
+                        "repos": updated_repos,
+                    })),
                     error: None,
                 });
             }
 
-            println!("Would update from repositories:");
-            for r in &repos_to_update {
-                let source_info = match &r.source {
-                    AdapterRepoSource::Git { url, git_ref, .. } => {
-                        format!("git: {url} ({git_ref})")
-                    }
-                    AdapterRepoSource::Archive { url, .. } => format!("archive: {url}"),
-                    AdapterRepoSource::Local { path } => format!("local: {path}"),
-                };
-                println!("  {name} - {source_info}", name = r.name);
+            println!("Updated adapters in {}", adapter_root.display());
+            for repo_result in &updated_repos {
+                println!(
+                    "  {name}: {count} adapters",
+                    name = repo_result.name,
+                    count = repo_result.adapters.len()
+                );
             }
-            if let Some(adapter_name) = &adapter {
-                println!("Filtering for adapter: {adapter_name}");
-            }
-            if force {
-                println!("Force update enabled");
-            }
-            println!("\nNote: Update functionality not yet implemented.");
         }
         AdapterCommand::Repo { command } => {
             cmd_adapter_repo(&mut config, config_path, command, json)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct RepoUpdateResult {
+    name: String,
+    adapters: Vec<String>,
+    source: String,
+}
+
+fn adapter_root_dir(config: &Config) -> Result<PathBuf> {
+    if let Some(path) = config.adapter_paths.first() {
+        return Ok(path.clone());
+    }
+
+    let config_dir = Config::default_config_path()
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Failed to resolve config directory"))?
+        .to_path_buf();
+    Ok(config_dir.join("adapters"))
+}
+
+fn update_repo_adapters(
+    repo: &AdapterRepo,
+    adapter_root: &Path,
+    filter: Option<&str>,
+    force: bool,
+) -> Result<RepoUpdateResult> {
+    match &repo.source {
+        AdapterRepoSource::Git { url, git_ref, path } => {
+            let temp_dir = tempfile::tempdir()?;
+            let target = temp_dir.path();
+
+            let mut cmd = ProcessCommand::new("git");
+            cmd.arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg("--branch")
+                .arg(git_ref)
+                .arg(url)
+                .arg(target);
+
+            let output = cmd.output()?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("Failed to clone adapters repo: {stderr}");
+            }
+
+            let src_root = target.join(path);
+            let source_label = format!("git:{url}@{git_ref}");
+            let adapters = copy_adapters_from(&src_root, adapter_root, filter, force)?;
+
+            Ok(RepoUpdateResult {
+                name: repo.name.clone(),
+                adapters,
+                source: source_label,
+            })
+        }
+        AdapterRepoSource::Local { path } => {
+            let src_root = PathBuf::from(path);
+            let source_label = format!("local:{path}");
+            let adapters = copy_adapters_from(&src_root, adapter_root, filter, force)?;
+
+            Ok(RepoUpdateResult {
+                name: repo.name.clone(),
+                adapters,
+                source: source_label,
+            })
+        }
+        AdapterRepoSource::Archive { url, .. } => {
+            anyhow::bail!("Archive adapter repositories are not supported yet: {url}");
+        }
+    }
+}
+
+fn copy_adapters_from(
+    src_root: &Path,
+    dest_root: &Path,
+    filter: Option<&str>,
+    force: bool,
+) -> Result<Vec<String>> {
+    let mut adapters = Vec::new();
+
+    if !src_root.exists() {
+        anyhow::bail!("Adapter source path not found: {}", src_root.display());
+    }
+
+    let manifest_path = src_root.join(".hstry-adapters.json");
+    if !manifest_path.exists() {
+        anyhow::bail!(
+            "Adapter manifest missing at {}. Ensure the repo matches the hstry version.",
+            manifest_path.display()
+        );
+    }
+
+    let mut items = Vec::new();
+    if let Some(adapter) = filter {
+        items.push(adapter.to_string());
+    } else {
+        for entry in std::fs::read_dir(src_root)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                items.push(name.to_string());
+            }
+        }
+    }
+
+    let mut entries_to_copy = Vec::new();
+    if !items.iter().any(|item| item == "types") {
+        entries_to_copy.push("types".to_string());
+    }
+    entries_to_copy.extend(items);
+
+    for entry_name in entries_to_copy {
+        let src_path = src_root.join(&entry_name);
+        if !src_path.exists() {
+            if filter.is_some() && !force {
+                anyhow::bail!("Adapter not found: {entry_name}");
+            }
+            continue;
+        }
+
+        let dest_path = dest_root.join(&entry_name);
+        if dest_path.exists() {
+            std::fs::remove_dir_all(&dest_path)?;
+        }
+        copy_dir_recursive(&src_path, &dest_path)?;
+
+        if entry_name != "types" {
+            adapters.push(entry_name);
+        }
+    }
+
+    let dest_manifest = dest_root.join(".hstry-adapters.json");
+    std::fs::copy(&manifest_path, &dest_manifest)?;
+
+    Ok(adapters)
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+
+    for entry in walkdir::WalkDir::new(src) {
+        let entry = entry?;
+        let path = entry.path();
+        let rel_path = path.strip_prefix(src)?;
+        let target_path = dest.join(rel_path);
+
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&target_path)?;
+        } else {
+            if let Some(parent) = target_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(path, &target_path)?;
         }
     }
 

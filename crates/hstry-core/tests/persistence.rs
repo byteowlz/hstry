@@ -203,11 +203,15 @@ async fn messages_persist_across_reopen() {
 
         for (idx, msg) in messages.iter().enumerate() {
             assert_eq!(msg.idx, idx as i32);
+            assert_eq!(msg.content, format!("Message {idx}: Hello persistence!"));
             assert_eq!(
-                msg.content,
-                format!("Message {idx}: Hello persistence!")
+                msg.role,
+                if idx % 2 == 0 {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                }
             );
-            assert_eq!(msg.role, if idx % 2 == 0 { MessageRole::User } else { MessageRole::Assistant });
             assert_eq!(msg.model, Some("gpt-4".to_string()));
             assert_eq!(msg.tokens, Some(((idx + 1) * 10) as i64));
             assert_eq!(msg.cost_usd, Some((idx + 1) as f64 * 0.001));
@@ -266,7 +270,11 @@ async fn full_scenario_persists_across_multiple_reopens() {
                 id: Uuid::new_v4(),
                 conversation_id: conv.id,
                 idx,
-                role: if idx % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                role: if idx % 2 == 0 {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                },
                 content: format!("Scenario message {idx}"),
                 parts_json: serde_json::json!([{"type": "text", "text": format!("Scenario message {idx}")}]),
                 created_at: Some(Utc::now()),
@@ -290,12 +298,19 @@ async fn full_scenario_persists_across_multiple_reopens() {
         let db = Database::open(&db_path).await.expect("reopen");
 
         // Verify source
-        let source = db.get_source("scenario-source").await.expect("get").expect("exists");
+        let source = db
+            .get_source("scenario-source")
+            .await
+            .expect("get")
+            .expect("exists");
         assert_eq!(source.adapter, "pi");
         assert_eq!(source.path, Some("/home/user/project".to_string()));
 
         // Verify conversation
-        let convs = db.list_conversations(Default::default()).await.expect("list");
+        let convs = db
+            .list_conversations(Default::default())
+            .await
+            .expect("list");
         assert_eq!(convs.len(), 1);
         let conv = &convs[0];
         assert_eq!(conv.title, Some("Full Persistence Scenario".to_string()));
@@ -310,7 +325,11 @@ async fn full_scenario_persists_across_multiple_reopens() {
                 id: Uuid::new_v4(),
                 conversation_id: conv.id,
                 idx,
-                role: if idx % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                role: if idx % 2 == 0 {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                },
                 content: format!("Round 2 message {idx}"),
                 parts_json: serde_json::json!([{"type": "text", "text": format!("Round 2 message {idx}")}]),
                 created_at: Some(Utc::now()),
@@ -364,8 +383,12 @@ async fn search_state_persists_across_reopen() {
     // Round 1: Set search state
     {
         let db = Database::open(&db_path).await.expect("open");
-        db.set_search_state("test-key", "test-value").await.expect("set");
-        db.set_search_state("another-key", "another-value").await.expect("set 2");
+        db.set_search_state("test-key", "test-value")
+            .await
+            .expect("set");
+        db.set_search_state("another-key", "another-value")
+            .await
+            .expect("set 2");
         db.close().await;
     }
 
@@ -380,7 +403,10 @@ async fn search_state_persists_across_reopen() {
         assert_eq!(val2, Some("another-value".to_string()));
 
         // Verify missing key returns None
-        let missing = db.get_search_state("nonexistent").await.expect("get missing");
+        let missing = db
+            .get_search_state("nonexistent")
+            .await
+            .expect("get missing");
         assert!(missing.is_none());
 
         db.close().await;
@@ -389,7 +415,9 @@ async fn search_state_persists_across_reopen() {
     // Round 3: Update and verify update persists
     {
         let db = Database::open(&db_path).await.expect("reopen 2");
-        db.set_search_state("test-key", "updated-value").await.expect("update");
+        db.set_search_state("test-key", "updated-value")
+            .await
+            .expect("update");
 
         let val = db.get_search_state("test-key").await.expect("get updated");
         assert_eq!(val, Some("updated-value".to_string()));
@@ -465,7 +493,11 @@ async fn partial_update_persists_across_reopen() {
     // Verify update persisted and original fields preserved
     {
         let db = Database::open(&db_path).await.expect("reopen 2");
-        let conv = db.get_conversation(conv_id).await.expect("get").expect("exists");
+        let conv = db
+            .get_conversation(conv_id)
+            .await
+            .expect("get")
+            .expect("exists");
 
         // Updated fields
         assert_eq!(conv.title, Some("New Title".to_string()));

@@ -18,6 +18,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use walkdir::WalkDir;
 
 use crate::ServiceCommand;
+use crate::adapter_manifest;
 use crate::sync;
 use hstry_core::config::ServiceTransport;
 use hstry_core::models::Source;
@@ -219,9 +220,7 @@ impl WriteService for ServerState {
                 request.platform_id.as_deref(),
             )
             .await
-            .map_err(|e| {
-                tonic::Status::internal(format!("Failed to update conversation: {e}"))
-            })?;
+            .map_err(|e| tonic::Status::internal(format!("Failed to update conversation: {e}")))?;
 
         Ok(tonic::Response::new(
             hstry_core::service::proto::UpdateConversationResponse {
@@ -255,9 +254,7 @@ impl WriteService for ServerState {
         self.db
             .delete_conversation(conv_id)
             .await
-            .map_err(|e| {
-                tonic::Status::internal(format!("Failed to delete conversation: {e}"))
-            })?;
+            .map_err(|e| tonic::Status::internal(format!("Failed to delete conversation: {e}")))?;
 
         Ok(tonic::Response::new(
             hstry_core::service::proto::DeleteConversationResponse {
@@ -928,6 +925,7 @@ impl ServiceState {
         let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
+        adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
         let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
 
         let enabled_adapters = enabled_adapters(&config, &runner);
@@ -969,6 +967,7 @@ impl ServiceState {
         let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
+        adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
 
         let db = Arc::new(Database::open(&config.database).await?);
         let index_path = config.search_index_path();
@@ -1341,9 +1340,7 @@ impl ServiceState {
                     let retry_after = now + Duration::from_secs(backoff_secs);
                     self.source_backoff
                         .insert(source.id.clone(), (failures, retry_after));
-                    eprintln!(
-                        "  Will retry in {backoff_secs}s (failure #{failures})",
-                    );
+                    eprintln!("  Will retry in {backoff_secs}s (failure #{failures})",);
                 }
             }
         }

@@ -1,0 +1,2 @@
+{"id":"msg_1","object":"thread.message","thread_id":"thread_test_1","role":"user","content":[{"type":"text","text":{"value":"Hello Jan!"}}],"status":"ready","created":1700000000001}
+{"id":"msg_2","object":"thread.message","thread_id":"thread_test_1","role":"assistant","content":[{"type":"text","text":{"value":"Hello from Jan."}},{"type":"tool_call","tool_call_id":"tool_call_1","tool_name":"search","input":{"query":"example"},"output":{"items":["result-1","result-2"]}}],"status":"ready","created":1700000000002,"model":"jan-model-1"}

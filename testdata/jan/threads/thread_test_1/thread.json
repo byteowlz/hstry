@@ -1,0 +1,13 @@
+{
+  "id": "thread_test_1",
+  "object": "thread",
+  "title": "Test Jan Thread",
+  "created": 1700000000000,
+  "updated": 1700000002000,
+  "assistants": [
+    {
+      "assistant_id": "assistant_test_1",
+      "model": "jan-model-1"
+    }
+  ]
+}

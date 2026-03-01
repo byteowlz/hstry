@@ -1,0 +1,2 @@
+{"role":"user","created":1700000001,"content":[{"type":"text","text":"Hello Goose!"}]}
+{"role":"assistant","created":1700000002,"content":[{"type":"text","text":"Hello from Goose."}]}

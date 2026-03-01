@@ -735,30 +735,25 @@ impl Database {
         // so callers can pass a single identifier without knowing which column
         // it belongs to.
         sql.push_str(" AND (");
-        let mut or_count = 0;
-
-        // Helper macro to append "column = ?" with proper OR separator.
-        macro_rules! or_clause {
-            ($col:expr) => {
-                if or_count > 0 {
-                    write!(sql, " OR {} = ?", $col).unwrap();
-                } else {
-                    write!(sql, "{} = ?", $col).unwrap();
-                }
-                or_count += 1;
-            };
-        }
+        let mut columns = Vec::new();
 
         if external_id.is_some() {
-            or_clause!("external_id");
-            or_clause!("platform_id"); // also try platform_id with the same value
+            columns.push("external_id");
+            columns.push("platform_id"); // also try platform_id with the same value
         }
         if readable_id.is_some() {
-            or_clause!("readable_id");
+            columns.push("readable_id");
         }
         if conversation_id.is_some() {
-            or_clause!("id");
+            columns.push("id");
         }
+
+        let clause = columns
+            .iter()
+            .map(|col| format!("{col} = ?"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        sql.push_str(&clause);
         sql.push_str(") LIMIT 1");
 
         let mut query = sqlx::query(&sql);
@@ -1000,9 +995,8 @@ impl Database {
             let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
             // Delete related tables first (message_events, snapshots, summary cache, messages)
-            let sql = format!(
-                "DELETE FROM message_events WHERE conversation_id IN ({placeholders})"
-            );
+            let sql =
+                format!("DELETE FROM message_events WHERE conversation_id IN ({placeholders})");
             let mut query = sqlx::query(&sql);
             for id in chunk {
                 query = query.bind(id.to_string());
@@ -1027,18 +1021,14 @@ impl Database {
             }
             query.execute(&mut *tx).await?;
 
-            let sql = format!(
-                "DELETE FROM messages WHERE conversation_id IN ({placeholders})"
-            );
+            let sql = format!("DELETE FROM messages WHERE conversation_id IN ({placeholders})");
             let mut query = sqlx::query(&sql);
             for id in chunk {
                 query = query.bind(id.to_string());
             }
             query.execute(&mut *tx).await?;
 
-            let sql = format!(
-                "DELETE FROM conversations WHERE id IN ({placeholders})"
-            );
+            let sql = format!("DELETE FROM conversations WHERE id IN ({placeholders})");
             let mut query = sqlx::query(&sql);
             for id in chunk {
                 query = query.bind(id.to_string());
@@ -1755,6 +1745,15 @@ impl Database {
 
     /// Optimized FTS schema initialization that checks integrity only when needed.
     async fn ensure_fts_schema_optimized(&self) -> Result<()> {
+        let force_integrity_check = std::env::var("HSTRY_FTS_INTEGRITY_CHECK")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+
+        if !force_integrity_check {
+            self.ensure_fts_schema(false).await?;
+            return Ok(());
+        }
+
         // Check if we've already validated this database version
         let fts_key = "fts_last_integrity_check_v1";
         let last_check = self.get_search_state(fts_key).await?;
@@ -1762,144 +1761,27 @@ impl Database {
         // Only run integrity check if: never checked, or DB was recently modified
         let should_check = match last_check {
             None => true,
-            Some(ts) => {
-                // Parse timestamp and check if > 1 hour old
-                match ts.parse::<i64>() {
-                    Ok(secs) => {
-                        let now = Utc::now().timestamp();
-                        (now - secs) > 3600 // Only check every hour
-                    }
-                    Err(_) => true,
+            Some(ts) => match ts.parse::<i64>() {
+                Ok(secs) => {
+                    let now = Utc::now().timestamp();
+                    (now - secs) > 3600 // Only check every hour
                 }
-            }
+                Err(_) => true,
+            },
         };
 
-        if !should_check {
-            // Skip expensive checks, just ensure tables exist
-            self.ensure_fts_tables_exist().await?;
-            return Ok(());
-        }
+        self.ensure_fts_schema(should_check).await?;
 
-        // Run full check
-        self.ensure_fts_schema().await?;
-
-        // Mark as checked
-        self.set_search_state(fts_key, &Utc::now().timestamp().to_string())
-            .await?;
-
-        Ok(())
-    }
-
-    /// Ensure FTS tables exist without expensive integrity checks.
-    async fn ensure_fts_tables_exist(&self) -> Result<()> {
-        for table_name in ["messages_fts", "messages_code_fts"] {
-            let existing: Option<(String,)> =
-                sqlx::query_as("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
-                    .bind(table_name)
-                    .fetch_optional(&self.pool)
-                    .await?;
-
-            if existing.is_none() {
-                // Create table if missing
-                let (create_sql, trigger_sql, trigger_names) = match table_name {
-                    "messages_fts" => (
-                        r"
-                        CREATE VIRTUAL TABLE messages_fts USING fts5(
-                            content,
-                            content=messages,
-                            content_rowid=rowid,
-                            tokenize = 'porter',
-                            prefix = '2 3 4'
-                        );
-                        ",
-                        &[
-                            r"
-                            CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-                                INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
-                            END;
-                            ",
-                            r"
-                            CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-                                INSERT INTO messages_fts(messages_fts, rowid, content)
-                                VALUES('delete', OLD.rowid, OLD.content);
-                            END;
-                            ",
-                            r"
-                            CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-                                INSERT INTO messages_fts(messages_fts, rowid, content)
-                                VALUES('delete', OLD.rowid, OLD.content);
-                                INSERT INTO messages_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
-                            END;
-                            ",
-                        ] as &[&str],
-                        &["messages_ai", "messages_ad", "messages_au"] as &[&str],
-                    ),
-                    "messages_code_fts" => (
-                        r#"
-                        CREATE VIRTUAL TABLE messages_code_fts USING fts5(
-                            content,
-                            content=messages,
-                            content_rowid=rowid,
-                            tokenize = "unicode61 tokenchars '_./:'",
-                            prefix = '2 3 4'
-                        );
-                        "#,
-                        &[
-                            r"
-                            CREATE TRIGGER messages_code_ai AFTER INSERT ON messages BEGIN
-                                INSERT INTO messages_code_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
-                            END;
-                            ",
-                            r"
-                            CREATE TRIGGER messages_code_ad AFTER DELETE ON messages BEGIN
-                                INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
-                                VALUES('delete', OLD.rowid, OLD.content);
-                            END;
-                            ",
-                            r"
-                            CREATE TRIGGER messages_code_au AFTER UPDATE ON messages BEGIN
-                                INSERT INTO messages_code_fts(messages_code_fts, rowid, content)
-                                VALUES('delete', OLD.rowid, OLD.content);
-                                INSERT INTO messages_code_fts(rowid, content)
-                                VALUES (NEW.rowid, NEW.content);
-                            END;
-                            ",
-                        ] as &[&str],
-                        &["messages_code_ai", "messages_code_ad", "messages_code_au"] as &[&str],
-                    ),
-                    _ => unreachable!(),
-                };
-
-                let mut conn = self.pool.acquire().await?;
-                for trigger in trigger_names {
-                    let drop_sql = format!("DROP TRIGGER IF EXISTS {trigger}");
-                    sqlx::raw_sql(&drop_sql).execute(&mut *conn).await?;
-                }
-                let drop_table = format!("DROP TABLE IF EXISTS {table_name}");
-                sqlx::raw_sql(&drop_table).execute(&mut *conn).await?;
-                sqlx::raw_sql(create_sql).execute(&mut *conn).await?;
-                for sql in trigger_sql {
-                    sqlx::raw_sql(sql).execute(&mut *conn).await?;
-                }
-
-                // Rebuild from existing messages
-                let messages_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
-                    .fetch_one(&self.pool)
-                    .await?;
-                if messages_count.0 > 0 {
-                    let rebuild =
-                        format!("INSERT INTO {table_name}({table_name}) VALUES('rebuild')");
-                    sqlx::raw_sql(&rebuild).execute(&self.pool).await?;
-                }
-
-                tracing::info!("Created FTS table {table_name}");
-            }
+        if should_check {
+            // Mark as checked
+            self.set_search_state(fts_key, &Utc::now().timestamp().to_string())
+                .await?;
         }
 
         Ok(())
     }
 
-    async fn ensure_fts_schema(&self) -> Result<()> {
+    async fn ensure_fts_schema(&self, run_integrity_check: bool) -> Result<()> {
         let messages_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
             .fetch_one(&self.pool)
             .await?;
@@ -1936,6 +1818,7 @@ impl Database {
                 ",
             ],
             &["messages_ai", "messages_ad", "messages_au"],
+            run_integrity_check,
             messages_count.0,
             |sql| sql.contains("tokenize = 'porter'") && sql.contains("prefix = '2 3 4'"),
         )
@@ -1974,6 +1857,7 @@ impl Database {
                 ",
             ],
             &["messages_code_ai", "messages_code_ad", "messages_code_au"],
+            run_integrity_check,
             messages_count.0,
             |sql| sql.contains("unicode61") && sql.contains("tokenchars") && sql.contains("prefix"),
         )
@@ -1988,6 +1872,7 @@ impl Database {
         create_sql: &str,
         trigger_sql: &[&str],
         trigger_names: &[&str],
+        run_integrity_check: bool,
         messages_count: i64,
         schema_ok: F,
     ) -> Result<()>
@@ -2007,7 +1892,7 @@ impl Database {
 
         // If the table exists and schema is OK, run a thorough integrity check.
         // The basic integrity-check can miss corruption that the ranked version catches.
-        if !should_recreate {
+        if run_integrity_check && !should_recreate {
             match self.fts_integrity_check(name).await {
                 Ok(true) => {} // Healthy
                 Ok(false) => {

@@ -807,7 +807,11 @@ async fn update_conversation_metadata_partial_title() {
     .await
     .expect("update");
 
-    let fetched = db.get_conversation(conv.id).await.expect("get").expect("exists");
+    let fetched = db
+        .get_conversation(conv.id)
+        .await
+        .expect("get")
+        .expect("exists");
     assert_eq!(fetched.title, Some("Updated Title".to_string()));
     assert_eq!(fetched.model, Some("gpt-4".to_string())); // Preserved
     assert_eq!(fetched.provider, Some("openai".to_string())); // Preserved
@@ -857,7 +861,11 @@ async fn update_conversation_metadata_partial_harness() {
     .await
     .expect("update");
 
-    let fetched = db.get_conversation(conv.id).await.expect("get").expect("exists");
+    let fetched = db
+        .get_conversation(conv.id)
+        .await
+        .expect("get")
+        .expect("exists");
     assert_eq!(fetched.title, Some("Keep This".to_string())); // Preserved
     assert_eq!(fetched.harness, Some("claude".to_string())); // Updated
 }

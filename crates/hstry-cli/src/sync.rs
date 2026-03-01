@@ -89,9 +89,7 @@ pub async fn sync_source(
             let mut existing_conv: Option<hstry_core::models::Conversation> = None;
 
             if let Some(external_id) = conv.external_id.as_deref() {
-                if let Some(existing) =
-                    db.get_conversation_id(&source.id, external_id).await?
-                {
+                if let Some(existing) = db.get_conversation_id(&source.id, external_id).await? {
                     conv_id = existing;
                     existing_conv = db
                         .get_conversation_by_reference(
@@ -106,10 +104,7 @@ pub async fn sync_source(
                     .conversation_exists_for_session(&source.id, external_id)
                     .await?
                 {
-                    tracing::debug!(
-                        "Skipping session {} - already exists in hstry",
-                        external_id
-                    );
+                    tracing::debug!("Skipping session {} - already exists in hstry", external_id);
                     continue;
                 }
             }

@@ -15,6 +15,10 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
+### [trx-smd7] Add tests for parallel sync correctness (P2, task)
+
+### [trx-sq9n] Add sync performance instrumentation and per-source timings (P2, task)
+
 ### [trx-g91t] Update hstry adapters to populate sender field (P2, task)
 Update hstry adapters to populate the new sender field on messages.
 
@@ -55,6 +59,10 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-kdcw] Pin adapters to hstry version and enforce manifest compatibility (closed 2026-03-01)
+- [trx-0jah] Document sync parallelism and performance changes (closed 2026-02-27)
+- [trx-4x3e] Optimize FTS integrity-check overhead during sync (closed 2026-02-27)
+- [trx-ekqp] Parallelize sync across sources with bounded concurrency (closed 2026-02-27)
 - [trx-01fn] Update octo-protocol to re-export Sender from hstry-core instead of defining its own (closed 2026-02-05)
 - [trx-7fh3] Add Sender type to hstry-core and update Message model (closed 2026-02-05)
 - [trx-z2zy] Migration 006: Add sender_json and provider columns to messages table (closed 2026-02-05)

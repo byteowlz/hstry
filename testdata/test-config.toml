@@ -1,44 +1,74 @@
-database = "/home/wismut/byteowlz/hstry/testdata/test.db"
+database = "testdata/test.db"
 
 [[sources]]
 id = "test-chatgpt"
 adapter = "chatgpt"
-path = "/home/wismut/byteowlz/hstry/testdata/chatgpt/conversations.json"
+path = "testdata/chatgpt/conversations.json"
 
 [[sources]]
 id = "test-claude-web"
 adapter = "claude-web"
-path = "/home/wismut/byteowlz/hstry/testdata/claude-web/claude-conversations.json"
+path = "testdata/claude-web/claude-conversations.json"
 
 [[sources]]
 id = "test-gemini"
 adapter = "gemini"
-path = "/home/wismut/byteowlz/hstry/testdata/gemini/gemini-conversations.json"
+path = "testdata/gemini/gemini-conversations.json"
 
 [[sources]]
 id = "test-opencode"
 adapter = "opencode"
-path = "/home/wismut/byteowlz/hstry/testdata/opencode"
+path = "testdata/opencode"
 
 [[sources]]
 id = "test-codex"
 adapter = "codex"
-path = "/home/wismut/byteowlz/hstry/testdata/codex"
+path = "testdata/codex"
 
 [[sources]]
 id = "test-claude-code"
 adapter = "claude-code"
-path = "/home/wismut/byteowlz/hstry/testdata/claude-code"
+path = "testdata/claude-code"
 
 [[sources]]
 id = "test-pi"
 adapter = "pi"
-path = "/home/wismut/byteowlz/hstry/testdata/pi"
+path = "testdata/pi"
 
 [[sources]]
 id = "test-aider"
 adapter = "aider"
-path = "/home/wismut/byteowlz/hstry/testdata/aider"
+path = "testdata/aider"
+
+[[sources]]
+id = "test-chatgpt-teams"
+adapter = "chatgpt-teams"
+path = "testdata/chatgpt-teams"
+
+[[sources]]
+id = "test-goose"
+adapter = "goose"
+path = "testdata/goose"
+
+[[sources]]
+id = "test-cursor"
+adapter = "cursor"
+path = "testdata/cursor"
+
+[[sources]]
+id = "test-jan"
+adapter = "jan"
+path = "testdata/jan/threads"
+
+[[sources]]
+id = "test-lmstudio"
+adapter = "lmstudio"
+path = "testdata/lmstudio"
+
+[[sources]]
+id = "test-openwebui"
+adapter = "openwebui"
+path = "testdata/openwebui"
 
 [service]
 enabled = false

@@ -50,6 +50,13 @@ if ! (cd "$PROJECT_ROOT" && cargo build --bin hstry 2>/dev/null); then
     exit 1
 fi
 
+has_sqlite_support=false
+if node -e "require('better-sqlite3')" >/dev/null 2>&1; then
+    has_sqlite_support=true
+else
+    log_info "better-sqlite3 not available; skipping sqlite-based adapter assertions"
+fi
+
 # Ensure test config exists with correct paths
 cat > "$TEST_CONFIG" << EOF
 database = "$TEST_DB"
@@ -93,6 +100,36 @@ path = "$SCRIPT_DIR/pi"
 id = "test-aider"
 adapter = "aider"
 path = "$SCRIPT_DIR/aider"
+
+[[sources]]
+id = "test-chatgpt-teams"
+adapter = "chatgpt-teams"
+path = "$SCRIPT_DIR/chatgpt-teams"
+
+[[sources]]
+id = "test-goose"
+adapter = "goose"
+path = "$SCRIPT_DIR/goose"
+
+[[sources]]
+id = "test-cursor"
+adapter = "cursor"
+path = "$SCRIPT_DIR/cursor"
+
+[[sources]]
+id = "test-jan"
+adapter = "jan"
+path = "$SCRIPT_DIR/jan/threads"
+
+[[sources]]
+id = "test-lmstudio"
+adapter = "lmstudio"
+path = "$SCRIPT_DIR/lmstudio"
+
+[[sources]]
+id = "test-openwebui"
+adapter = "openwebui"
+path = "$SCRIPT_DIR/openwebui"
 
 [service]
 enabled = false
@@ -155,6 +192,14 @@ else
     log_fail "ChatGPT adapter failed to parse title"
 fi
 
+# ChatGPT Teams
+teams_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-chatgpt-teams 2>/dev/null | jq '.result[0]')
+if echo "$teams_conv" | jq -e '.title == "Test ChatGPT Teams Conversation"' >/dev/null 2>&1; then
+    log_pass "ChatGPT Teams adapter parsed title correctly"
+else
+    log_fail "ChatGPT Teams adapter failed to parse title"
+fi
+
 # Claude Web
 claude_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-claude-web 2>/dev/null | jq '.result[0]')
 if echo "$claude_conv" | jq -e '.title == "Test Claude Web Conversation"' >/dev/null 2>&1; then
@@ -179,12 +224,36 @@ else
     log_fail "OpenCode adapter failed to parse title"
 fi
 
+# Goose
+goose_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-goose 2>/dev/null | jq '.result[0]')
+if echo "$goose_conv" | jq -e '.title == "Hello Goose!"' >/dev/null 2>&1; then
+    log_pass "Goose adapter parsed title correctly"
+else
+    log_fail "Goose adapter failed to parse title"
+fi
+
 # Pi
 pi_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-pi 2>/dev/null | jq '.result[0]')
 if echo "$pi_conv" | jq -e '.title == "Test Pi Session"' >/dev/null 2>&1; then
     log_pass "Pi adapter parsed title correctly"
 else
     log_fail "Pi adapter failed to parse title"
+fi
+
+# Jan
+jan_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-jan 2>/dev/null | jq '.result[0]')
+if echo "$jan_conv" | jq -e '.title == "Test Jan Thread"' >/dev/null 2>&1; then
+    log_pass "Jan adapter parsed title correctly"
+else
+    log_fail "Jan adapter failed to parse title"
+fi
+
+# LM Studio
+lmstudio_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-lmstudio 2>/dev/null | jq '.result[0]')
+if echo "$lmstudio_conv" | jq -e '.title == "Test LM Studio Conversation"' >/dev/null 2>&1; then
+    log_pass "LM Studio adapter parsed title correctly"
+else
+    log_fail "LM Studio adapter failed to parse title"
 fi
 
 # Aider
@@ -209,6 +278,30 @@ if echo "$claudecode_conv" | jq -e '.title == "Test Claude Code Session"' >/dev/
     log_pass "Claude Code adapter parsed title correctly"
 else
     log_fail "Claude Code adapter failed to parse title"
+fi
+
+# Cursor
+if [ "$has_sqlite_support" = "true" ]; then
+    cursor_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-cursor 2>/dev/null | jq '.result[0]')
+    if echo "$cursor_conv" | jq -e '.title == "Test Cursor Chat"' >/dev/null 2>&1; then
+        log_pass "Cursor adapter parsed title correctly"
+    else
+        log_fail "Cursor adapter failed to parse title"
+    fi
+else
+    log_info "Skipping Cursor adapter checks"
+fi
+
+# Open WebUI
+if [ "$has_sqlite_support" = "true" ]; then
+    openwebui_conv=$("$HSTRY" --config "$TEST_CONFIG" list --json --source test-openwebui 2>/dev/null | jq '.result[0]')
+    if echo "$openwebui_conv" | jq -e '.title == "Test Open WebUI Conversation"' >/dev/null 2>&1; then
+        log_pass "Open WebUI adapter parsed title correctly"
+    else
+        log_fail "Open WebUI adapter failed to parse title"
+    fi
+else
+    log_info "Skipping Open WebUI adapter checks"
 fi
 
 # Summary

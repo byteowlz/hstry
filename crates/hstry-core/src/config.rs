@@ -159,7 +159,7 @@ impl AdapterRepoSource {
 }
 
 fn default_git_ref() -> String {
-    "main".to_string()
+    format!("v{}", env!("CARGO_PKG_VERSION"))
 }
 
 fn default_adapters_path() -> String {

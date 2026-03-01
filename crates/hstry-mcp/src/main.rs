@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Parser};
 use rmcp::{
-    ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router,
+    ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
+    schemars, tool, tool_handler, tool_router,
     transport::io::stdio,
 };
 

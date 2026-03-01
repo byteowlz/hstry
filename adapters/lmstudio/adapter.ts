@@ -30,19 +30,40 @@ interface LMStudioConversation {
   createdAt?: string | number;
   updatedAt?: string | number;
   modelIdentifier?: string;
-  messages?: LMStudioMessage[];
+  messages?: LMStudioMessageEntry[];
   // Alternate formats
-  chat?: LMStudioMessage[];
-  history?: LMStudioMessage[];
+  chat?: LMStudioMessageEntry[];
+  history?: LMStudioMessageEntry[];
 }
 
-interface LMStudioMessage {
+interface LMStudioMessageEntry {
   role?: string;
   content?: string | LMStudioContentPart[];
   text?: string;
   timestamp?: string | number;
   createdAt?: string | number;
   model?: string;
+  versions?: LMStudioMessageVersion[];
+  currentlySelected?: number;
+}
+
+interface LMStudioMessageVersion {
+  type?: string;
+  role?: string;
+  content?: string | LMStudioContentPart[];
+  steps?: LMStudioMessageStep[];
+  senderInfo?: {
+    senderName?: string;
+  };
+  genInfo?: {
+    identifier?: string;
+    indexedModelIdentifier?: string;
+  };
+}
+
+interface LMStudioMessageStep {
+  type?: string;
+  content?: LMStudioContentPart[];
 }
 
 interface LMStudioContentPart {
@@ -158,6 +179,7 @@ function isLMStudioConversation(data: unknown): boolean {
     if (msgs.length > 0 && msgs[0] && typeof msgs[0] === 'object') {
       const first = msgs[0] as Record<string, unknown>;
       if (first.role && first.content !== undefined) return true;
+      if (Array.isArray(first.versions)) return true;
     }
   }
   if (obj.chat && Array.isArray(obj.chat)) return true;
@@ -218,32 +240,72 @@ function extractMessages(raw: LMStudioConversation): Message[] {
 
   for (const entry of msgArray) {
     if (!entry || typeof entry !== 'object') continue;
-    const msg = entry as LMStudioMessage;
+    const msg = entry as LMStudioMessageEntry;
 
-    const role = msg.role;
+    const version = selectVersion(msg);
+    const role = version?.role ?? msg.role;
     if (!role) continue;
 
-    const content = extractContent(msg);
+    const content = extractMessageContent(msg, version);
     if (!content) continue;
 
     const createdAt = parseTimestamp(msg.timestamp ?? msg.createdAt);
+    const model =
+      version?.senderInfo?.senderName ??
+      version?.genInfo?.identifier ??
+      version?.genInfo?.indexedModelIdentifier ??
+      msg.model;
 
     messages.push({
       role: mapRole(role),
       content,
       parts: textOnlyParts(content),
       createdAt,
-      model: msg.model,
+      model,
     });
   }
 
   return messages;
 }
 
-function extractContent(msg: LMStudioMessage): string {
-  if (msg.text) return msg.text.trim();
+function selectVersion(message: LMStudioMessageEntry): LMStudioMessageVersion | undefined {
+  const versions = message.versions ?? [];
+  if (versions.length === 0) return undefined;
+  const index = message.currentlySelected ?? 0;
+  return versions[index] ?? versions[0];
+}
 
-  const content = msg.content;
+function extractMessageContent(
+  message: LMStudioMessageEntry,
+  version?: LMStudioMessageVersion
+): string {
+  if (version?.content) {
+    const content = extractContentFromValue(version.content);
+    if (content) return content;
+  }
+
+  if (version?.steps) {
+    const content = extractContentFromSteps(version.steps);
+    if (content) return content;
+  }
+
+  if (message.text) return message.text.trim();
+  return extractContentFromValue(message.content);
+}
+
+function extractContentFromSteps(steps: LMStudioMessageStep[]): string {
+  const parts: string[] = [];
+  for (const step of steps) {
+    if (step.type !== 'contentBlock' || !step.content) continue;
+    const content = extractContentFromValue(step.content);
+    if (content) parts.push(content);
+  }
+  return parts.join('\n').trim();
+}
+
+function extractContentFromValue(
+  content?: string | LMStudioContentPart[]
+): string {
   if (!content) return '';
 
   if (typeof content === 'string') return content.trim();

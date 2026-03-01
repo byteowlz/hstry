@@ -79,6 +79,9 @@ hstry source add ~/.codex/sessions
 # Sync all sources
 hstry sync
 
+# Control sync concurrency
+hstry sync --parallel 2
+
 # Import a one-off export directory
 hstry import ~/Downloads/chatgpt-export
 
@@ -100,7 +103,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | Command | Description |
 |---------|-------------|
 | `scan` | Detect chat history sources on the system |
-| `sync` | Import conversations from all configured sources (resets cursor if source is empty) |
+| `sync` | Import conversations from all configured sources in parallel (resets cursor if source is empty) |
 | `import <path>` | One-off import with auto-detected adapter |
 | `search <query>` | Full-text search across all messages |
 | `index` | Build or refresh the search index |
@@ -112,6 +115,10 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | `adapters list/add/enable/disable` | Manage adapters |
 | `adapters repo ...` | Manage adapter repositories (git/archive/local) |
 | `remote add/list/remove/test/fetch/sync/status` | Manage remote hosts and sync |
+
+Adapter installs are version-pinned to the hstry binary. Run `hstry adapters update`
+whenever you upgrade, and the CLI will refuse to sync if adapter manifests do not
+match the current hstry version.
 | `service enable/disable/start/run/restart/stop/status` | Control background sync service |
 | `config show/path/edit` | Manage configuration |
 | `stats` | Show database statistics |

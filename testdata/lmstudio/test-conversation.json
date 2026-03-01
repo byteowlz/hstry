@@ -1,0 +1,46 @@
+{
+  "id": "lmstudio_test_1",
+  "title": "Test LM Studio Conversation",
+  "createdAt": 1746605587520,
+  "updatedAt": 1746605589520,
+  "messages": [
+    {
+      "versions": [
+        {
+          "type": "singleStep",
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Hello LM Studio!"
+            }
+          ]
+        }
+      ],
+      "currentlySelected": 0
+    },
+    {
+      "versions": [
+        {
+          "type": "multiStep",
+          "role": "assistant",
+          "senderInfo": {
+            "senderName": "lmstudio-model-1"
+          },
+          "steps": [
+            {
+              "type": "contentBlock",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Hello from LM Studio."
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "currentlySelected": 0
+    }
+  ]
+}

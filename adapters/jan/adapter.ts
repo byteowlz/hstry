@@ -11,11 +11,20 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
+  ToolCall,
 } from '../types/index.ts';
-import { runAdapter, textOnlyParts } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  textPart,
+  thinkingPart,
+  toolCallPart,
+  toolResultPart,
+} from '../types/index.ts';
 
 // Platform-specific paths
 const DEFAULT_PATHS = [
@@ -59,6 +68,11 @@ interface JanMessage {
 interface JanContent {
   type?: string;
   text?: { value?: string; annotations?: unknown[] };
+  image_url?: { url?: string; detail?: string };
+  tool_call_id?: string;
+  tool_name?: string;
+  input?: unknown;
+  output?: unknown;
 }
 
 const adapter: Adapter = {
@@ -208,15 +222,18 @@ async function parseThread(threadPath: string, opts?: ParseOptions): Promise<Con
 function parseMessage(msg: JanMessage): Message | null {
   if (!msg.role) return null;
 
-  const content = extractContent(msg.content);
-  if (!content) return null;
+  const extracted = extractContentParts(msg.content, msg.id);
+  if (!extracted) return null;
+
+  const parts = extracted.parts ?? textOnlyParts(extracted.content);
 
   return {
     role: mapRole(msg.role),
-    content,
-    parts: textOnlyParts(content),
+    content: extracted.content,
+    parts,
     createdAt: parseTimestamp(msg.created ?? msg.created_at),
     model: msg.model,
+    toolCalls: extracted.toolCalls,
     metadata: {
       id: msg.id,
       status: msg.status,
@@ -225,16 +242,72 @@ function parseMessage(msg: JanMessage): Message | null {
   };
 }
 
-function extractContent(content?: JanContent[]): string {
-  if (!content || !Array.isArray(content)) return '';
+function extractContentParts(
+  content?: JanContent[],
+  messageId?: string
+): { content: string; parts?: CanonPart[]; toolCalls?: ToolCall[] } | null {
+  if (!content || !Array.isArray(content)) return null;
 
-  const parts: string[] = [];
-  for (const item of content) {
+  const parts: CanonPart[] = [];
+  const textBlocks: string[] = [];
+  const toolCalls: ToolCall[] = [];
+
+  content.forEach((item, index) => {
+    if (!item) return;
+
     if (item.type === 'text' && item.text?.value) {
-      parts.push(item.text.value);
+      textBlocks.push(item.text.value);
+      parts.push(textPart(item.text.value));
+      return;
     }
+
+    if (item.type === 'reasoning' && item.text?.value) {
+      textBlocks.push(item.text.value);
+      parts.push(thinkingPart(item.text.value));
+      return;
+    }
+
+    if (item.type === 'image_url' && item.image_url?.url) {
+      const label = `[image: ${item.image_url.url}]`;
+      textBlocks.push(label);
+      parts.push(textPart(label));
+      return;
+    }
+
+    if (item.type === 'tool_call') {
+      const toolName = item.tool_name ?? 'tool';
+      const toolCallId = item.tool_call_id ?? `${messageId ?? 'tool'}-${index}`;
+
+      if (item.input !== undefined) {
+        parts.push(toolCallPart(toolCallId, toolName, item.input));
+      }
+      if (item.output !== undefined) {
+        parts.push(toolResultPart(toolCallId, item.output, { name: toolName }));
+      }
+
+      toolCalls.push({
+        toolName,
+        input: item.input,
+        output: typeof item.output === 'string' ? item.output : undefined,
+        status: item.output !== undefined ? 'success' : 'pending',
+      });
+    }
+  });
+
+  let text = textBlocks.join('\n').trim();
+  if (!text && toolCalls.length > 0) {
+    text = toolCalls
+      .map(call => `Tool call: ${call.toolName}`)
+      .join('\n');
   }
-  return parts.join('\n').trim();
+
+  if (!text && parts.length === 0) return null;
+
+  return {
+    content: text,
+    parts: parts.length > 0 ? parts : undefined,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+  };
 }
 
 function mapRole(role: string): Message['role'] {
@@ -326,12 +399,51 @@ function buildJanFiles(conversations: Conversation[]): { path: string; content: 
 
     // messages.jsonl
     const messageLines = conv.messages.map((msg, idx) => {
+      const contentParts: JanContent[] = [];
+
+      if (msg.parts && msg.parts.length > 0) {
+        for (const part of msg.parts) {
+          if (part.type === 'text') {
+            contentParts.push({
+              type: 'text',
+              text: { value: part.text, annotations: [] },
+            });
+          } else if (part.type === 'thinking') {
+            contentParts.push({
+              type: 'reasoning',
+              text: { value: part.text, annotations: [] },
+            });
+          } else if (part.type === 'tool_call') {
+            contentParts.push({
+              type: 'tool_call',
+              tool_call_id: part.toolCallId,
+              tool_name: part.name,
+              input: part.input,
+            });
+          } else if (part.type === 'tool_result') {
+            contentParts.push({
+              type: 'tool_call',
+              tool_call_id: part.toolCallId,
+              tool_name: part.name,
+              output: part.output,
+            });
+          }
+        }
+      }
+
+      if (contentParts.length === 0) {
+        contentParts.push({
+          type: 'text',
+          text: { value: msg.content, annotations: [] },
+        });
+      }
+
       const janMsg: JanMessage = {
         id: `msg_${idx}`,
         object: 'thread.message',
         thread_id: threadId,
         role: msg.role,
-        content: [{ type: 'text', text: { value: msg.content } }],
+        content: contentParts,
         status: 'ready',
         created: msg.createdAt ? Math.floor(msg.createdAt / 1000) : undefined,
         model: msg.model,

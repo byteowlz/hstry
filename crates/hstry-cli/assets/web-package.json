@@ -1,0 +1,8 @@
+{
+  "name": "hstry-web-runner",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.43.0"
+  }
+}

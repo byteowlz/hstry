@@ -73,6 +73,18 @@ cargo install --path .
 # Quickstart: scan, add sources, and sync
 hstry quickstart
 
+# Install Playwright browsers (web automation)
+hstry web install
+
+# Login to a web provider (headful for first login)
+hstry web login chatgpt
+
+# Sync web providers (uses saved sessions)
+hstry web sync --provider chatgpt
+
+# Note: web sync currently supports ChatGPT (including multiple workspaces).
+# Claude and Gemini sync support is planned.
+
 # Scan for supported chat history sources
 hstry scan
 
@@ -106,6 +118,10 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | Command | Description |
 |---------|-------------|
 | `quickstart` | Scan known paths, add sources, and sync everything |
+| `web install` | Install Playwright browsers for web automation |
+| `web login` | Login to a web provider and store session state |
+| `web sync` | Sync web providers and import chats |
+| `web status` | Show web login and sync status |
 | `scan` | Detect chat history sources on the system |
 | `sync` | Import conversations from all configured sources in parallel (resets cursor if source is empty) |
 | `import <path>` | One-off import with auto-detected adapter |

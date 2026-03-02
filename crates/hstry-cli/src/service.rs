@@ -909,6 +909,8 @@ struct ServiceState {
     watcher: RecommendedWatcher,
     event_rx: mpsc::Receiver<PathBuf>,
     last_remote_sync: Instant,
+    /// Track when the last event-triggered sync completed to enforce a cooldown.
+    last_event_sync: Instant,
     /// Track consecutive failures per source for exponential backoff.
     /// Maps source_id -> (consecutive_failures, next_retry_after).
     source_backoff: HashMap<String, (u32, Instant)>,
@@ -946,6 +948,7 @@ impl ServiceState {
             watcher,
             event_rx,
             last_remote_sync: Instant::now(),
+            last_event_sync: Instant::now() - Duration::from_secs(300), // allow immediate first sync
             source_backoff: HashMap::new(),
         };
 
@@ -1023,17 +1026,30 @@ impl ServiceState {
         Ok(())
     }
 
-    /// Process a batch of file-watcher events efficiently: discover new sources
-    /// from all paths, then sync once.
+    /// Process a batch of file-watcher events efficiently.
+    ///
+    /// Only syncs sources whose paths overlap with the changed files, avoiding
+    /// a full sync of all sources on every file change. Also enforces a minimum
+    /// cooldown between event-triggered syncs to prevent tight loops when a
+    /// source writes continuously (e.g., an active coding session).
     async fn handle_events_batch(&mut self, paths: Vec<PathBuf>) -> Result<()> {
+        // Enforce a minimum cooldown between event-triggered syncs.
+        // The poll-interval tick handles full periodic syncs; event batches
+        // should only provide faster feedback for changed sources.
+        const EVENT_SYNC_COOLDOWN_SECS: u64 = 10;
+        if self.last_event_sync.elapsed() < Duration::from_secs(EVENT_SYNC_COOLDOWN_SECS) {
+            return Ok(());
+        }
+
         let _ = self.reload_config_if_needed().await?;
         // Deduplicate paths
         let unique_paths: HashSet<PathBuf> = paths.into_iter().collect();
-        for path in unique_paths {
-            self.discover_from_path(&path).await?;
+        for path in &unique_paths {
+            self.discover_from_path(path).await?;
         }
-        self.sync_existing_sources().await?;
+        self.sync_sources_for_paths(&unique_paths).await?;
         self.sync_remotes_if_due().await?;
+        self.last_event_sync = Instant::now();
         Ok(())
     }
 
@@ -1359,6 +1375,115 @@ impl ServiceState {
         if total_indexed > 0 {
             println!("Indexed {total_indexed} messages for search.");
         }
+        Ok(())
+    }
+
+    /// Sync only sources whose path overlaps with the given set of changed paths.
+    ///
+    /// A source is considered affected if any changed path starts with (is under)
+    /// the source's configured path, or vice versa.
+    async fn sync_sources_for_paths(&mut self, changed_paths: &HashSet<PathBuf>) -> Result<()> {
+        let sources = self.db.list_sources().await?;
+        let now = Instant::now();
+
+        // Canonicalize changed paths for reliable prefix matching
+        let canonical_changed: Vec<PathBuf> = changed_paths
+            .iter()
+            .filter_map(|p| p.canonicalize().ok().or_else(|| Some(p.clone())))
+            .collect();
+
+        let mut any_synced = false;
+
+        for source in &sources {
+            if !self.enabled_adapters.contains(&source.adapter) {
+                continue;
+            }
+            if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id)
+                && !auto_sync
+            {
+                continue;
+            }
+
+            // Check if this source's path overlaps with any changed path
+            let source_path = match &source.path {
+                Some(p) => {
+                    let expanded = Config::expand_path(p);
+                    expanded.canonicalize().unwrap_or(expanded)
+                }
+                None => continue,
+            };
+
+            let affected = canonical_changed.iter().any(|changed| {
+                changed.starts_with(&source_path) || source_path.starts_with(changed)
+            });
+
+            if !affected {
+                continue;
+            }
+
+            // Check backoff
+            if let Some((_failures, retry_after)) = self.source_backoff.get(&source.id) {
+                if now < *retry_after {
+                    continue;
+                }
+            }
+
+            println!(
+                "Syncing {id} ({adapter})...",
+                id = source.id,
+                adapter = source.adapter
+            );
+            match sync::sync_source(&self.db, &self.runner, source).await {
+                Ok(result) => {
+                    self.source_backoff.remove(&source.id);
+                    any_synced = true;
+                    if result.conversations > 0 {
+                        println!(
+                            "  Synced {count} conversations",
+                            count = result.conversations
+                        );
+                    } else {
+                        println!("  No new conversations");
+                    }
+                }
+                Err(err) => {
+                    eprintln!("  Error: {err}");
+                    let (prev_failures, _) = self
+                        .source_backoff
+                        .get(&source.id)
+                        .copied()
+                        .unwrap_or((0, now));
+                    let failures = prev_failures + 1;
+                    let backoff_secs =
+                        (30u64 * 2u64.saturating_pow(failures.saturating_sub(1))).min(300);
+                    let retry_after = now + Duration::from_secs(backoff_secs);
+                    self.source_backoff
+                        .insert(source.id.clone(), (failures, retry_after));
+                    eprintln!("  Will retry in {backoff_secs}s (failure #{failures})",);
+                }
+            }
+        }
+
+        // Index any new messages from the targeted syncs
+        if any_synced {
+            let index_path = self.config.search_index_path();
+            let batch_size = self.config.search.index_batch_size;
+            let mut total_indexed = 0usize;
+            loop {
+                let indexed =
+                    search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
+                        .await
+                        .context("Indexing new messages for search")?;
+                total_indexed += indexed;
+                if indexed < batch_size {
+                    break;
+                }
+            }
+            if total_indexed > 0 {
+                println!("Indexed {total_indexed} messages for search.");
+            }
+        }
+
         Ok(())
     }
 }

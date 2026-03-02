@@ -53,6 +53,8 @@ interface RawConversation {
   update_time?: number;
   mapping?: ConversationMap;
   current_node?: string;
+  workspace_id?: string;
+  workspace_title?: string;
 }
 
 const adapter: Adapter = {
@@ -188,9 +190,12 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
     createdAt,
     updatedAt,
     model,
+    workspace: entry.workspace_title ?? entry.workspace_id,
     messages,
     metadata: {
       currentNode: entry.current_node,
+      workspaceId: entry.workspace_id,
+      workspaceTitle: entry.workspace_title,
     },
   };
 

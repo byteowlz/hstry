@@ -337,6 +337,12 @@ enum Command {
         command: RemoteCommand,
     },
 
+    /// Manage web-app automation
+    Web {
+        #[command(subcommand)]
+        command: WebCommand,
+    },
+
     /// Show or manage configuration
     Config {
         #[command(subcommand)]
@@ -354,6 +360,48 @@ enum ConfigCommand {
 
     /// Open config in editor
     Edit,
+}
+
+#[derive(Debug, Subcommand)]
+enum WebCommand {
+    /// Install Playwright browsers for web automation
+    Install {
+        /// Browser to install (chromium, firefox, webkit)
+        #[arg(long, default_value = "chromium")]
+        browser: String,
+    },
+
+    /// Login to a web provider and store session state
+    Login {
+        /// Provider name (chatgpt, claude, gemini)
+        provider: String,
+
+        /// Run in headful mode
+        #[arg(long)]
+        headful: bool,
+
+        /// Browser to use (chromium, firefox, webkit)
+        #[arg(long)]
+        browser: Option<String>,
+    },
+
+    /// Sync web providers and import chats
+    Sync {
+        /// Provider name (chatgpt, claude, gemini)
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Run in headful mode
+        #[arg(long)]
+        headful: bool,
+
+        /// Browser to use (chromium, firefox, webkit)
+        #[arg(long)]
+        browser: Option<String>,
+    },
+
+    /// Show web login and sync status
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -910,6 +958,10 @@ async fn main() -> Result<()> {
         Command::Remote { command } => {
             let db = Database::open(&config.database).await?;
             cmd_remote(&db, &config, &config_path, command, cli.json).await
+        }
+        Command::Web { command } => {
+            let db = Database::open(&config.database).await?;
+            cmd_web(&db, &config, &config_path, command, cli.json).await
         }
         Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
     }
@@ -2362,6 +2414,433 @@ struct QuickstartSummary {
     sources_added: Vec<serde_json::Value>,
     sources_skipped: usize,
     sync: SyncSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct WebInstallResult {
+    browser: String,
+    command: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WebLoginResult {
+    provider: String,
+    storage_state: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WebSyncResult {
+    provider: String,
+    export_path: String,
+    sources: SyncSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct WebStatusEntry {
+    provider: String,
+    logged_in: bool,
+    last_sync: Option<String>,
+    export_path: Option<String>,
+}
+
+async fn cmd_web(
+    db: &Database,
+    config: &Config,
+    config_path: &Path,
+    command: WebCommand,
+    json: bool,
+) -> Result<()> {
+    match command {
+        WebCommand::Install { browser } => cmd_web_install(&browser, json),
+        WebCommand::Login {
+            provider,
+            headful,
+            browser,
+        } => cmd_web_login(&provider, headful, browser.as_deref(), json),
+        WebCommand::Sync {
+            provider,
+            headful,
+            browser,
+        } => {
+            cmd_web_sync(
+                db,
+                config,
+                config_path,
+                provider.as_deref(),
+                headful,
+                browser.as_deref(),
+                json,
+            )
+            .await
+        }
+        WebCommand::Status => cmd_web_status(json),
+    }
+}
+
+fn cmd_web_install(browser: &str, json: bool) -> Result<()> {
+    let browser = browser.to_lowercase();
+    let supported = ["chromium", "firefox", "webkit"];
+    if !supported.contains(&browser.as_str()) {
+        anyhow::bail!("Unsupported browser: {browser}");
+    }
+
+    let web_dir = web_runner_dir()?;
+    ensure_web_runner(&web_dir)?;
+
+    let bun_path = which::which("bun").map_err(|_| {
+        anyhow::anyhow!("Bun is required to install Playwright. Install bun and retry.")
+    })?;
+
+    let mut install_cmd = ProcessCommand::new(bun_path);
+    install_cmd.arg("install").current_dir(&web_dir);
+    let output = install_cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Playwright install failed: {stderr}");
+    }
+
+    let (command, mut cmd) = if which::which("playwright").is_ok() {
+        let mut cmd = ProcessCommand::new("playwright");
+        cmd.arg("install").arg(&browser);
+        ("playwright install".to_string(), cmd)
+    } else if which::which("bunx").is_ok() {
+        let mut cmd = ProcessCommand::new("bunx");
+        cmd.arg("playwright").arg("install").arg(&browser);
+        ("bunx playwright install".to_string(), cmd)
+    } else if which::which("npx").is_ok() {
+        let mut cmd = ProcessCommand::new("npx");
+        cmd.arg("playwright").arg("install").arg(&browser);
+        ("npx playwright install".to_string(), cmd)
+    } else {
+        anyhow::bail!("Playwright not found. Install bun or node, then retry.");
+    };
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Playwright install failed: {stderr}");
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(WebInstallResult {
+                browser: browser.to_string(),
+                command,
+            }),
+            error: None,
+        });
+    }
+
+    println!("Playwright installed for {browser}.");
+    Ok(())
+}
+
+fn cmd_web_login(provider: &str, headful: bool, browser: Option<&str>, json: bool) -> Result<()> {
+    let provider = normalize_provider(provider)?;
+    let web_dir = web_runner_dir()?;
+    ensure_web_runner(&web_dir)?;
+
+    let storage_state = web_sessions_dir()?.join(format!("{provider}.json"));
+    let headful = if headful {
+        true
+    } else {
+        if !json {
+            println!("Login requires a visible browser. Launching headful session...");
+        }
+        true
+    };
+
+    let args = build_web_args("login", &provider, headful, browser, &storage_state, None);
+
+    run_web_runner(&web_dir, &args)?;
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(WebLoginResult {
+                provider,
+                storage_state: storage_state.to_string_lossy().to_string(),
+            }),
+            error: None,
+        });
+    }
+
+    println!("Logged in to {provider}.");
+    Ok(())
+}
+
+async fn cmd_web_sync(
+    db: &Database,
+    config: &Config,
+    config_path: &Path,
+    provider: Option<&str>,
+    headful: bool,
+    browser: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let mut config = config.clone();
+    let providers = normalize_provider_list(provider)?;
+
+    let web_dir = web_runner_dir()?;
+    ensure_web_runner(&web_dir)?;
+
+    let mut results = Vec::new();
+
+    let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+        anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+    })?;
+    let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+
+    for provider in providers {
+        let storage_state = web_sessions_dir()?.join(format!("{provider}.json"));
+        if !storage_state.exists() {
+            anyhow::bail!(
+                "No login session found for {provider}. Run 'hstry web login {provider}'."
+            );
+        }
+
+        let export_dir = web_exports_dir()?.join(&provider);
+        let export_path = export_dir.join("conversations.json");
+
+        let args = build_web_args(
+            "sync",
+            &provider,
+            headful,
+            browser,
+            &storage_state,
+            Some(&export_path),
+        );
+        run_web_runner(&web_dir, &args)?;
+
+        let adapter = match provider.as_str() {
+            "chatgpt" => "chatgpt",
+            "claude" => "claude-web",
+            "gemini" => "gemini",
+            _ => "chatgpt",
+        };
+
+        let source_id = format!("web-{provider}");
+        if !config.sources.iter().any(|s| s.id == source_id) {
+            config.sources.push(hstry_core::config::SourceConfig {
+                id: source_id.clone(),
+                adapter: adapter.to_string(),
+                path: export_path.to_string_lossy().to_string(),
+                auto_sync: true,
+            });
+            config.save_to_path(config_path)?;
+        }
+
+        ensure_config_sources(db, &config).await?;
+        let stats =
+            sync_sources(db, &runner, &config, Some(source_id.clone()), None, !json).await?;
+
+        let summary = SyncSummary {
+            total_sources: stats.len(),
+            total_conversations: stats.iter().map(|s| s.conversations).sum(),
+            total_messages: stats.iter().map(|s| s.messages).sum(),
+            sources: stats,
+        };
+
+        results.push(WebSyncResult {
+            provider: provider.to_string(),
+            export_path: export_path.to_string_lossy().to_string(),
+            sources: summary,
+        });
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(results),
+            error: None,
+        });
+    }
+
+    for result in &results {
+        println!(
+            "Synced {provider} to {path}.",
+            provider = result.provider,
+            path = result.export_path
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_web_status(json: bool) -> Result<()> {
+    let providers = normalize_provider_list(None)?;
+    let mut statuses = Vec::new();
+
+    for provider in providers {
+        let storage_state = web_sessions_dir()?.join(format!("{provider}.json"));
+        let export_path = web_exports_dir()?
+            .join(&provider)
+            .join("conversations.json");
+        let logged_in = storage_state.exists();
+        let last_sync = if export_path.exists() {
+            std::fs::metadata(&export_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339())
+        } else {
+            None
+        };
+
+        statuses.push(WebStatusEntry {
+            provider,
+            logged_in,
+            last_sync,
+            export_path: export_path
+                .exists()
+                .then(|| export_path.to_string_lossy().to_string()),
+        });
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(statuses),
+            error: None,
+        });
+    }
+
+    for status in &statuses {
+        let login_status = if status.logged_in {
+            "logged in"
+        } else {
+            "not logged in"
+        };
+        println!("{provider}: {login_status}", provider = status.provider);
+        if let Some(last_sync) = &status.last_sync {
+            println!("  Last sync: {last_sync}");
+        }
+    }
+
+    Ok(())
+}
+
+fn web_runner_dir() -> Result<PathBuf> {
+    let config_dir = xdg_config_dir();
+    Ok(config_dir.join("hstry").join("web"))
+}
+
+fn web_sessions_dir() -> Result<PathBuf> {
+    Ok(xdg_data_dir().join("hstry").join("web-sessions"))
+}
+
+fn web_exports_dir() -> Result<PathBuf> {
+    Ok(xdg_data_dir().join("hstry").join("web-exports"))
+}
+
+fn ensure_web_runner(web_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(web_dir)?;
+
+    let script_path = web_dir.join("web-runner.ts");
+    let package_path = web_dir.join("package.json");
+
+    std::fs::write(script_path, include_str!("../assets/web-runner.ts"))?;
+    std::fs::write(package_path, include_str!("../assets/web-package.json"))?;
+
+    Ok(())
+}
+
+fn build_web_args(
+    command: &str,
+    provider: &str,
+    headful: bool,
+    browser: Option<&str>,
+    storage_state: &Path,
+    output: Option<&Path>,
+) -> Vec<String> {
+    let mut args = vec![
+        "run".to_string(),
+        "web-runner.ts".to_string(),
+        command.to_string(),
+        "--provider".to_string(),
+        provider.to_string(),
+        "--storage-state".to_string(),
+        storage_state.to_string_lossy().to_string(),
+    ];
+
+    if headful {
+        args.push("--headful".to_string());
+    }
+
+    if let Some(browser) = browser {
+        args.push("--browser".to_string());
+        args.push(browser.to_string());
+    }
+
+    if let Some(output) = output {
+        args.push("--output".to_string());
+        args.push(output.to_string_lossy().to_string());
+    }
+
+    args
+}
+
+fn run_web_runner(web_dir: &Path, args: &[String]) -> Result<()> {
+    let bun_path = which::which("bun")
+        .map_err(|_| anyhow::anyhow!("Bun is required to run web automation."))?;
+
+    let output = ProcessCommand::new(bun_path)
+        .args(args)
+        .current_dir(web_dir)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Web runner failed: {stderr}");
+    }
+
+    Ok(())
+}
+
+fn normalize_provider(provider: &str) -> Result<String> {
+    let provider = provider.to_lowercase();
+    match provider.as_str() {
+        "chatgpt" | "claude" | "gemini" => Ok(provider),
+        _ => anyhow::bail!("Unsupported provider: {provider}"),
+    }
+}
+
+fn normalize_provider_list(provider: Option<&str>) -> Result<Vec<String>> {
+    if let Some(provider) = provider {
+        return Ok(vec![normalize_provider(provider)?]);
+    }
+
+    Ok(vec![
+        "chatgpt".to_string(),
+        "claude".to_string(),
+        "gemini".to_string(),
+    ])
+}
+
+fn xdg_config_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
+    }
+    if cfg!(unix) {
+        dirs::home_dir().map_or_else(|| PathBuf::from("."), |h| h.join(".config"))
+    } else {
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+fn xdg_data_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg);
+    }
+    if cfg!(unix) {
+        dirs::home_dir().map_or_else(|| PathBuf::from("."), |h| h.join(".local").join("share"))
+    } else {
+        dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 async fn cmd_quickstart(

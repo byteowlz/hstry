@@ -2382,7 +2382,11 @@ fn copy_adapters_from(
     }
 
     let dest_manifest = dest_root.join(".hstry-adapters.json");
-    std::fs::copy(&manifest_path, &dest_manifest)?;
+    let manifest = adapter_manifest::AdapterManifest {
+        hstry_version: adapter_manifest::expected_hstry_version(),
+        protocol_version: adapter_manifest::ADAPTER_PROTOCOL_VERSION.to_string(),
+    };
+    std::fs::write(&dest_manifest, serde_json::to_string_pretty(&manifest)?)?;
 
     Ok(adapters)
 }
@@ -2736,11 +2740,25 @@ fn web_exports_dir() -> Result<PathBuf> {
 fn ensure_web_runner(web_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(web_dir)?;
 
+    let version_path = web_dir.join(".hstry-web-version");
+    let expected_version = env!("CARGO_PKG_VERSION");
+    let current_version = std::fs::read_to_string(&version_path)
+        .ok()
+        .map(|value| value.trim().to_string());
+
+    if current_version.as_deref() != Some(expected_version) {
+        let node_modules = web_dir.join("node_modules");
+        if node_modules.exists() {
+            std::fs::remove_dir_all(node_modules)?;
+        }
+    }
+
     let script_path = web_dir.join("web-runner.ts");
     let package_path = web_dir.join("package.json");
 
     std::fs::write(script_path, include_str!("../assets/web-runner.ts"))?;
     std::fs::write(package_path, include_str!("../assets/web-package.json"))?;
+    std::fs::write(version_path, expected_version)?;
 
     Ok(())
 }

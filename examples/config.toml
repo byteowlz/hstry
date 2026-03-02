@@ -1,5 +1,6 @@
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
+
 # Example hstry configuration
-# Schema: https://raw.githubusercontent.com/byteowlz/schemas/main/hstry/hstry.config.schema.json
 
 # Path to the hstry database
 database = "~/.local/share/hstry/hstry.db"
@@ -40,6 +41,23 @@ enabled = false
 poll_interval_secs = 30
 search_api = true
 # search_port = 3000
+
+# Web automation settings
+[web]
+enabled = false
+headless = true
+sync_interval_secs = 900
+full_refresh_interval_secs = 86400
+# storage_dir = "~/.local/share/hstry/web-exports"
+
+[web.providers.chatgpt]
+enabled = false
+
+[web.providers.claude]
+enabled = false
+
+[web.providers.gemini]
+enabled = false
 
 # =============================================================================
 # Source Examples

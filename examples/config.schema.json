@@ -1,9 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "hstry config",
+  "$id": "https://github.com/byteowlz/hstry/schemas/config.schema.json",
+  "title": "hstry configuration",
+  "description": "Configuration schema for hstry",
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor support"
+    },
     "database": {
       "type": "string",
       "description": "Path to the hstry database file."
@@ -12,6 +18,11 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Directories to search for adapters."
+    },
+    "adapter_repos": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/AdapterRepo" },
+      "description": "Adapter repositories for updates."
     },
     "js_runtime": {
       "type": "string",
@@ -42,8 +53,14 @@
       "type": "array",
       "items": { "$ref": "#/definitions/RemoteConfig" }
     },
+    "sync": {
+      "$ref": "#/definitions/SyncConfig"
+    },
     "search": {
       "$ref": "#/definitions/SearchConfig"
+    },
+    "web": {
+      "$ref": "#/definitions/WebConfig"
     }
   },
   "required": [
@@ -65,6 +82,19 @@
       },
       "required": ["name"]
     },
+    "AdapterRepo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "enabled": { "type": "boolean", "default": true },
+        "type": { "type": "string", "enum": ["git", "archive", "local"] },
+        "url": { "type": "string" },
+        "git_ref": { "type": "string" },
+        "path": { "type": "string" }
+      },
+      "required": ["name", "type"]
+    },
     "ServiceConfig": {
       "type": "object",
       "additionalProperties": false,
@@ -72,7 +102,8 @@
         "enabled": { "type": "boolean", "default": false },
         "poll_interval_secs": { "type": "integer", "minimum": 1, "default": 30 },
         "search_api": { "type": "boolean", "default": true },
-        "search_port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 }
+        "search_port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
+        "transport": { "type": "string", "enum": ["tcp", "unix"], "default": "tcp" }
       },
       "required": ["enabled", "poll_interval_secs"]
     },
@@ -100,12 +131,50 @@
       },
       "required": ["name", "host"]
     },
+    "SyncConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["standalone", "hub", "satellite"], "default": "standalone" },
+        "device_id": { "type": ["string", "null"] },
+        "hub_remote": { "type": ["string", "null"] },
+        "auto_sync": { "type": "boolean", "default": false },
+        "auto_sync_interval_secs": { "type": "integer", "minimum": 1, "default": 300 }
+      }
+    },
     "SearchConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "index_path": { "type": ["string", "null"] },
         "index_batch_size": { "type": "integer", "minimum": 1, "default": 500 }
+      }
+    },
+    "WebConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "headless": { "type": "boolean", "default": true },
+        "sync_interval_secs": { "type": "integer", "minimum": 1, "default": 900 },
+        "full_refresh_interval_secs": { "type": "integer", "minimum": 1, "default": 86400 },
+        "storage_dir": { "type": ["string", "null"] },
+        "providers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chatgpt": { "$ref": "#/definitions/WebProviderConfig" },
+            "claude": { "$ref": "#/definitions/WebProviderConfig" },
+            "gemini": { "$ref": "#/definitions/WebProviderConfig" }
+          }
+        }
+      }
+    },
+    "WebProviderConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false }
       }
     }
   }

@@ -175,6 +175,8 @@ hstry follows XDG Base Directory specifications:
 Default config: `~/.config/hstry/config.toml`
 
 ```toml
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
+
 database = "~/.local/share/hstry/hstry.db"
 adapter_paths = ["~/.config/hstry/adapters"]
 js_runtime = "auto"  # bun, deno, or node
@@ -188,6 +190,10 @@ enabled = false
 poll_interval_secs = 30
 search_api = true
 # search_port = 3000
+
+[web]
+enabled = false
+headless = true
 
 [search]
 # index_path = "~/.local/share/hstry/search"

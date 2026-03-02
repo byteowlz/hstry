@@ -50,6 +50,9 @@ pub struct Config {
 
     /// Search configuration.
     pub search: SearchConfig,
+
+    /// Web automation configuration.
+    pub web: WebConfig,
 }
 
 /// Search configuration for indexing.
@@ -66,6 +69,73 @@ pub struct SearchConfig {
 
 fn default_index_batch_size() -> usize {
     500
+}
+
+/// Web automation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Enable web automation.
+    pub enabled: bool,
+
+    /// Run web syncs in headless mode.
+    pub headless: bool,
+
+    /// Sync interval in seconds.
+    pub sync_interval_secs: u64,
+
+    /// Full refresh interval in seconds.
+    pub full_refresh_interval_secs: u64,
+
+    /// Optional storage directory for web exports.
+    pub storage_dir: Option<String>,
+
+    /// Provider configuration.
+    pub providers: WebProvidersConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebProvidersConfig {
+    pub chatgpt: WebProviderConfig,
+    pub claude: WebProviderConfig,
+    pub gemini: WebProviderConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebProviderConfig {
+    /// Enable sync for this provider.
+    pub enabled: bool,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            headless: true,
+            sync_interval_secs: 900,
+            full_refresh_interval_secs: 86_400,
+            storage_dir: None,
+            providers: WebProvidersConfig::default(),
+        }
+    }
+}
+
+impl Default for WebProvidersConfig {
+    fn default() -> Self {
+        Self {
+            chatgpt: WebProviderConfig::default(),
+            claude: WebProviderConfig::default(),
+            gemini: WebProviderConfig::default(),
+        }
+    }
+}
+
+impl Default for WebProviderConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
 }
 
 /// Configuration for a remote host (SSH-based sync).
@@ -214,6 +284,7 @@ impl Default for Config {
             remotes: Vec::new(),
             sync: SyncConfig::default(),
             search: SearchConfig::default(),
+            web: WebConfig::default(),
         }
     }
 }
@@ -353,6 +424,12 @@ impl Config {
                 auto_sync: source.auto_sync,
             })
             .collect();
+
+        self.web.storage_dir = self
+            .web
+            .storage_dir
+            .as_ref()
+            .map(|path| Self::expand_path(path).to_string_lossy().to_string());
     }
 
     /// Check whether a given adapter is enabled.

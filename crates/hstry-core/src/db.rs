@@ -1132,7 +1132,7 @@ impl Database {
                 sender_json = excluded.sender_json,
                 provider = excluded.provider,
                 harness = excluded.harness,
-                client_id = excluded.client_id
+                client_id = COALESCE(excluded.client_id, messages.client_id)
             ",
         )
         .bind(msg.id.to_string())
@@ -1200,7 +1200,7 @@ impl Database {
                 sender_json = excluded.sender_json,
                 provider = excluded.provider,
                 harness = excluded.harness,
-                client_id = excluded.client_id
+                client_id = COALESCE(excluded.client_id, messages.client_id)
             ",
         )
         .bind(msg.id.to_string())

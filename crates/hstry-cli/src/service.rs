@@ -108,21 +108,33 @@ impl WriteService for ServerState {
             conv.id
         };
 
-        // Insert messages
+        // Insert messages (idempotent: skips duplicates)
         let mut messages_written = 0i32;
         for msg_proto in request.messages {
             let msg = message_from_proto(msg_proto, conv_id);
-            self.db
-                .insert_message(&msg)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("Failed to insert message: {e}")))?;
-            messages_written += 1;
+            let written =
+                self.db.insert_message(&msg).await.map_err(|e| {
+                    tonic::Status::internal(format!("Failed to insert message: {e}"))
+                })?;
+            if written {
+                messages_written += 1;
+            }
         }
+
+        // Fetch current version and message_count
+        let (version, message_count) = self
+            .db
+            .get_conversation_version(conv_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to get version: {e}")))?
+            .unwrap_or((0, 0));
 
         Ok(tonic::Response::new(
             hstry_core::service::proto::WriteConversationResponse {
                 conversation_id: conv_id.to_string(),
                 messages_written,
+                version: version as u64,
+                message_count: message_count as u32,
             },
         ))
     }
@@ -144,15 +156,17 @@ impl WriteService for ServerState {
             .map_err(|e| tonic::Status::internal(format!("Failed to find conversation: {e}")))?
             .ok_or_else(|| tonic::Status::not_found("Conversation not found"))?;
 
-        // Insert messages
+        // Insert messages (idempotent: skips duplicates)
         let mut messages_written = 0i32;
         for msg_proto in request.messages {
             let msg = message_from_proto(msg_proto, conv_id);
-            self.db
-                .insert_message(&msg)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("Failed to insert message: {e}")))?;
-            messages_written += 1;
+            let written =
+                self.db.insert_message(&msg).await.map_err(|e| {
+                    tonic::Status::internal(format!("Failed to insert message: {e}"))
+                })?;
+            if written {
+                messages_written += 1;
+            }
         }
 
         // Update conversation updated_at if provided
@@ -165,10 +179,20 @@ impl WriteService for ServerState {
             }
         }
 
+        // Fetch current version and message_count
+        let (version, message_count) = self
+            .db
+            .get_conversation_version(conv_id)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to get version: {e}")))?
+            .unwrap_or((0, 0));
+
         Ok(tonic::Response::new(
             hstry_core::service::proto::AppendMessagesResponse {
                 conversation_id: conv_id.to_string(),
                 messages_written,
+                version: version as u64,
+                message_count: message_count as u32,
             },
         ))
     }
@@ -1470,10 +1494,9 @@ impl ServiceState {
             let batch_size = self.config.search.index_batch_size;
             let mut total_indexed = 0usize;
             loop {
-                let indexed =
-                    search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
-                        .await
-                        .context("Indexing new messages for search")?;
+                let indexed = search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
+                    .await
+                    .context("Indexing new messages for search")?;
                 total_indexed += indexed;
                 if indexed < batch_size {
                     break;

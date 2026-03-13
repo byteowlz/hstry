@@ -192,6 +192,10 @@ impl Database {
                 "010_add_platform_id.sql",
                 include_str!("../migrations/010_add_platform_id.sql"),
             ),
+            (
+                "011_add_version_and_message_count.sql",
+                include_str!("../migrations/011_add_version_and_message_count.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {
@@ -290,6 +294,8 @@ impl Database {
                     cost_usd: None,
                     metadata: metadata.clone(),
                     harness: None,
+                    version: 0,
+                    message_count: 0,
                 })
             });
 
@@ -509,8 +515,8 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
@@ -523,7 +529,8 @@ impl Database {
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata,
-                harness = COALESCE(excluded.harness, conversations.harness)
+                harness = COALESCE(excluded.harness, conversations.harness),
+                version = conversations.version + 1
             ",
         )
         .bind(conv.id.to_string())
@@ -852,6 +859,15 @@ impl Database {
         Ok(row.and_then(|row| row.get::<Option<String>, _>("readable_id")))
     }
 
+    /// Get the version and message_count for a conversation.
+    pub async fn get_conversation_version(&self, id: Uuid) -> Result<Option<(i64, i64)>> {
+        let row = sqlx::query("SELECT version, message_count FROM conversations WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| (r.get("version"), r.get("message_count"))))
+    }
+
     /// Get conversation count.
     pub async fn count_conversations(&self) -> Result<i64> {
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM conversations")
@@ -1046,7 +1062,7 @@ impl Database {
         id: Uuid,
         updated_at: chrono::DateTime<Utc>,
     ) -> Result<()> {
-        sqlx::query("UPDATE conversations SET updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE conversations SET updated_at = ?, version = version + 1 WHERE id = ?")
             .bind(updated_at.timestamp())
             .bind(id.to_string())
             .execute(&self.pool)
@@ -1085,7 +1101,8 @@ impl Database {
                 readable_id = COALESCE(?, readable_id),
                 harness = COALESCE(?, harness),
                 platform_id = COALESCE(NULLIF(?, ''), NULLIF(platform_id, '')),
-                updated_at = ?
+                updated_at = ?,
+                version = version + 1
             WHERE id = ?",
         )
         .bind(title)
@@ -1107,15 +1124,41 @@ impl Database {
     // Messages
     // =========================================================================
 
-    /// Insert a message.
-    pub async fn insert_message(&self, msg: &Message) -> Result<()> {
-        let exists = self.message_exists(msg.conversation_id, msg.idx).await?;
+    /// Insert a message (idempotent by conversation_id + idx).
+    ///
+    /// If a message with the same (conversation_id, idx) already exists and
+    /// the content matches, the insert is skipped entirely (no unnecessary
+    /// writes, no version bump). If the content differs, the existing message
+    /// is updated. Returns `true` if a write actually occurred.
+    pub async fn insert_message(&self, msg: &Message) -> Result<bool> {
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
         let sender_json = msg
             .sender
             .as_ref()
             .map(|s| serde_json::to_string(s).unwrap_or_default());
+
+        // Check for existing message with same (conversation_id, idx)
+        let existing = sqlx::query(
+            "SELECT content, parts_json FROM messages WHERE conversation_id = ? AND idx = ?",
+        )
+        .bind(msg.conversation_id.to_string())
+        .bind(msg.idx)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let is_update = existing.is_some();
+        if let Some(ref row) = existing {
+            let existing_content: String = row.get("content");
+            let existing_parts: String = row
+                .get::<Option<String>, _>("parts_json")
+                .unwrap_or_default();
+            // Content-hash idempotency: skip if content and parts match
+            if existing_content == content && existing_parts == parts_json.to_string() {
+                return Ok(false);
+            }
+        }
+
         sqlx::query(
             r"
             INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness, client_id)
@@ -1152,16 +1195,34 @@ impl Database {
         .bind(&msg.client_id)
         .execute(&self.pool)
         .await?;
+
+        // Bump version and message_count atomically on the conversation
+        if is_update {
+            // Update: bump version only (message_count unchanged)
+            sqlx::query("UPDATE conversations SET version = version + 1 WHERE id = ?")
+                .bind(msg.conversation_id.to_string())
+                .execute(&self.pool)
+                .await?;
+        } else {
+            // New message: bump both version and message_count
+            sqlx::query(
+                "UPDATE conversations SET version = version + 1, message_count = message_count + 1 WHERE id = ?",
+            )
+            .bind(msg.conversation_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        }
+
         self.insert_message_event(msg).await?;
         self.invalidate_conversation_snapshot(msg.conversation_id)
             .await?;
-        if exists {
+        if is_update {
             self.rebuild_conversation_summary(msg.conversation_id)
                 .await?;
         } else {
             self.bump_conversation_summary(msg, &content).await?;
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Begin an explicit transaction. The caller must call `commit()` or `rollback()`.
@@ -1251,8 +1312,8 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
@@ -1265,7 +1326,8 @@ impl Database {
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata,
-                harness = COALESCE(excluded.harness, conversations.harness)
+                harness = COALESCE(excluded.harness, conversations.harness),
+                version = conversations.version + 1
             ",
         )
         .bind(conv.id.to_string())
@@ -1291,10 +1353,22 @@ impl Database {
 
     /// Rebuild conversation summary caches for the given conversation IDs.
     /// Call this after bulk-inserting messages via `insert_message_in_tx`.
+    /// Also reconciles the denormalized `message_count` and bumps `version`
+    /// on the conversations table.
     pub async fn rebuild_conversation_summaries(&self, conversation_ids: &[Uuid]) -> Result<()> {
         for id in conversation_ids {
             self.rebuild_conversation_summary(*id).await?;
             self.invalidate_conversation_snapshot(*id).await?;
+            // Reconcile denormalized message_count and bump version
+            sqlx::query(
+                r"UPDATE conversations SET
+                    message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = conversations.id),
+                    version = version + 1
+                  WHERE id = ?",
+            )
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
         }
         Ok(())
     }
@@ -1432,16 +1506,6 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
-    }
-
-    async fn message_exists(&self, conversation_id: Uuid, idx: i32) -> Result<bool> {
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM messages WHERE conversation_id = ? AND idx = ?")
-                .bind(conversation_id.to_string())
-                .bind(idx)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(count.0 > 0)
     }
 
     async fn invalidate_conversation_snapshot(&self, conversation_id: Uuid) -> Result<()> {
@@ -2125,6 +2189,8 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
         harness: row.try_get("harness").ok().flatten(),
+        version: row.try_get("version").unwrap_or(0),
+        message_count: row.try_get("message_count").unwrap_or(0),
     }
 }
 

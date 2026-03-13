@@ -1411,6 +1411,8 @@ async fn cmd_import(
                 .map(|m| serde_json::to_value(m).unwrap_or_default())
                 .unwrap_or_default(),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
 
         db.upsert_conversation(&hstry_conv).await?;

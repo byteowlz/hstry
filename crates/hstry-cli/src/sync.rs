@@ -169,6 +169,8 @@ pub async fn sync_source(
                 cost_usd: conv.cost_usd,
                 metadata,
                 harness: None,
+                version: 0,
+                message_count: 0,
             };
 
             affected_conversation_ids.push(hstry_conv.id);

@@ -96,6 +96,8 @@ message Conversation {
   optional string harness = 13;   // Agent harness (e.g., "pi", "claude")
   optional string readable_id = 14; // Human-readable ID (e.g., "cold-lamp")
   optional string platform_id = 15; // Platform/orchestrator session ID (e.g., "octo-xxx")
+  uint64 version = 16;            // Monotonic version counter, bumped on every mutation
+  uint32 message_count = 17;      // Number of messages in this conversation
 }
 
 message Message {
@@ -123,6 +125,8 @@ message WriteConversationRequest {
 message WriteConversationResponse {
   string conversation_id = 1;     // UUID assigned by hstry
   int32 messages_written = 2;
+  uint64 version = 3;             // Current version after write
+  uint32 message_count = 4;       // Current message count after write
 }
 
 message AppendMessagesRequest {
@@ -135,6 +139,8 @@ message AppendMessagesRequest {
 message AppendMessagesResponse {
   string conversation_id = 1;
   int32 messages_written = 2;
+  uint64 version = 3;             // Current version after append
+  uint32 message_count = 4;       // Current message count after append
 }
 
 // Partial metadata update -- only set fields are applied.
@@ -196,6 +202,7 @@ message GetConversationRequest {
 
 message GetConversationResponse {
   optional Conversation conversation = 1;
+  // version and message_count are also available in the Conversation message itself
 }
 
 message GetMessagesRequest {

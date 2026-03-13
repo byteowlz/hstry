@@ -171,6 +171,8 @@ async fn upsert_conversation_creates_new() {
         cost_usd: Some(0.05),
         metadata: serde_json::json!({}),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
 
     db.upsert_conversation(&conv).await.expect("upsert");
@@ -208,6 +210,8 @@ async fn upsert_conversation_updates_by_external_id() {
         cost_usd: None,
         metadata: serde_json::json!({}),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conv_v1).await.expect("upsert v1");
 
@@ -229,6 +233,8 @@ async fn upsert_conversation_updates_by_external_id() {
         cost_usd: None,
         metadata: serde_json::json!({}),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conv_v2).await.expect("upsert v2");
 
@@ -270,6 +276,8 @@ async fn list_conversations_with_filters() {
             cost_usd: None,
             metadata: serde_json::json!({}),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -317,6 +325,8 @@ async fn count_conversations_accurate() {
             cost_usd: None,
             metadata: serde_json::json!({}),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -348,6 +358,8 @@ async fn setup_conversation(db: &Database) -> Conversation {
         cost_usd: None,
         metadata: serde_json::json!({}),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conv).await.expect("upsert conv");
     conv
@@ -659,6 +671,8 @@ async fn search_with_source_filter() {
             cost_usd: None,
             metadata: serde_json::json!({}),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
 
@@ -789,6 +803,8 @@ async fn update_conversation_metadata_partial_title() {
         cost_usd: None,
         metadata: serde_json::json!({}),
         harness: Some("pi".to_string()),
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conv).await.expect("upsert");
 
@@ -843,6 +859,8 @@ async fn update_conversation_metadata_partial_harness() {
         cost_usd: None,
         metadata: serde_json::json!({}),
         harness: Some("pi".to_string()),
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conv).await.expect("upsert");
 

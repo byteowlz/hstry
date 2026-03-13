@@ -40,6 +40,8 @@ async fn remove_source_deletes_conversations_and_messages() -> Result<()> {
         cost_usd: None,
         metadata: serde_json::Value::Object(Default::default()),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conversation).await?;
 
@@ -117,6 +119,8 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         cost_usd: None,
         metadata: serde_json::Value::Object(Default::default()),
         harness: None,
+        version: 0,
+        message_count: 0,
     };
     db.upsert_conversation(&conversation).await?;
 

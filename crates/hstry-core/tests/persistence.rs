@@ -90,6 +90,8 @@ async fn conversation_persists_across_reopen() {
             cost_usd: Some(0.03),
             metadata: serde_json::json!({"key": "value"}),
             harness: Some("pi".to_string()),
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
         let id = conv.id;
@@ -156,6 +158,8 @@ async fn messages_persist_across_reopen() {
             cost_usd: None,
             metadata: serde_json::json!({}),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert conv");
 
@@ -261,6 +265,8 @@ async fn full_scenario_persists_across_multiple_reopens() {
             cost_usd: Some(0.025),
             metadata: serde_json::json!({"test": "scenario"}),
             harness: Some("pi".to_string()),
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert conv");
 
@@ -464,6 +470,8 @@ async fn partial_update_persists_across_reopen() {
             cost_usd: Some(0.01),
             metadata: serde_json::json!({"original": true}),
             harness: Some("old-harness".to_string()),
+            version: 0,
+            message_count: 0,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
         let id = conv.id;

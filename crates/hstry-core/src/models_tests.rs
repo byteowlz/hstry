@@ -188,6 +188,8 @@ mod conversation_tests {
             cost_usd: Some(0.05),
             metadata: serde_json::json!({"tags": ["test"]}),
             harness: Some("pi".to_string()),
+            version: 0,
+            message_count: 0,
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");
@@ -220,6 +222,8 @@ mod conversation_tests {
             cost_usd: None,
             metadata: serde_json::Value::Object(Default::default()),
             harness: None,
+            version: 0,
+            message_count: 0,
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");

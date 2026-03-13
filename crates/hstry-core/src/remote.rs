@@ -398,6 +398,8 @@ pub async fn merge_databases(
                 cost_usd: conv.cost_usd,
                 metadata: conv.metadata,
                 harness: conv.harness,
+                version: 0,
+                message_count: 0,
             };
 
             affected_ids.push(conv_id);

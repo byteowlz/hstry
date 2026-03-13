@@ -291,6 +291,8 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
             serde_json::from_str(&proto.metadata_json).unwrap_or_default()
         },
         harness: proto.harness,
+        version: proto.version as i64,
+        message_count: proto.message_count as i64,
     }
 }
 
@@ -350,6 +352,8 @@ pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
         harness: conv.harness.clone(),
         readable_id: conv.readable_id.clone(),
         platform_id: conv.platform_id.clone(),
+        version: conv.version as u64,
+        message_count: conv.message_count as u32,
     }
 }
 

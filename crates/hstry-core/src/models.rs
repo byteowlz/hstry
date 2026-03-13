@@ -40,6 +40,12 @@ pub struct Conversation {
     /// Agent harness that owns this conversation (e.g., "pi", "claude").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// Monotonic version counter, bumped on every mutation.
+    #[serde(default)]
+    pub version: i64,
+    /// Denormalized message count, maintained atomically with version.
+    #[serde(default)]
+    pub message_count: i64,
 }
 
 /// A message within a conversation.

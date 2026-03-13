@@ -1,0 +1,23 @@
+{
+  "todos": [
+    {
+      "id": "trx-c077",
+      "content": "trx-c077: Add monotonic version counter to conversations",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "trx-5ph6",
+      "content": "trx-5ph6: Make append_messages idempotent by message idx",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "trx-7ghs",
+      "content": "trx-7ghs: Add message_count and version fields to responses",
+      "status": "completed",
+      "priority": "high"
+    }
+  ],
+  "updated_at": "2026-03-13T18:10:40.086Z"
+}

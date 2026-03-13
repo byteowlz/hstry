@@ -13,6 +13,7 @@ Universal AI chat history database. Aggregates conversations from multiple AI to
 - Optional terminal UI (`hstry-tui`) for interactive browsing
 - Incremental adapter parsing with cursor-based batching
 - Export conversations to adapter formats (markdown/json, pi, opencode, codex, claude-code, etc.)
+- Resume past sessions in any coding agent with cross-format conversion
 - Deduplicate conversations and export memories to mmry
 - JSON output for scripting and MCP integration
 
@@ -111,6 +112,15 @@ hstry show <conversation-id>
 
 # Export a conversation to markdown
 hstry export --format markdown --conversations <conversation-id> --output ./conversation.md
+
+# Resume a past session in your preferred coding agent
+hstry resume --search "JSON parser" --agent pi
+
+# Resume with time filter
+hstry resume --after "yesterday" --workspace myproject
+
+# Browse recent and pick interactively
+hstry resume --limit 10
 ```
 
 ## Commands
@@ -130,6 +140,7 @@ hstry export --format markdown --conversations <conversation-id> --output ./conv
 | `list` | List conversations with optional filters (workspace uses substring match) |
 | `show <id>` | Display a conversation with all messages |
 | `export` | Export conversations to markdown/json or adapter format |
+| `resume` | Resume a past session in a coding agent (pi, claude-code, codex, etc.) |
 | `dedup` | Deduplicate conversations in the database |
 | `source add/list/remove` | Manage import sources |
 | `adapters list/add/enable/disable` | Manage adapters |
@@ -162,6 +173,66 @@ Scope and filters:
 - `--dedup` to collapse similar results
 - `--include-system` to include system context (AGENTS.md, etc.)
 
+## Session Resume
+
+The `resume` command opens a past session in your preferred coding agent. It handles
+cross-agent format conversion automatically -- a Codex session can be resumed in pi,
+a Claude Code session in Codex, etc.
+
+```bash
+# Direct resume by conversation ID
+hstry resume <conversation-id>
+
+# Search for a session
+hstry resume --search "async runtime refactor"
+
+# Browse recent sessions and pick interactively
+hstry resume --limit 10
+
+# Filter by time
+hstry resume --after "yesterday"
+hstry resume --after "2 days ago" --before "today"
+hstry resume --after "2026-02-01" --before "2026-03-01"
+
+# Filter by source or workspace
+hstry resume --source codex-main --workspace myproject
+
+# Target a specific agent (overrides default_agent from config)
+hstry resume --search "refactor" --agent claude-code
+
+# Dry run (show what would happen without writing or launching)
+hstry resume --dry-run --search "query"
+
+# JSON output for automation
+hstry resume --json --search "query"
+```
+
+**How it works:**
+
+1. If the session already belongs to the target agent and the original file exists on disk, it launches directly (zero conversion overhead).
+2. Otherwise, it exports the session via the target adapter, places the converted file in the agent's native session directory, and launches the agent.
+
+**Time filter formats:** ISO dates (`2026-03-01`), relative dates (`yesterday`, `today`, `last week`, `last month`), duration expressions (`2 days ago`, `3 weeks ago`, `1 month ago`).
+
+Configure the default agent and per-agent launch commands in `config.toml`:
+
+```toml
+[resume]
+default_agent = "pi"
+
+[resume.agents.pi]
+format = "pi"
+command = "pi --session {session_path}"
+session_dir = "~/.pi/agent/sessions"
+
+[resume.agents.claude-code]
+format = "claude-code"
+command = "claude --resume {session_id}"
+session_dir = "~/.claude/projects"
+```
+
+Command templates support these placeholders: `{session_path}`, `{session_id}`, `{workspace}`.
+
 ## Configuration
 
 hstry follows XDG Base Directory specifications:
@@ -189,15 +260,17 @@ enabled = true
 enabled = false
 poll_interval_secs = 30
 search_api = true
-# search_port = 3000
-
-[web]
-enabled = false
-headless = true
 
 [search]
-# index_path = "~/.local/share/hstry/search"
 index_batch_size = 500
+
+[resume]
+default_agent = "pi"
+
+[resume.agents.pi]
+format = "pi"
+command = "pi --session {session_path}"
+session_dir = "~/.pi/agent/sessions"
 ```
 
 See `examples/config.toml` for all options. Use `hstry config show/path/edit` for config management.

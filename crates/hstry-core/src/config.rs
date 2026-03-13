@@ -53,6 +53,85 @@ pub struct Config {
 
     /// Web automation configuration.
     pub web: WebConfig,
+
+    /// Resume configuration for opening sessions in coding agents.
+    pub resume: ResumeConfig,
+}
+
+/// Resume configuration for opening sessions in coding agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResumeConfig {
+    /// Default agent to resume sessions in (e.g., "pi", "claude-code", "codex").
+    pub default_agent: String,
+
+    /// Per-agent resume configuration.
+    pub agents: std::collections::HashMap<String, AgentResumeConfig>,
+}
+
+/// Configuration for resuming sessions in a specific coding agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentResumeConfig {
+    /// hstry export format name (must match an adapter name).
+    pub format: String,
+
+    /// Command template to launch the agent.
+    /// Placeholders: {session_path}, {session_id}, {workspace}
+    pub command: String,
+
+    /// Directory where the agent stores sessions natively.
+    /// Converted sessions are placed here so the agent discovers them.
+    pub session_dir: String,
+}
+
+impl Default for ResumeConfig {
+    fn default() -> Self {
+        let mut agents = std::collections::HashMap::new();
+        agents.insert(
+            "pi".to_string(),
+            AgentResumeConfig {
+                format: "pi".to_string(),
+                command: "pi --session {session_path}".to_string(),
+                session_dir: "~/.pi/agent/sessions".to_string(),
+            },
+        );
+        agents.insert(
+            "claude-code".to_string(),
+            AgentResumeConfig {
+                format: "claude-code".to_string(),
+                command: "claude --resume {session_id}".to_string(),
+                session_dir: "~/.claude/projects".to_string(),
+            },
+        );
+        agents.insert(
+            "codex".to_string(),
+            AgentResumeConfig {
+                format: "codex".to_string(),
+                command: "codex resume {session_id}".to_string(),
+                session_dir: "~/.codex/sessions".to_string(),
+            },
+        );
+        agents.insert(
+            "opencode".to_string(),
+            AgentResumeConfig {
+                format: "opencode".to_string(),
+                command: "opencode".to_string(),
+                session_dir: "~/.local/share/opencode".to_string(),
+            },
+        );
+        agents.insert(
+            "goose".to_string(),
+            AgentResumeConfig {
+                format: "goose".to_string(),
+                command: "goose session resume {session_id}".to_string(),
+                session_dir: "~/.local/share/goose/sessions".to_string(),
+            },
+        );
+        Self {
+            default_agent: "pi".to_string(),
+            agents,
+        }
+    }
 }
 
 /// Search configuration for indexing.
@@ -285,6 +364,7 @@ impl Default for Config {
             sync: SyncConfig::default(),
             search: SearchConfig::default(),
             web: WebConfig::default(),
+            resume: ResumeConfig::default(),
         }
     }
 }

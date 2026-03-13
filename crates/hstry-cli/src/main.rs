@@ -311,6 +311,50 @@ enum Command {
         pretty: bool,
     },
 
+    /// Resume a conversation in a coding agent
+    ///
+    /// Opens a past session in your preferred agent (pi, claude-code, codex, etc.).
+    /// If the session is already from the target agent, opens it directly.
+    /// Otherwise, converts to the target format and places it in the agent's
+    /// native session directory.
+    Resume {
+        /// Conversation ID (UUID or partial match)
+        #[arg(group = "target")]
+        id: Option<String>,
+
+        /// Search for a conversation instead of specifying an ID
+        #[arg(short, long, group = "target")]
+        search: Option<String>,
+
+        /// Target agent to resume in (default: from config)
+        #[arg(short, long)]
+        agent: Option<String>,
+
+        /// Filter by source
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Filter by workspace
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Only show conversations after this date/time (natural language: "yesterday", "2 days ago", "2026-03-01")
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Only show conversations before this date/time (natural language)
+        #[arg(long)]
+        before: Option<String>,
+
+        /// Maximum results when searching
+        #[arg(short, long, default_value = "20")]
+        limit: i64,
+
+        /// Show what would happen without writing or launching
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Show database statistics
     Stats,
 
@@ -940,6 +984,28 @@ async fn main() -> Result<()> {
                 output,
                 pretty,
                 cli.json,
+            )
+            .await
+        }
+        Command::Resume {
+            id,
+            search,
+            agent,
+            source,
+            workspace,
+            after,
+            before,
+            limit,
+            dry_run,
+        } => {
+            let db = Database::open(&config.database).await?;
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_resume(
+                &db, &runner, &config, id, search, agent, source, workspace, after, before,
+                limit, dry_run, cli.json,
             )
             .await
         }
@@ -1725,6 +1791,7 @@ async fn cmd_list(
         source_id: source,
         workspace,
         after: None,
+        before: None,
         limit: Some(limit),
     };
 
@@ -3447,6 +3514,7 @@ async fn cmd_export(
             source_id: source_filter.clone(),
             workspace: workspace_filter.clone(),
             after: None,
+            before: None,
             limit: None,
         })
         .await?
@@ -3567,6 +3635,671 @@ async fn cmd_export(
             files.len(),
             output_dir.display()
         );
+    }
+
+    Ok(())
+}
+
+/// Parse a natural-language or ISO date string into a `DateTime<Utc>`.
+///
+/// Supports:
+/// - ISO dates: "2026-03-01", "2026-03-01T10:00:00Z"
+/// - Relative: "today", "yesterday", "N days ago", "N weeks ago", "N months ago"
+/// - Named: "last week", "last month"
+fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let lower = s.trim().to_lowercase();
+
+    // Handle relative dates that dateparser doesn't support
+    let now = chrono::Utc::now();
+    if lower == "today" {
+        return Ok(now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc());
+    }
+    if lower == "yesterday" {
+        return Ok((now - chrono::Duration::days(1))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc());
+    }
+    if lower == "last week" {
+        return Ok((now - chrono::Duration::weeks(1))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc());
+    }
+    if lower == "last month" {
+        return Ok((now - chrono::Duration::days(30))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc());
+    }
+
+    // "N days/weeks/months ago"
+    if let Some(rest) = lower.strip_suffix(" ago") {
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() == 2 {
+            if let Ok(n) = parts[0].parse::<i64>() {
+                let duration = match parts[1].trim_end_matches('s') {
+                    "day" => Some(chrono::Duration::days(n)),
+                    "week" => Some(chrono::Duration::weeks(n)),
+                    "month" => Some(chrono::Duration::days(n * 30)),
+                    "hour" => Some(chrono::Duration::hours(n)),
+                    _ => None,
+                };
+                if let Some(d) = duration {
+                    return Ok(now - d);
+                }
+            }
+        }
+    }
+
+    // Fall back to dateparser for ISO dates and other formats
+    dateparser::parse(s)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .map_err(|e| anyhow::anyhow!("Could not parse date '{s}': {e}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_resume(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    id: Option<String>,
+    search_query: Option<String>,
+    agent_override: Option<String>,
+    source_filter: Option<String>,
+    workspace_filter: Option<String>,
+    after_str: Option<String>,
+    before_str: Option<String>,
+    limit: i64,
+    dry_run: bool,
+    json_output: bool,
+) -> Result<()> {
+    use hstry_core::db::ListConversationsOptions;
+
+    let agent_name = agent_override
+        .as_deref()
+        .unwrap_or(&config.resume.default_agent);
+
+    let agent_config = config
+        .resume
+        .agents
+        .get(agent_name)
+        .ok_or_else(|| {
+            let available: Vec<_> = config.resume.agents.keys().collect();
+            anyhow::anyhow!(
+                "No resume configuration for agent '{agent_name}'. Available: {available:?}\n\
+                 Add [resume.agents.{agent_name}] to your config.toml"
+            )
+        })?
+        .clone();
+
+    // Parse date filters
+    let after = after_str.as_deref().map(parse_date_filter).transpose()?;
+    let before = before_str.as_deref().map(parse_date_filter).transpose()?;
+
+    // Step 1: Resolve the conversation
+    let conversation = if let Some(ref id_str) = id {
+        // Direct ID lookup
+        resolve_conversation_by_id(db, id_str).await?
+    } else if let Some(ref query) = search_query {
+        // Search and pick
+        let workspace_filter_like = workspace_filter.as_ref().map(|v| format!("%{v}%"));
+        let conversations = db
+            .list_conversation_summaries(ListConversationsOptions {
+                source_id: source_filter.clone(),
+                workspace: workspace_filter_like.clone(),
+                after,
+                before,
+                limit: Some(limit),
+            })
+            .await?;
+
+        // Filter by search query (fuzzy match on title + first message)
+        let query_lower = query.to_lowercase();
+        let mut matches: Vec<_> = conversations
+            .into_iter()
+            .filter(|cs| {
+                let title_match = cs
+                    .conversation
+                    .title
+                    .as_ref()
+                    .is_some_and(|t| t.to_lowercase().contains(&query_lower));
+                let msg_match = cs
+                    .first_user_message
+                    .as_ref()
+                    .is_some_and(|m| m.to_lowercase().contains(&query_lower));
+                let workspace_match = cs
+                    .conversation
+                    .workspace
+                    .as_ref()
+                    .is_some_and(|w| w.to_lowercase().contains(&query_lower));
+                title_match || msg_match || workspace_match
+            })
+            .collect();
+
+        if matches.is_empty() {
+            // Fall back to full-text search via tantivy
+            let index_path = config.search_index_path();
+            if index_path.exists() {
+                let search_opts = hstry_core::db::SearchOptions {
+                    source_id: source_filter.clone(),
+                    workspace: workspace_filter.clone(),
+                    limit: Some(limit),
+                    ..Default::default()
+                };
+                let hits =
+                    hstry_core::search_tantivy::search(&index_path, query, &search_opts)?;
+                if hits.is_empty() {
+                    anyhow::bail!("No conversations found matching '{query}'");
+                }
+                // Use the top hit's conversation
+                let top_hit = &hits[0];
+                db.get_conversation(top_hit.conversation_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Conversation not found in database"))?
+            } else {
+                anyhow::bail!("No conversations found matching '{query}'");
+            }
+        } else if matches.len() == 1 {
+            matches.remove(0).conversation
+        } else {
+            // Multiple matches: show numbered list for user to pick
+            if json_output {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(
+                        &matches
+                            .iter()
+                            .enumerate()
+                            .map(|(i, cs)| {
+                                serde_json::json!({
+                                    "index": i + 1,
+                                    "id": cs.conversation.id,
+                                    "title": cs.conversation.title,
+                                    "source": cs.conversation.source_id,
+                                    "workspace": cs.conversation.workspace,
+                                    "created_at": cs.conversation.created_at,
+                                    "messages": cs.message_count,
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    error: None,
+                });
+            }
+
+            eprintln!("Found {} conversations matching '{query}':\n", matches.len());
+            for (i, cs) in matches.iter().enumerate() {
+                let title = cs
+                    .conversation
+                    .title
+                    .as_deref()
+                    .or(cs.first_user_message.as_deref())
+                    .unwrap_or("(untitled)");
+                let truncated = if title.len() > 80 {
+                    format!("{}...", &title[..77])
+                } else {
+                    title.to_string()
+                };
+                let source = &cs.conversation.source_id;
+                let date = cs.conversation.created_at.format("%Y-%m-%d %H:%M");
+                let workspace = cs
+                    .conversation
+                    .workspace
+                    .as_deref()
+                    .unwrap_or("");
+                let ws_short = workspace
+                    .strip_prefix("/Users/")
+                    .and_then(|s| s.split_once('/').map(|(_, rest)| format!("~/{rest}")))
+                    .unwrap_or_else(|| workspace.to_string());
+
+                eprintln!(
+                    "  {i:>3}) [{source}] {date}  {ws_short}",
+                    i = i + 1
+                );
+                eprintln!("       {truncated}");
+            }
+            eprintln!();
+
+            // Read user selection
+            eprint!("Select (1-{}): ", matches.len());
+            std::io::stderr().flush()?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let choice: usize = input
+                .trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
+            if choice == 0 || choice > matches.len() {
+                anyhow::bail!("Selection out of range");
+            }
+            matches.remove(choice - 1).conversation
+        }
+    } else {
+        // No ID and no search: list recent and pick
+        let workspace_filter_like = workspace_filter.as_ref().map(|v| format!("%{v}%"));
+        let conversations = db
+            .list_conversation_summaries(ListConversationsOptions {
+                source_id: source_filter.clone(),
+                workspace: workspace_filter_like,
+                after,
+                before,
+                limit: Some(limit),
+            })
+            .await?;
+
+        if conversations.is_empty() {
+            anyhow::bail!("No conversations found. Try adjusting filters.");
+        }
+
+        if json_output {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(
+                    &conversations
+                        .iter()
+                        .enumerate()
+                        .map(|(i, cs)| {
+                            serde_json::json!({
+                                "index": i + 1,
+                                "id": cs.conversation.id,
+                                "title": cs.conversation.title,
+                                "source": cs.conversation.source_id,
+                                "workspace": cs.conversation.workspace,
+                                "created_at": cs.conversation.created_at,
+                                "messages": cs.message_count,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                error: None,
+            });
+        }
+
+        eprintln!("Recent conversations:\n");
+        for (i, cs) in conversations.iter().enumerate() {
+            let title = cs
+                .conversation
+                .title
+                .as_deref()
+                .or(cs.first_user_message.as_deref())
+                .unwrap_or("(untitled)");
+            let truncated = if title.len() > 80 {
+                format!("{}...", &title[..77])
+            } else {
+                title.to_string()
+            };
+            let source = &cs.conversation.source_id;
+            let date = cs.conversation.created_at.format("%Y-%m-%d %H:%M");
+            let workspace = cs.conversation.workspace.as_deref().unwrap_or("");
+            let ws_short = workspace
+                .strip_prefix("/Users/")
+                .and_then(|s| s.split_once('/').map(|(_, rest)| format!("~/{rest}")))
+                .unwrap_or_else(|| workspace.to_string());
+
+            eprintln!("  {i:>3}) [{source}] {date}  {ws_short}", i = i + 1);
+            eprintln!("       {truncated}");
+        }
+        eprintln!();
+
+        eprint!("Select (1-{}): ", conversations.len());
+        std::io::stderr().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let choice: usize = input
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid selection"))?;
+        if choice == 0 || choice > conversations.len() {
+            anyhow::bail!("Selection out of range");
+        }
+        conversations[choice - 1].conversation.clone()
+    };
+
+    // Step 2: Determine source adapter
+    let source = db
+        .get_source(&conversation.source_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("Source '{}' not found in database", conversation.source_id)
+        })?;
+    let source_adapter = &source.adapter;
+
+    // Step 3: Check for same-agent fast path
+    let original_file = conversation
+        .metadata
+        .get("file")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+
+    let is_same_agent = source_adapter == &agent_config.format;
+    let original_exists = original_file
+        .as_ref()
+        .is_some_and(|p| p.exists());
+
+    if is_same_agent && original_exists {
+        let session_path = original_file.as_ref().unwrap();
+        let workspace = conversation.workspace.as_deref().unwrap_or(".");
+
+        if dry_run {
+            if json_output {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(&serde_json::json!({
+                        "action": "direct_resume",
+                        "agent": agent_name,
+                        "session_path": session_path,
+                        "workspace": workspace,
+                        "conversation_id": conversation.id,
+                        "title": conversation.title,
+                    })),
+                    error: None,
+                });
+            }
+            println!("Would resume directly (same agent, original file exists):");
+            println!("  Agent:    {agent_name}");
+            println!("  Session:  {}", session_path.display());
+            println!("  Workspace: {workspace}");
+            let cmd = build_resume_command(&agent_config, session_path, &conversation);
+            println!("  Command:  {cmd}");
+            return Ok(());
+        }
+
+        if !json_output {
+            eprintln!(
+                "Resuming {} session directly in {workspace}",
+                agent_name
+            );
+        }
+
+        let cmd = build_resume_command(&agent_config, session_path, &conversation);
+        launch_agent(&cmd, workspace, json_output)?;
+        return Ok(());
+    }
+
+    // Step 4: Convert and place
+    let adapter_path = runner
+        .find_adapter(&agent_config.format)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No adapter found for format '{}'. Is it installed and enabled?",
+                agent_config.format
+            )
+        })?;
+
+    // Load messages and build export conversation
+    let messages = db.get_messages(conversation.id).await?;
+    let parsed_messages: Vec<ParsedMessage> = messages
+        .into_iter()
+        .map(|m| ParsedMessage {
+            role: m.role.to_string(),
+            content: m.content,
+            created_at: m.created_at.map(|dt| dt.timestamp_millis()),
+            model: m.model,
+            tokens: m.tokens,
+            cost_usd: m.cost_usd,
+            parts: Some(m.parts_json),
+            tool_calls: None,
+            metadata: Some(m.metadata),
+        })
+        .collect();
+
+    let export_conv = ExportConversation {
+        external_id: conversation.external_id.clone(),
+        readable_id: conversation.readable_id.clone(),
+        title: conversation.title.clone(),
+        created_at: conversation.created_at.timestamp_millis(),
+        updated_at: conversation.updated_at.map(|dt| dt.timestamp_millis()),
+        model: conversation.model.clone(),
+        provider: conversation.provider.clone(),
+        workspace: conversation.workspace.clone(),
+        tokens_in: conversation.tokens_in,
+        tokens_out: conversation.tokens_out,
+        cost_usd: conversation.cost_usd,
+        messages: parsed_messages,
+        metadata: Some(conversation.metadata.clone()),
+    };
+
+    let export_opts = ExportOptions {
+        format: agent_config.format.clone(),
+        pretty: Some(false),
+        include_tools: Some(true),
+        include_attachments: Some(true),
+    };
+
+    let result = runner
+        .export(&adapter_path, vec![export_conv], export_opts)
+        .await?;
+
+    // Step 5: Place the exported file(s) in the agent's native session directory
+    let session_dir = Config::expand_path(&agent_config.session_dir);
+    let placed_paths = place_exported_session(&result, &session_dir, &conversation, dry_run)?;
+
+    if placed_paths.is_empty() {
+        anyhow::bail!("Export produced no files to place");
+    }
+
+    let primary_path = &placed_paths[0];
+    let workspace = conversation.workspace.as_deref().unwrap_or(".");
+
+    if dry_run {
+        if json_output {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(&serde_json::json!({
+                    "action": "convert_and_resume",
+                    "agent": agent_name,
+                    "source_adapter": source_adapter,
+                    "target_format": agent_config.format,
+                    "placed_files": placed_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    "workspace": workspace,
+                    "conversation_id": conversation.id,
+                    "title": conversation.title,
+                })),
+                error: None,
+            });
+        }
+        println!("Would convert and resume:");
+        println!("  Agent:    {agent_name}");
+        println!("  Source:   {source_adapter}");
+        println!("  Format:   {}", agent_config.format);
+        for p in &placed_paths {
+            println!("  Placed:   {}", p.display());
+        }
+        println!("  Workspace: {workspace}");
+        let cmd = build_resume_command(&agent_config, primary_path, &conversation);
+        println!("  Command:  {cmd}");
+        return Ok(());
+    }
+
+    if !json_output {
+        eprintln!(
+            "Converted {source_adapter} -> {} ({} file(s))",
+            agent_config.format,
+            placed_paths.len()
+        );
+    }
+
+    let cmd = build_resume_command(&agent_config, primary_path, &conversation);
+    launch_agent(&cmd, workspace, json_output)?;
+    Ok(())
+}
+
+/// Resolve a conversation by UUID, partial UUID, or external_id.
+async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conversation> {
+    // Try full UUID first
+    if let Ok(uuid) = uuid::Uuid::parse_str(id_str) {
+        if let Some(conv) = db.get_conversation(uuid).await? {
+            return Ok(conv);
+        }
+    }
+
+    // Try partial UUID match or external_id match
+    let all = db
+        .list_conversations(hstry_core::db::ListConversationsOptions {
+            limit: Some(500),
+            ..Default::default()
+        })
+        .await?;
+
+    let matches: Vec<_> = all
+        .into_iter()
+        .filter(|c| {
+            let id_match = c.id.to_string().starts_with(id_str);
+            let ext_match = c
+                .external_id
+                .as_ref()
+                .is_some_and(|e| e.starts_with(id_str) || e == id_str);
+            id_match || ext_match
+        })
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No conversation found matching '{id_str}'"),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => anyhow::bail!(
+            "Ambiguous ID '{id_str}': matched {n} conversations. Use a longer prefix."
+        ),
+    }
+}
+
+/// Build the launch command string by replacing placeholders.
+fn build_resume_command(
+    agent_config: &hstry_core::config::AgentResumeConfig,
+    session_path: &Path,
+    conversation: &Conversation,
+) -> String {
+    let id_string = conversation.id.to_string();
+    let session_id = conversation
+        .external_id
+        .as_deref()
+        .unwrap_or(&id_string);
+
+    agent_config
+        .command
+        .replace("{session_path}", &session_path.display().to_string())
+        .replace("{session_id}", session_id)
+        .replace(
+            "{workspace}",
+            conversation.workspace.as_deref().unwrap_or("."),
+        )
+}
+
+/// Place exported session files into the agent's native session directory.
+///
+/// Adapters may include a `root` prefix in their file paths (e.g., `sessions/...`).
+/// Since `session_dir` already points to the target directory, we strip the root prefix.
+fn place_exported_session(
+    result: &hstry_runtime::ExportResult,
+    session_dir: &Path,
+    conversation: &Conversation,
+    dry_run: bool,
+) -> Result<Vec<PathBuf>> {
+    use std::fs;
+
+    // Extract root prefix from metadata (e.g., "sessions/", "project/")
+    let root_prefix = result
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("root"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut placed = Vec::new();
+
+    if let Some(ref content) = result.content {
+        // Single-file export (e.g., JSON, markdown)
+        let id_string = conversation.id.to_string();
+        let session_id = conversation
+            .external_id
+            .as_deref()
+            .unwrap_or(&id_string);
+        let ext = match result.format.as_str() {
+            "markdown" => "md",
+            "json" => "json",
+            _ => "jsonl",
+        };
+        let filename = format!("{session_id}.{ext}");
+        let target = session_dir.join(&filename);
+
+        if dry_run {
+            placed.push(target);
+        } else {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&target, content)?;
+            placed.push(target);
+        }
+    }
+
+    if let Some(ref files) = result.files {
+        for file in files {
+            // Strip the root prefix from the file path
+            let relative = file
+                .path
+                .strip_prefix(root_prefix)
+                .unwrap_or(&file.path);
+            let target = session_dir.join(relative);
+
+            if dry_run {
+                placed.push(target);
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&target, &file.content)?;
+                placed.push(target);
+            }
+        }
+    }
+
+    Ok(placed)
+}
+
+/// Launch an agent process in the given workspace directory.
+fn launch_agent(command_str: &str, workspace: &str, json_output: bool) -> Result<()> {
+    let parts: Vec<&str> = command_str.split_whitespace().collect();
+    if parts.is_empty() {
+        anyhow::bail!("Empty resume command");
+    }
+
+    let program = parts[0];
+    let args = &parts[1..];
+
+    if json_output {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(&serde_json::json!({
+                "launched": true,
+                "command": command_str,
+                "workspace": workspace,
+            })),
+            error: None,
+        });
+    }
+
+    eprintln!("Launching: {command_str}");
+    eprintln!("Workspace: {workspace}");
+
+    let status = ProcessCommand::new(program)
+        .args(args)
+        .current_dir(workspace)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to launch '{program}': {e}"))?;
+
+    if !status.success() {
+        anyhow::bail!("Agent exited with status: {status}");
     }
 
     Ok(())
@@ -3709,6 +4442,7 @@ async fn cmd_dedup(
         source_id: source_filter,
         workspace: None,
         after: None,
+        before: None,
         limit: None,
     };
 
@@ -4478,6 +5212,7 @@ async fn cmd_mmry_extract(
             source_id: source.clone(),
             workspace: workspace.clone(),
             after,
+            before: None,
             limit,
         })
         .await?;

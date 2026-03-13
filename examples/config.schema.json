@@ -61,17 +61,12 @@
     },
     "web": {
       "$ref": "#/definitions/WebConfig"
+    },
+    "resume": {
+      "$ref": "#/definitions/ResumeConfig"
     }
   },
-  "required": [
-    "database",
-    "adapter_paths",
-    "js_runtime",
-    "workspaces",
-    "adapters",
-    "service",
-    "sources"
-  ],
+  "required": [],
   "definitions": {
     "AdapterConfig": {
       "type": "object",
@@ -84,14 +79,14 @@
     },
     "AdapterRepo": {
       "type": "object",
-      "additionalProperties": false,
+      "description": "An adapter repository source. Fields depend on the 'type' value.",
       "properties": {
-        "name": { "type": "string" },
-        "enabled": { "type": "boolean", "default": true },
-        "type": { "type": "string", "enum": ["git", "archive", "local"] },
-        "url": { "type": "string" },
-        "git_ref": { "type": "string" },
-        "path": { "type": "string" }
+        "name": { "type": "string", "description": "Unique name for this repo (e.g., 'official', 'community')." },
+        "enabled": { "type": "boolean", "default": true, "description": "Whether this repo is enabled." },
+        "type": { "type": "string", "enum": ["git", "archive", "local"], "description": "Source type: git, archive (tarball/zip), or local path." },
+        "url": { "type": "string", "description": "Repository URL (for git/archive types)." },
+        "git_ref": { "type": "string", "description": "Branch, tag, or commit to use (git type only)." },
+        "path": { "type": "string", "description": "Path within the repo/archive where adapters are located, or local filesystem path." }
       },
       "required": ["name", "type"]
     },
@@ -105,7 +100,7 @@
         "search_port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 },
         "transport": { "type": "string", "enum": ["tcp", "unix"], "default": "tcp" }
       },
-      "required": ["enabled", "poll_interval_secs"]
+      "required": []
     },
     "SourceConfig": {
       "type": "object",
@@ -176,6 +171,45 @@
       "properties": {
         "enabled": { "type": "boolean", "default": false }
       }
+    },
+    "ResumeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Configuration for resuming sessions in coding agents.",
+      "properties": {
+        "default_agent": {
+          "type": "string",
+          "description": "Default agent to resume sessions in (e.g., 'pi', 'claude-code', 'codex').",
+          "default": "pi"
+        },
+        "agents": {
+          "type": "object",
+          "description": "Per-agent resume configuration.",
+          "additionalProperties": {
+            "$ref": "#/definitions/AgentResumeConfig"
+          }
+        }
+      }
+    },
+    "AgentResumeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Configuration for resuming sessions in a specific coding agent.",
+      "properties": {
+        "format": {
+          "type": "string",
+          "description": "hstry export format name (must match an adapter name)."
+        },
+        "command": {
+          "type": "string",
+          "description": "Command template to launch the agent. Placeholders: {session_path}, {session_id}, {workspace}."
+        },
+        "session_dir": {
+          "type": "string",
+          "description": "Directory where the agent stores sessions natively. Converted sessions are placed here."
+        }
+      },
+      "required": ["format", "command", "session_dir"]
     }
   }
 }

@@ -28,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 config = { version = "0.15", features = ["toml"] }
 dirs = "6.0"
 shellexpand = "3.1"
+dateparser = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 tantivy = "0.25"

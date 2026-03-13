@@ -537,6 +537,7 @@ impl ReadService for ServerState {
                     Some(request.workspace)
                 },
                 after: None,
+                before: None,
                 limit: if request.limit > 0 {
                     Some(request.limit)
                 } else {

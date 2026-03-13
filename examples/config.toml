@@ -17,6 +17,22 @@ js_runtime = "auto"
 # Workspace roots to scan recursively for session output
 workspaces = ["~/code", "~/work"]
 
+# Adapter repository (for downloading/updating adapters)
+[[adapter_repos]]
+name = "official"
+type = "git"
+url = "https://github.com/byteowlz/hstry"
+# git_ref = "v0.5.5"  # defaults to current hstry version
+path = "adapters"
+enabled = true
+
+# Local adapter development
+# [[adapter_repos]]
+# name = "custom"
+# type = "local"
+# path = "~/my-adapters"
+# enabled = true
+
 # Adapter overrides (enable/disable imports)
 [[adapters]]
 name = "codex"
@@ -41,6 +57,15 @@ enabled = false
 poll_interval_secs = 30
 search_api = true
 # search_port = 3000
+# transport = "tcp"  # "tcp" (default) or "unix"
+
+# Sync settings (for hub/satellite mode)
+[sync]
+mode = "standalone"  # "standalone", "hub", or "satellite"
+# device_id = "my-machine"
+# hub_remote = "server"
+auto_sync = false
+auto_sync_interval_secs = 300
 
 # Web automation settings
 [web]
@@ -58,6 +83,43 @@ enabled = false
 
 [web.providers.gemini]
 enabled = false
+
+# =============================================================================
+# Resume Configuration
+# =============================================================================
+# Configure how `hstry resume` opens past sessions in your coding agent.
+
+[resume]
+# Default agent to resume sessions in
+default_agent = "pi"
+
+# Per-agent configuration
+# Placeholders in command: {session_path}, {session_id}, {workspace}
+
+[resume.agents.pi]
+format = "pi"
+command = "pi --session {session_path}"
+session_dir = "~/.pi/agent/sessions"
+
+[resume.agents.claude-code]
+format = "claude-code"
+command = "claude --resume {session_id}"
+session_dir = "~/.claude/projects"
+
+[resume.agents.codex]
+format = "codex"
+command = "codex resume {session_id}"
+session_dir = "~/.codex/sessions"
+
+[resume.agents.opencode]
+format = "opencode"
+command = "opencode"
+session_dir = "~/.local/share/opencode"
+
+[resume.agents.goose]
+format = "goose"
+command = "goose session resume {session_id}"
+session_dir = "~/.local/share/goose/sessions"
 
 # =============================================================================
 # Source Examples

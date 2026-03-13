@@ -574,6 +574,9 @@ impl Database {
         if opts.after.is_some() {
             sql.push_str(" AND created_at > ?");
         }
+        if opts.before.is_some() {
+            sql.push_str(" AND created_at < ?");
+        }
 
         sql.push_str(" ORDER BY COALESCE(updated_at, created_at) DESC");
 
@@ -591,6 +594,9 @@ impl Database {
         }
         if let Some(after) = opts.after {
             query = query.bind(after.timestamp());
+        }
+        if let Some(before) = opts.before {
+            query = query.bind(before.timestamp());
         }
 
         let rows = query.fetch_all(&self.pool).await?;
@@ -624,6 +630,9 @@ impl Database {
         if opts.after.is_some() {
             sql.push_str(" AND c.created_at > ?");
         }
+        if opts.before.is_some() {
+            sql.push_str(" AND c.created_at < ?");
+        }
 
         sql.push_str(" ORDER BY COALESCE(c.updated_at, c.created_at) DESC");
 
@@ -641,6 +650,9 @@ impl Database {
         }
         if let Some(after) = opts.after {
             query = query.bind(after.timestamp());
+        }
+        if let Some(before) = opts.before {
+            query = query.bind(before.timestamp());
         }
 
         let rows = query.fetch_all(&self.pool).await?;
@@ -683,6 +695,9 @@ impl Database {
         if opts.after.is_some() {
             sql.push_str(" AND c.created_at > ?");
         }
+        if opts.before.is_some() {
+            sql.push_str(" AND c.created_at < ?");
+        }
 
         sql.push_str(" ORDER BY COALESCE(c.updated_at, c.created_at) DESC");
 
@@ -700,6 +715,9 @@ impl Database {
         }
         if let Some(after) = opts.after {
             query = query.bind(after.timestamp());
+        }
+        if let Some(before) = opts.before {
+            query = query.bind(before.timestamp());
         }
 
         let rows = query.fetch_all(&self.pool).await?;
@@ -2091,6 +2109,7 @@ pub struct ListConversationsOptions {
     pub source_id: Option<String>,
     pub workspace: Option<String>,
     pub after: Option<chrono::DateTime<Utc>>,
+    pub before: Option<chrono::DateTime<Utc>>,
     pub limit: Option<i64>,
 }
 

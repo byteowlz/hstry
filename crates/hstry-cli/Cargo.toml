@@ -28,6 +28,7 @@ tokio-stream.workspace = true
 futures.workspace = true
 tonic.workspace = true
 chrono.workspace = true
+dateparser.workspace = true
 uuid.workspace = true
 dirs.workspace = true
 which.workspace = true

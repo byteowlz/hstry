@@ -372,25 +372,27 @@ function buildPiFiles(conversations: Conversation[], opts: ExportOptions): Expor
         }
       }
 
+      // Always emit a valid usage object so pi's footer doesn't crash
+      // when iterating entries and accessing usage.input unconditionally.
       const piMessage: PiMessage = {
         role: mapRoleToPi(msg.role),
         content: contentBlocks.length > 0 ? contentBlocks : undefined,
         timestamp: msg.createdAt,
         model: msg.model,
-        usage: msg.tokens ? {
+        usage: {
           input: 0,
-          output: 0,
+          output: msg.tokens ?? 0,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: msg.tokens,
-          cost: msg.costUsd ? {
+          totalTokens: msg.tokens ?? 0,
+          cost: {
             input: 0,
             output: 0,
             cacheRead: 0,
             cacheWrite: 0,
-            total: msg.costUsd,
-          } : undefined as unknown as PiUsage['cost'],
-        } : undefined,
+            total: msg.costUsd ?? 0,
+          },
+        },
       };
 
       const msgEntry: MessageEntry = {

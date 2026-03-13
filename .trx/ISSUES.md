@@ -2,6 +2,36 @@
 
 ## Open
 
+### [trx-7ghs] Add message_count and version fields to GetConversation and ListConversations responses (P1, feature)
+The oqto runner needs to include MessageVersion { version, message_count } in agent.idle events for the frontend sync protocol. Currently, to get message_count the runner must call get_messages and count the results, which is expensive for large conversations.
+
+Add to Conversation proto message:
+- uint64 version (monotonic counter, see trx-c077)
+- uint32 message_count (number of messages in conversation)
+...
+
+
+### [trx-5ph6] append_messages should be idempotent by message idx -- prevent duplicate inserts (P1, bug)
+The oqto runner calls append_messages both incrementally (during streaming, debounced per second) and authoritatively (on AgentEnd). When both fire close together, the same messages can be appended twice with the same idx values.
+
+Current behavior: hstry uses ON CONFLICT(conversation_id, idx) DO UPDATE which overwrites. This is mostly safe but:
+1. It causes unnecessary writes
+2. If the incremental persist has partial data and the authoritative persist has full data, the race can go either way
+...
+
+
+### [trx-c077] Add monotonic version counter to conversations for sync protocol (P1, feature)
+Add a 'version' column (INTEGER NOT NULL DEFAULT 0) to the conversations table. This is a monotonic logical clock that increments on every mutation (append_messages, write_conversation, update_conversation).
+
+Purpose: The oqto runner includes this version in agent.idle events so the frontend can deterministically check 'am I in sync?' in O(1). If local.version < server.version, the frontend fetches from hstry. No heuristics needed.
+
+Implementation:
+...
+
+
+### [trx-6124] Pi adapter sync broken: HSTRY_REQUEST not provided (P1, bug)
+The pi adapter always fails with 'HSTRY_REQUEST not provided' during hstry sync. This means sessions that weren't persisted via gRPC during the live session are never recoverable. Observed on octo-azure for user oqto_usr_wismut. The adapter.ts at /usr/local/share/hstry/adapters/pi/ expects HSTRY_REQUEST env var but hstry CLI doesn't set it.
+
 ### [trx-5mf1] Add DeleteConversation gRPC RPC to remove conversations and their messages (P1, feature)
 
 ### [trx-6yb5] Add UpdateConversation gRPC RPC for partial metadata updates (title, workspace, model, provider, metadata) (P1, feature)

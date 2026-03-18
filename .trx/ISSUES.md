@@ -2,6 +2,15 @@
 
 ## Open
 
+### [trx-8em1] hstry must not crash-loop on adapter version mismatch -- gracefully degrade or auto-update (P0, bug)
+When hstry binary is updated (e.g. 0.5.5 -> 0.5.7) but adapters are not, hstry exits immediately with:
+'Adapter version mismatch (expected hstry 0.5.7, found 0.5.5). Run hstry adapters update.'
+
+With systemd Restart=always, this creates a crash-loop (1100+ restarts observed in production, 3 users affected on octo-azure, 21+ messages permanently lost from Pi JSONL).
+
+...
+
+
 ### [trx-6124] Pi adapter sync broken: HSTRY_REQUEST not provided (P1, bug)
 The pi adapter always fails with 'HSTRY_REQUEST not provided' during hstry sync. This means sessions that weren't persisted via gRPC during the live session are never recoverable. Observed on octo-azure for user oqto_usr_wismut. The adapter.ts at /usr/local/share/hstry/adapters/pi/ expects HSTRY_REQUEST env var but hstry CLI doesn't set it.
 

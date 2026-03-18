@@ -223,6 +223,9 @@ pub struct SearchHit {
     pub source_path: Option<String>,
     #[serde(default)]
     pub host: Option<String>,
+    /// Number of occurrences in the original result set (for compact mode)
+    #[serde(default)]
+    pub occurrences: Option<i32>,
 }
 
 #[cfg(test)]

@@ -215,6 +215,10 @@ enum Command {
         #[arg(long)]
         include_system: bool,
 
+        /// Show each session only once with occurrence count
+        #[arg(short, long)]
+        compact: bool,
+
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
@@ -811,6 +815,7 @@ async fn main() -> Result<()> {
             no_tools,
             dedup,
             include_system,
+            compact,
             input,
         } => {
             let input = read_input::<SearchInput>(input)?;
@@ -840,6 +845,7 @@ async fn main() -> Result<()> {
                 no_tools,
                 dedup,
                 include_system,
+                compact,
                 cli.json,
             )
             .await
@@ -1555,6 +1561,7 @@ async fn cmd_search_fast(
     no_tools: bool,
     dedup: bool,
     include_system: bool,
+    compact: bool,
     json: bool,
 ) -> Result<()> {
     // Request more results than needed if we're filtering, to ensure we get enough after filtering
@@ -1636,17 +1643,57 @@ async fn cmd_search_fast(
         });
     }
 
-    // Deduplicate by content hash if requested
+    // Deduplicate by external_id (real session identifier) if requested
     if dedup {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let mut seen = std::collections::HashSet::new();
         messages.retain(|hit| {
-            let mut hasher = DefaultHasher::new();
-            hit.content.hash(&mut hasher);
-            let hash = hasher.finish();
-            seen.insert(hash)
+            // Use external_id if available, otherwise conversation_id
+            let key = hit
+                .external_id
+                .clone()
+                .unwrap_or_else(|| hit.conversation_id.to_string());
+            seen.insert(key)
+        });
+    }
+
+    // Group by external_id if compact mode is enabled
+    if compact {
+        use std::collections::BTreeMap;
+
+        // Group by a unique key: prefer external_id, fall back to conversation_id
+        // This ensures sessions that exist in multiple sources are grouped together
+        let mut grouped: BTreeMap<String, (usize, hstry_core::models::SearchHit)> =
+            BTreeMap::new();
+
+        for hit in &messages {
+            // Use external_id if available, otherwise conversation_id
+            let key = hit
+                .external_id
+                .clone()
+                .unwrap_or_else(|| hit.conversation_id.to_string());
+
+            let entry = grouped.entry(key).or_insert((0, hit.clone()));
+            entry.0 += 1; // increment occurrence count
+            // Keep the hit with the highest score
+            if hit.score > entry.1.score {
+                entry.1 = hit.clone();
+            }
+        }
+
+        // Convert back to vector with occurrence counts set
+        messages = grouped
+            .into_values()
+            .map(|(count, mut hit)| {
+                hit.occurrences = Some(count as i32);
+                hit
+            })
+            .collect();
+
+        // Re-sort by score after grouping
+        messages.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
 
@@ -1662,7 +1709,11 @@ async fn cmd_search_fast(
         });
     }
 
-    pretty::print_search_results(&messages);
+    if compact {
+        pretty::print_search_results_compact(&messages);
+    } else {
+        pretty::print_search_results(&messages);
+    }
     Ok(())
 }
 

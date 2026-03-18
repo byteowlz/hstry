@@ -488,24 +488,162 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
     );
 }
 
-/// Print search results in TSV format (for piping/scripting).
-#[expect(dead_code)]
+/// Print compact search results (one per session with occurrence count).
 pub fn print_search_results_compact(hits: &[SearchHit]) {
     if hits.is_empty() {
-        println!("No results found.");
+        println!("{}", style("No results found.").dim());
         return;
     }
 
-    for hit in hits {
-        let score = hit.score.abs();
-        let title = hit.title.as_deref().unwrap_or("-");
-        let ws = hit.workspace.as_deref().unwrap_or("-");
-        println!(
-            "{score:.1}\t{role}\t{adapter}\t{ws}\t{title}",
-            role = hit.role,
-            adapter = hit.source_adapter,
+    let width = term_width();
+    let inner = width - 2;
+    let header_text = format!(
+        " Found {} session(s) ",
+        hits.len()
+    );
+    let padding = inner.saturating_sub(header_text.len());
+
+    // Header
+    println!(
+        "{}{}{}",
+        style("╭").dim(),
+        style("─".repeat(inner)).dim(),
+        style("╮").dim()
+    );
+    println!(
+        "{}{}{}{}",
+        style("│").dim(),
+        style(&header_text).bold(),
+        " ".repeat(padding),
+        style("│").dim()
+    );
+    println!(
+        "{}{}{}",
+        style("├").dim(),
+        style("─".repeat(inner)).dim(),
+        style("┤").dim()
+    );
+
+    for (i, hit) in hits.iter().enumerate() {
+        // Separator between items
+        if i > 0 {
+            println!(
+                "{}{}{}",
+                style("├").dim(),
+                style("─".repeat(inner)).dim(),
+                style("┤").dim()
+            );
+        }
+
+        // Line 1: score bar, role, adapter, workspace, date
+        let icons = Icons::detect();
+        let bar = score_bar(hit.score);
+        let role_str = hit.role.to_string();
+        let role = role_style(&role_str).apply_to(&role_str);
+        let adapter = style(&hit.source_adapter).cyan();
+        let date = relative_time_short(hit.conv_created_at);
+
+        let ws_max = width.saturating_sub(70).max(20);
+        let ws = hit
+            .workspace
+            .as_ref()
+            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
+            .unwrap_or_default();
+
+        let host_str = hit
+            .host
+            .as_ref()
+            .map(|h| format!("{} {} ", icons.host, h))
+            .unwrap_or_default();
+
+        let date_str = format!("{} {}", icons.clock, date);
+
+        let line1 = format!(
+            "{} {} {} {} {} {}{}",
+            style("│").dim(),
+            style(bar).yellow(),
+            role,
+            adapter,
+            style(&ws).dim(),
+            style(host_str).dim(),
+            style(date_str).dim().italic()
         );
+        println!("{}", pad_line(&line1, width));
+
+        // Line 2: title (if present, truncated)
+        if let Some(title) = &hit.title {
+            let clean: String = title
+                .chars()
+                .map(|c| if c.is_whitespace() { ' ' } else { c })
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let max_title = inner.saturating_sub(2);
+            let display = if clean.len() > max_title {
+                format!("{}...", &clean[..max_title - 3])
+            } else {
+                clean
+            };
+            let line2 = format!("{} {}", style("│").dim(), style(display).bold());
+            println!("{}", pad_line(&line2, width));
+        }
+
+        // Line 3: snippet (cleaned, single line, highlighted)
+        let snippet = clean_snippet(&hit.snippet);
+        let snippet = colorize_snippet(&snippet);
+        let max_snippet = inner.saturating_sub(2);
+        let display = if console::measure_text_width(&snippet) > max_snippet {
+            // Truncate by visible width
+            let mut truncated = String::new();
+            let mut vis_len = 0;
+            let mut in_escape = false;
+            for c in snippet.chars() {
+                if c == '\x1b' {
+                    in_escape = true;
+                }
+                if in_escape {
+                    truncated.push(c);
+                    if c == 'm' {
+                        in_escape = false;
+                    }
+                } else {
+                    if vis_len >= max_snippet - 3 {
+                        break;
+                    }
+                    truncated.push(c);
+                    vis_len += 1;
+                }
+            }
+            truncated + "..."
+        } else {
+            snippet
+        };
+        let line3 = format!("{} {}", style("│").dim(), display);
+        println!("{}", pad_line(&line3, width));
+
+        // Line 4: occurrence count if > 1
+        if let Some(occurrences) = hit.occurrences {
+            if occurrences > 1 {
+                let occ_text = format!("+{} more occurrences", occurrences - 1);
+                let line4 = format!(
+                    "{} {}",
+                    style("│").dim(),
+                    style(occ_text).dim().italic()
+                );
+                println!("{}", pad_line(&line4, width));
+            }
+        }
     }
+
+    // Footer
+    println!(
+        "{}{}{}",
+        style("╰").dim(),
+        style("─".repeat(inner)).dim(),
+        style("╯").dim()
+    );
 }
 
 #[cfg(test)]

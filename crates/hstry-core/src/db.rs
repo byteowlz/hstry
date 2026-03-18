@@ -1819,6 +1819,7 @@ impl Database {
                 source_adapter: row.get("source_adapter"),
                 source_path: row.get("source_path"),
                 host: None,
+                occurrences: None,
             });
         }
 

@@ -435,6 +435,7 @@ fn search_with_components(
             source_adapter: extract_text(&doc, fields.source_adapter).unwrap_or_default(),
             source_path: extract_text(&doc, fields.source_path),
             host: None,
+            occurrences: None,
         });
     }
 

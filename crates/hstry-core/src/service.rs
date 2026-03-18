@@ -254,6 +254,7 @@ pub fn hit_from_proto(hit: proto::SearchHit) -> SearchHit {
         } else {
             Some(hit.host)
         },
+        occurrences: None,
     }
 }
 

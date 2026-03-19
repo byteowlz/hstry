@@ -71,6 +71,7 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-bw1g] Add monotonic conversation version for deterministic message sync (closed 2026-03-19)
 - [trx-7ghs] Add message_count and version fields to GetConversation and ListConversations responses (closed 2026-03-13)
 - [trx-5ph6] append_messages should be idempotent by message idx -- prevent duplicate inserts (closed 2026-03-13)
 - [trx-c077] Add monotonic version counter to conversations for sync protocol (closed 2026-03-13)

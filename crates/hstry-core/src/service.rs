@@ -353,8 +353,8 @@ pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
         harness: conv.harness.clone(),
         readable_id: conv.readable_id.clone(),
         platform_id: conv.platform_id.clone(),
-        version: conv.version as u64,
-        message_count: conv.message_count as u32,
+        version: u64::try_from(conv.version).unwrap_or(0),
+        message_count: u32::try_from(conv.message_count).unwrap_or(0),
     }
 }
 

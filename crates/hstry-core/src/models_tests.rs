@@ -354,6 +354,7 @@ mod search_hit_tests {
             source_adapter: "opencode".to_string(),
             source_path: Some("/home/user/.opencode".to_string()),
             host: None,
+            occurrences: None,
         };
 
         let json = serde_json::to_string(&hit).expect("serialize");

@@ -1015,8 +1015,8 @@ async fn main() -> Result<()> {
             })?;
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_resume(
-                &db, &runner, &config, id, search, agent, source, workspace, after, before,
-                limit, dry_run, pick, cli.json,
+                &db, &runner, &config, id, search, agent, source, workspace, after, before, limit,
+                dry_run, pick, cli.json,
             )
             .await
         }
@@ -1667,8 +1667,7 @@ async fn cmd_search_fast(
 
         // Group by a unique key: prefer external_id, fall back to conversation_id
         // This ensures sessions that exist in multiple sources are grouped together
-        let mut grouped: BTreeMap<String, (usize, hstry_core::models::SearchHit)> =
-            BTreeMap::new();
+        let mut grouped: BTreeMap<String, (usize, hstry_core::models::SearchHit)> = BTreeMap::new();
 
         for hit in &messages {
             // Use external_id if available, otherwise conversation_id
@@ -3644,6 +3643,8 @@ async fn cmd_export(
             cost_usd: conv.cost_usd,
             messages: parsed_messages,
             metadata: Some(conv.metadata.clone()),
+            version: Some(u64::try_from(conv.version).unwrap_or(0)),
+            message_count: Some(u32::try_from(conv.message_count).unwrap_or(0)),
         });
     }
 
@@ -3708,11 +3709,7 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     // Handle relative dates that dateparser doesn't support
     let now = chrono::Utc::now();
     if lower == "today" {
-        return Ok(now
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc());
+        return Ok(now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc());
     }
     if lower == "yesterday" {
         return Ok((now - chrono::Duration::days(1))
@@ -3893,9 +3890,7 @@ async fn run_fzf_picker(
     let source = db
         .get_source(&conversation.source_id)
         .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("Source '{}' not found", conversation.source_id)
-        })?;
+        .ok_or_else(|| anyhow::anyhow!("Source '{}' not found", conversation.source_id))?;
 
     let source_adapter = &source.adapter;
     let is_same_agent = source_adapter == &agent_config.format;
@@ -4041,8 +4036,7 @@ async fn cmd_resume(
                     limit: Some(limit),
                     ..Default::default()
                 };
-                let hits =
-                    hstry_core::search_tantivy::search(&index_path, query, &search_opts)?;
+                let hits = hstry_core::search_tantivy::search(&index_path, query, &search_opts)?;
                 if hits.is_empty() {
                     anyhow::bail!("No conversations found matching '{query}'");
                 }
@@ -4082,7 +4076,10 @@ async fn cmd_resume(
                 });
             }
 
-            eprintln!("Found {} conversations matching '{query}':\n", matches.len());
+            eprintln!(
+                "Found {} conversations matching '{query}':\n",
+                matches.len()
+            );
             for (i, cs) in matches.iter().enumerate() {
                 let title = cs
                     .conversation
@@ -4097,20 +4094,13 @@ async fn cmd_resume(
                 };
                 let source = &cs.conversation.source_id;
                 let date = cs.conversation.created_at.format("%Y-%m-%d %H:%M");
-                let workspace = cs
-                    .conversation
-                    .workspace
-                    .as_deref()
-                    .unwrap_or("");
+                let workspace = cs.conversation.workspace.as_deref().unwrap_or("");
                 let ws_short = workspace
                     .strip_prefix("/Users/")
                     .and_then(|s| s.split_once('/').map(|(_, rest)| format!("~/{rest}")))
                     .unwrap_or_else(|| workspace.to_string());
 
-                eprintln!(
-                    "  {i:>3}) [{source}] {date}  {ws_short}",
-                    i = i + 1
-                );
+                eprintln!("  {i:>3}) [{source}] {date}  {ws_short}", i = i + 1);
                 eprintln!("       {truncated}");
             }
             eprintln!();
@@ -4227,9 +4217,7 @@ async fn cmd_resume(
         .map(PathBuf::from);
 
     let is_same_agent = source_adapter == &agent_config.format;
-    let original_exists = original_file
-        .as_ref()
-        .is_some_and(|p| p.exists());
+    let original_exists = original_file.as_ref().is_some_and(|p| p.exists());
 
     if is_same_agent && original_exists {
         let session_path = original_file.as_ref().unwrap();
@@ -4260,10 +4248,7 @@ async fn cmd_resume(
         }
 
         if !json_output {
-            eprintln!(
-                "Resuming {} session directly in {workspace}",
-                agent_name
-            );
+            eprintln!("Resuming {} session directly in {workspace}", agent_name);
         }
 
         let cmd = build_resume_command(&agent_config, session_path, &conversation);
@@ -4272,14 +4257,12 @@ async fn cmd_resume(
     }
 
     // Step 4: Convert and place
-    let adapter_path = runner
-        .find_adapter(&agent_config.format)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No adapter found for format '{}'. Is it installed and enabled?",
-                agent_config.format
-            )
-        })?;
+    let adapter_path = runner.find_adapter(&agent_config.format).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No adapter found for format '{}'. Is it installed and enabled?",
+            agent_config.format
+        )
+    })?;
 
     // Load messages and build export conversation
     let messages = db.get_messages(conversation.id).await?;
@@ -4312,6 +4295,8 @@ async fn cmd_resume(
         cost_usd: conversation.cost_usd,
         messages: parsed_messages,
         metadata: Some(conversation.metadata.clone()),
+        version: Some(u64::try_from(conversation.version).unwrap_or(0)),
+        message_count: Some(u32::try_from(conversation.message_count).unwrap_or(0)),
     };
 
     let export_opts = ExportOptions {
@@ -4424,10 +4409,7 @@ fn build_resume_command(
     conversation: &Conversation,
 ) -> String {
     let id_string = conversation.id.to_string();
-    let session_id = conversation
-        .external_id
-        .as_deref()
-        .unwrap_or(&id_string);
+    let session_id = conversation.external_id.as_deref().unwrap_or(&id_string);
 
     agent_config
         .command
@@ -4464,10 +4446,7 @@ fn place_exported_session(
     if let Some(ref content) = result.content {
         // Single-file export (e.g., JSON, markdown)
         let id_string = conversation.id.to_string();
-        let session_id = conversation
-            .external_id
-            .as_deref()
-            .unwrap_or(&id_string);
+        let session_id = conversation.external_id.as_deref().unwrap_or(&id_string);
         let ext = match result.format.as_str() {
             "markdown" => "md",
             "json" => "json",
@@ -4490,10 +4469,7 @@ fn place_exported_session(
     if let Some(ref files) = result.files {
         for file in files {
             // Strip the root prefix from the file path
-            let relative = file
-                .path
-                .strip_prefix(root_prefix)
-                .unwrap_or(&file.path);
+            let relative = file.path.strip_prefix(root_prefix).unwrap_or(&file.path);
             let target = session_dir.join(relative);
 
             if dry_run {

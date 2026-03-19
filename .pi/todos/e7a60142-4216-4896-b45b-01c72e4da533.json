@@ -1,0 +1,29 @@
+{
+  "todos": [
+    {
+      "id": "1",
+      "content": "Extend ParsedConversation/ExportConversation with optional version/message_count",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "2",
+      "content": "Add serde tests for backward compat (old adapters without fields) and new fields",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "3",
+      "content": "Update adapter contract docs",
+      "status": "completed",
+      "priority": "medium"
+    },
+    {
+      "id": "4",
+      "content": "Run full tests, bump, commit, tag",
+      "status": "in_progress",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-03-19T20:45:11.601Z"
+}

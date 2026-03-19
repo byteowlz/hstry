@@ -27,6 +27,9 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
+### [trx-2wpe] Adapter protocol: add optional conversation version/message_count fields for import/export parity (P2, task)
+Now that conversations.version/message_count are canonical in hstry, adapter protocol structs should expose these as OPTIONAL fields for forward-compatible import/export flows.\n\nWhy\n- Current hstry-runtime ParsedConversation/ExportConversation omit version/message_count entirely.\n- External adapters can ignore them, but hstry-originating adapters/export tools lose metadata parity and cannot round-trip deterministic sync hints.\n\nScope\n1) Extend adapter protocol types\n- crates/hstry-runtime/src/runner.rs\n  - ParsedConversation: add optional version/message_count\n  - ExportConversation: add optional version/message_count\n- Keep optional so existing adapters remain compatible.\n\n2) Sync/import behavior\n- hstry-cli sync/import should continue deriving authoritative version via DB mutation logic (do not trust external version blindly for writes).\n- If provided by adapter, version/message_count may be stored in metadata for diagnostics, but DB-maintained counters remain source of truth.\n\n3) Tests\n- Serialization/deserialization tests proving old adapters (without fields) still parse\n- Tests for new optional fields present\n\n4) Docs\n- Update adapter contract docs to mark version/message_count optional, read-only hints.
+
 ### [trx-smd7] Add tests for parallel sync correctness (P2, task)
 
 ### [trx-sq9n] Add sync performance instrumentation and per-source timings (P2, task)

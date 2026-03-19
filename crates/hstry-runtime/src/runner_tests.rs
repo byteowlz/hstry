@@ -192,6 +192,8 @@ mod adapter_request_tests {
                 },
             ],
             metadata: Some(serde_json::json!({"tags": ["test"]})),
+            version: Some(5),
+            message_count: Some(2),
         };
 
         let req = AdapterRequest::Export {
@@ -384,6 +386,174 @@ mod parsed_conversation_tests {
         assert!(conv.external_id.is_none());
         assert!(conv.title.is_none());
         assert!(conv.messages.is_empty());
+    }
+
+    #[test]
+    fn old_adapter_without_version_fields_deserializes() {
+        // Simulates a response from an adapter that predates version/messageCount fields
+        let json = r#"{
+            "externalId": "conv-old",
+            "title": "Old Adapter",
+            "createdAt": 1700000000000,
+            "messages": [{"role": "user", "content": "Hello"}]
+        }"#;
+        let conv: ParsedConversation = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(conv.external_id, Some("conv-old".to_string()));
+        assert_eq!(conv.version, None, "version should default to None");
+        assert_eq!(
+            conv.message_count, None,
+            "messageCount should default to None"
+        );
+    }
+
+    #[test]
+    fn conversation_with_version_fields_deserializes() {
+        let json = r#"{
+            "externalId": "conv-new",
+            "title": "New Adapter",
+            "createdAt": 1700000000000,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "version": 42,
+            "messageCount": 7
+        }"#;
+        let conv: ParsedConversation = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(conv.version, Some(42));
+        assert_eq!(conv.message_count, Some(7));
+    }
+
+    #[test]
+    fn version_fields_omitted_from_serialized_output_when_none() {
+        let conv = ParsedConversation {
+            external_id: Some("conv-1".to_string()),
+            readable_id: None,
+            title: None,
+            created_at: 1700000000000,
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            messages: vec![],
+            metadata: None,
+            version: None,
+            message_count: None,
+        };
+        let json = serde_json::to_string(&conv).expect("serialize");
+        assert!(
+            !json.contains("version"),
+            "version should be omitted when None"
+        );
+        assert!(
+            !json.contains("messageCount"),
+            "messageCount should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn version_fields_present_in_serialized_output_when_some() {
+        let conv = ParsedConversation {
+            external_id: Some("conv-1".to_string()),
+            readable_id: None,
+            title: None,
+            created_at: 1700000000000,
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            messages: vec![],
+            metadata: None,
+            version: Some(10),
+            message_count: Some(5),
+        };
+        let value = serde_json::to_value(&conv).expect("serialize");
+        assert_eq!(value["version"], 10);
+        assert_eq!(value["messageCount"], 5);
+    }
+}
+
+#[cfg(test)]
+mod export_conversation_version_tests {
+    use super::super::ExportConversation;
+
+    #[test]
+    fn old_export_without_version_fields_deserializes() {
+        let json = r#"{
+            "externalId": "conv-old",
+            "title": "Export Test",
+            "createdAt": 1700000000000,
+            "messages": []
+        }"#;
+        let conv: ExportConversation = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(conv.version, None);
+        assert_eq!(conv.message_count, None);
+    }
+
+    #[test]
+    fn export_with_version_fields_deserializes() {
+        let json = r#"{
+            "externalId": "conv-new",
+            "title": "Export Test",
+            "createdAt": 1700000000000,
+            "messages": [],
+            "version": 99,
+            "messageCount": 15
+        }"#;
+        let conv: ExportConversation = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(conv.version, Some(99));
+        assert_eq!(conv.message_count, Some(15));
+    }
+
+    #[test]
+    fn export_version_fields_omitted_when_none() {
+        let conv = ExportConversation {
+            external_id: Some("conv-1".to_string()),
+            readable_id: None,
+            title: None,
+            created_at: 1700000000000,
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            messages: vec![],
+            metadata: None,
+            version: None,
+            message_count: None,
+        };
+        let json = serde_json::to_string(&conv).expect("serialize");
+        assert!(!json.contains("version"));
+        assert!(!json.contains("messageCount"));
+    }
+
+    #[test]
+    fn export_version_fields_present_when_some() {
+        let conv = ExportConversation {
+            external_id: Some("conv-1".to_string()),
+            readable_id: None,
+            title: None,
+            created_at: 1700000000000,
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            messages: vec![],
+            metadata: None,
+            version: Some(3),
+            message_count: Some(12),
+        };
+        let value = serde_json::to_value(&conv).expect("serialize");
+        assert_eq!(value["version"], 3);
+        assert_eq!(value["messageCount"], 12);
     }
 }
 

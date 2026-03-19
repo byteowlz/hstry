@@ -144,6 +144,12 @@ HSTRY_REQUEST='{"method":"parse","params":{"path":"/path/to/file.json","opts":{"
 - The Rust `ParsedConversation` struct uses `created_at: i64` - floats will cause deserialization errors.
 - Response types are defined in `adapters/types/index.ts` and must match `crates/hstry-runtime/src/runner.rs`.
 
+**Optional sync-hint fields (v0.5.10+):**
+- `version` (number, optional): Monotonic version counter from hstry. Read-only hint — the DB-maintained counter is authoritative and is never overwritten by adapter-supplied values.
+- `messageCount` (number, optional): Denormalized message count. Same caveat: DB is authoritative.
+- Both fields are omitted from serialized output when absent (`None`), so existing adapters that don't produce them remain fully compatible.
+- Adapters MAY include these fields for diagnostics or round-trip export/import parity, but MUST NOT rely on them for write correctness.
+
 **Common adapter issues:**
 - "Could not detect format" - The `detect()` method returned null. Check file path patterns and content detection logic.
 - "data did not match any variant" - Usually a type mismatch. Check that timestamps are integers, not floats.

@@ -37,6 +37,10 @@ export interface Conversation {
   costUsd?: number;
   messages: Message[];
   metadata?: Record<string, unknown>;
+  /** Monotonic version counter (read-only hint; DB counters are authoritative). */
+  version?: number;
+  /** Denormalized message count (read-only hint; DB maintains authoritative count). */
+  messageCount?: number;
 }
 
 /** A message within a conversation */

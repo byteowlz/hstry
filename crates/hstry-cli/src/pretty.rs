@@ -497,10 +497,7 @@ pub fn print_search_results_compact(hits: &[SearchHit]) {
 
     let width = term_width();
     let inner = width - 2;
-    let header_text = format!(
-        " Found {} session(s) ",
-        hits.len()
-    );
+    let header_text = format!(" Found {} session(s) ", hits.len());
     let padding = inner.saturating_sub(header_text.len());
 
     // Header
@@ -627,11 +624,7 @@ pub fn print_search_results_compact(hits: &[SearchHit]) {
         if let Some(occurrences) = hit.occurrences {
             if occurrences > 1 {
                 let occ_text = format!("+{} more occurrences", occurrences - 1);
-                let line4 = format!(
-                    "{} {}",
-                    style("│").dim(),
-                    style(occ_text).dim().italic()
-                );
+                let line4 = format!("{} {}", style("│").dim(), style(occ_text).dim().italic());
                 println!("{}", pad_line(&line4, width));
             }
         }

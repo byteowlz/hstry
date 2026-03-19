@@ -28,6 +28,8 @@ fn export_request_serializes() {
             metadata: None,
         }],
         metadata: None,
+        version: None,
+        message_count: None,
     };
 
     let req = AdapterRequest::Export {

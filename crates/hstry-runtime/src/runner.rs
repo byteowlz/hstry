@@ -175,6 +175,12 @@ pub struct ParsedConversation {
     pub messages: Vec<ParsedMessage>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// Monotonic version counter (read-only hint from source; DB counters are authoritative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    /// Denormalized message count (read-only hint; DB maintains authoritative count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<u32>,
 }
 
 /// Parsed batch response from TS adapter.
@@ -235,6 +241,12 @@ pub struct ExportConversation {
     pub messages: Vec<ParsedMessage>,
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
+    /// Monotonic version counter (read-only hint; DB counters are authoritative).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    /// Denormalized message count (read-only hint; DB maintains authoritative count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<u32>,
 }
 
 /// Export file entry (for multi-file formats).

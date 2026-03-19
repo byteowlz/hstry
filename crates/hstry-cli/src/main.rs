@@ -357,6 +357,10 @@ enum Command {
         /// Show what would happen without writing or launching
         #[arg(long)]
         dry_run: bool,
+
+        /// Interactive picker using fzf
+        #[arg(short, long)]
+        pick: bool,
     },
 
     /// Show database statistics
@@ -1003,6 +1007,7 @@ async fn main() -> Result<()> {
             before,
             limit,
             dry_run,
+            pick,
         } => {
             let db = Database::open(&config.database).await?;
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
@@ -1011,7 +1016,7 @@ async fn main() -> Result<()> {
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_resume(
                 &db, &runner, &config, id, search, agent, source, workspace, after, before,
-                limit, dry_run, cli.json,
+                limit, dry_run, pick, cli.json,
             )
             .await
         }
@@ -3756,6 +3761,180 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
         .map_err(|e| anyhow::anyhow!("Could not parse date '{s}': {e}"))
 }
 
+/// Run interactive fzf picker to select a conversation
+#[allow(clippy::too_many_arguments)]
+async fn run_fzf_picker(
+    db: &Database,
+    config: &Config,
+    source_filter: Option<String>,
+    workspace_filter: Option<String>,
+    after: Option<chrono::DateTime<chrono::Utc>>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
+    limit: i64,
+    agent_override: Option<String>,
+    json_output: bool,
+) -> Result<()> {
+    use hstry_core::db::ListConversationsOptions;
+    use std::process::{Command, Stdio};
+
+    // Determine agent if specified (for preview)
+    let agent_name = agent_override
+        .as_deref()
+        .unwrap_or(&config.resume.default_agent);
+
+    // Fetch conversations with filters
+    let workspace_filter_like = workspace_filter.as_ref().map(|v| format!("%{v}%"));
+    let conversations = db
+        .list_conversation_summaries(ListConversationsOptions {
+            source_id: source_filter,
+            workspace: workspace_filter_like,
+            after,
+            before,
+            limit: Some(limit),
+        })
+        .await?;
+
+    if conversations.is_empty() {
+        anyhow::bail!("No conversations found. Try adjusting filters.");
+    }
+
+    // Build fzf input lines
+    let mut lines: Vec<String> = Vec::new();
+    let mut id_map: std::collections::HashMap<String, uuid::Uuid> =
+        std::collections::HashMap::new();
+
+    for cs in &conversations {
+        let title = cs
+            .conversation
+            .title
+            .as_deref()
+            .or(cs.first_user_message.as_deref())
+            .unwrap_or("(untitled)");
+        let source = &cs.conversation.source_id;
+        let date = cs.conversation.created_at.format("%Y-%m-%d %H:%M");
+        let workspace = cs.conversation.workspace.as_deref().unwrap_or("");
+        let ws_short = workspace
+            .strip_prefix("/Users/")
+            .and_then(|s| s.split_once('/').map(|(_, rest)| format!("~/{rest}")))
+            .unwrap_or_else(|| workspace.to_string());
+        let id_short = cs.conversation.id.to_string()[..8].to_string();
+
+        // Format: "[source] date  workspace  title  (id)"
+        let line = format!(
+            "[{}] {}  {}  {}  ({})",
+            source, date, ws_short, title, id_short
+        );
+        id_map.insert(line.clone(), cs.conversation.id);
+        lines.push(line);
+    }
+
+    // Write to temp file for fzf
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("hstry_picker_{}", std::process::id()));
+    std::fs::write(&temp_file, lines.join("\n"))?;
+
+    // Build fzf command with preview - use file as input
+    let fzf_output = Command::new("fzf")
+        .args([
+            "--height=80%",
+            "--reverse",
+            "--inline-info",
+            "--bind=ctrl-z:ignore",
+            "--preview-window=down:60%",
+            r#"--preview=echo {} | grep -oP '\([0-9a-f]{8}\)' | tr -d '()' | xargs -I {} hstry show {} 2>/dev/null | head -20"#,
+            "--prompt=Resume conversation> ",
+        ])
+        .arg(&temp_file)
+        .stdout(Stdio::piped())
+        .output()?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&temp_file);
+
+    if !fzf_output.status.success() {
+        // User cancelled (ESC or ctrl-c)
+        return Ok(());
+    }
+
+    // Parse selected line
+    let selected = String::from_utf8_lossy(&fzf_output.stdout);
+    let selected = selected.trim();
+
+    if selected.is_empty() {
+        return Ok(());
+    }
+
+    // Extract ID and resume
+    let selected_id = id_map
+        .get(selected)
+        .ok_or_else(|| anyhow::anyhow!("Could not find selected conversation"))?;
+
+    // Now call cmd_resume with the selected ID
+    // We need to re-resolve but since we have the ID, we can use resolve_conversation_by_id
+    let conversation = db
+        .get_conversation(*selected_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+
+    // Get agent config (same logic as cmd_resume)
+    let agent_config = config
+        .resume
+        .agents
+        .get(agent_name)
+        .ok_or_else(|| {
+            let available: Vec<_> = config.resume.agents.keys().collect();
+            anyhow::anyhow!(
+                "No resume configuration for agent '{agent_name}'. Available: {available:?}"
+            )
+        })?
+        .clone();
+
+    // Get source
+    let source = db
+        .get_source(&conversation.source_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("Source '{}' not found", conversation.source_id)
+        })?;
+
+    let source_adapter = &source.adapter;
+    let is_same_agent = source_adapter == &agent_config.format;
+
+    // Output what would happen
+    if json_output {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(serde_json::json!({
+                "conversation_id": conversation.id,
+                "title": conversation.title,
+                "source": conversation.source_id,
+                "source_adapter": source_adapter,
+                "target_agent": agent_name,
+                "target_format": agent_config.format,
+                "is_same_agent": is_same_agent,
+                "action": if is_same_agent { "open_directly" } else { "convert" },
+            })),
+            error: None,
+        });
+    }
+
+    println!(
+        "Selected: {} ({})",
+        conversation.title.as_deref().unwrap_or("(untitled)"),
+        conversation.id
+    );
+    println!("Source: {} ({})", source_adapter, conversation.source_id);
+    println!("Target agent: {} ({})", agent_name, agent_config.format);
+
+    if is_same_agent {
+        println!("Action: Open directly in {}", agent_name);
+    } else {
+        println!("Action: Convert to {} format", agent_config.format);
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_resume(
     db: &Database,
@@ -3770,6 +3949,7 @@ async fn cmd_resume(
     before_str: Option<String>,
     limit: i64,
     dry_run: bool,
+    pick: bool,
     json_output: bool,
 ) -> Result<()> {
     use hstry_core::db::ListConversationsOptions;
@@ -3794,6 +3974,22 @@ async fn cmd_resume(
     // Parse date filters
     let after = after_str.as_deref().map(parse_date_filter).transpose()?;
     let before = before_str.as_deref().map(parse_date_filter).transpose()?;
+
+    // Interactive fzf picker mode
+    if pick {
+        return run_fzf_picker(
+            db,
+            config,
+            source_filter,
+            workspace_filter,
+            after,
+            before,
+            limit,
+            agent_override,
+            json_output,
+        )
+        .await;
+    }
 
     // Step 1: Resolve the conversation
     let conversation = if let Some(ref id_str) = id {

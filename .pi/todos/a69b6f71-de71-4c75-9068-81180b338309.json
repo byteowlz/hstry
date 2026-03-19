@@ -1,35 +1,29 @@
 {
   "todos": [
     {
-      "id": "42a531f0",
-      "content": "Add --compact/-c flag to Search command in main.rs",
+      "id": "c24d71a0",
+      "content": "Add --pick/-p flag to Resume command for fzf mode",
       "status": "completed",
       "priority": "high"
     },
     {
-      "id": "8090912e",
-      "content": "Pass compact flag through cmd_search_fast function",
+      "id": "5162aa2e",
+      "content": "Implement fzf picker in cmd_resume with preview",
       "status": "completed",
       "priority": "high"
     },
     {
-      "id": "b8cd4836",
-      "content": "Group results by conversation_id and track occurrence count",
-      "status": "completed",
-      "priority": "high"
+      "id": "e164ba08",
+      "content": "Test the fzf picker with filters",
+      "status": "in_progress",
+      "priority": "medium"
     },
     {
-      "id": "63a22b96",
-      "content": "Add compact pretty-print function in pretty.rs",
-      "status": "completed",
-      "priority": "high"
-    },
-    {
-      "id": "91837157",
-      "content": "Run cargo check and test the implementation",
-      "status": "completed",
+      "id": "a02c79e1",
+      "content": "Run cargo check and commit",
+      "status": "pending",
       "priority": "medium"
     }
   ],
-  "updated_at": "2026-03-18T07:32:49.646Z"
+  "updated_at": "2026-03-18T10:08:10.446Z"
 }

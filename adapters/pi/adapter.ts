@@ -372,27 +372,25 @@ function buildPiFiles(conversations: Conversation[], opts: ExportOptions): Expor
         }
       }
 
-      // Always emit a valid usage object so pi's footer doesn't crash
-      // when iterating entries and accessing usage.input unconditionally.
       const piMessage: PiMessage = {
         role: mapRoleToPi(msg.role),
         content: contentBlocks.length > 0 ? contentBlocks : undefined,
         timestamp: msg.createdAt,
         model: msg.model,
-        usage: {
+        usage: msg.tokens ? {
           input: 0,
-          output: msg.tokens ?? 0,
+          output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: msg.tokens ?? 0,
-          cost: {
+          totalTokens: msg.tokens,
+          cost: msg.costUsd ? {
             input: 0,
             output: 0,
             cacheRead: 0,
             cacheWrite: 0,
-            total: msg.costUsd ?? 0,
-          },
-        },
+            total: msg.costUsd,
+          } : undefined as unknown as PiUsage['cost'],
+        } : undefined,
       };
 
       const msgEntry: MessageEntry = {
@@ -696,6 +694,32 @@ function calculateTotals(entries: SessionEntry[]): {
   };
 }
 
+/**
+ * Parse Pi session title format: "workspace: Title Text [readable-id]"
+ * Extracts the display title (without workspace prefix) and the readable_id from brackets.
+ * Matches the Rust ParsedTitle::parse() logic in oqto.
+ */
+function parsePiTitle(raw: string | undefined): { title: string | undefined; readableId: string | undefined } {
+  if (!raw) return { title: undefined, readableId: undefined };
+
+  // Pattern: optional "workspace: " prefix, title text, optional " [readable-id]" suffix
+  const match = raw.match(/^(?:[^:]+:\s*)?([^\[]+)\s*\[([^\]]+)\]\s*$/);
+  if (match) {
+    return {
+      title: match[1].trim() || undefined,
+      readableId: match[2].trim() || undefined,
+    };
+  }
+
+  // No brackets - try stripping workspace prefix only
+  const colonMatch = raw.match(/^[^:]+:\s*(.+)$/);
+  if (colonMatch) {
+    return { title: colonMatch[1].trim() || undefined, readableId: undefined };
+  }
+
+  return { title: raw, readableId: undefined };
+}
+
 function deriveTitle(messages: Message[]): string | undefined {
   // Use first user message as title, truncated
   const firstUser = messages.find(m => m.role === 'user');
@@ -704,6 +728,7 @@ function deriveTitle(messages: Message[]): string | undefined {
   const text = firstUser.content.slice(0, 100);
   return text.length < firstUser.content.length ? `${text}...` : text;
 }
+
 
 function parseTimestamp(value?: string | number): number | undefined {
   if (!value) return undefined;
@@ -806,13 +831,18 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e && !!e.name
     );
     const latestSessionInfo = sessionInfoEntries[sessionInfoEntries.length - 1];
-    const title = latestSessionInfo?.name || deriveTitle(messages);
+    const rawTitle = latestSessionInfo?.name || deriveTitle(messages);
+
+    // Parse Pi title format: "workspace: Title Text [readable-id]"
+    const { title: parsedTitle, readableId } = parsePiTitle(rawTitle);
+    const title = parsedTitle || rawTitle;
 
     // Calculate totals from assistant messages with usage
     const { tokensIn, tokensOut, costUsd, model, provider } = calculateTotals(entries);
 
     conversations.push({
       externalId: header.id,
+      readableId,
       title,
       createdAt,
       updatedAt,

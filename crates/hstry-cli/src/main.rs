@@ -3828,7 +3828,10 @@ async fn run_fzf_picker(
     let temp_file = temp_dir.join(format!("hstry_picker_{}", std::process::id()));
     std::fs::write(&temp_file, lines.join("\n"))?;
 
-    // Build fzf command with preview - use file as input
+    // Open temp file for stdin redirection
+    let temp_file_handle = std::fs::File::open(&temp_file)?;
+
+    // Build fzf command with preview - read from stdin
     let fzf_output = Command::new("fzf")
         .args([
             "--height=80%",
@@ -3839,7 +3842,7 @@ async fn run_fzf_picker(
             r#"--preview=echo {} | grep -oP '\([0-9a-f]{8}\)' | tr -d '()' | xargs -I {} hstry show {} 2>/dev/null | head -20"#,
             "--prompt=Resume conversation> ",
         ])
-        .arg(&temp_file)
+        .stdin(Stdio::from(temp_file_handle))
         .stdout(Stdio::piped())
         .output()?;
 

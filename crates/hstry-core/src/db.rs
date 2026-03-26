@@ -276,34 +276,17 @@ impl Database {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
-            let readable_id = readable_id_from_metadata(&metadata).unwrap_or_else(|| {
-                generate_readable_id(&Conversation {
-                    id,
-                    source_id: source_id.clone(),
-                    external_id: external_id.clone(),
-                    readable_id: None,
-                    platform_id: None,
-                    title: title.clone(),
-                    created_at: Utc::now(),
-                    updated_at: None,
-                    model: None,
-                    provider: None,
-                    workspace: None,
-                    tokens_in: None,
-                    tokens_out: None,
-                    cost_usd: None,
-                    metadata: metadata.clone(),
-                    harness: None,
-                    version: 0,
-                    message_count: 0,
-                })
-            });
+            let readable_id = readable_id_from_metadata(&metadata);
 
-            sqlx::query("UPDATE conversations SET readable_id = ? WHERE id = ?")
-                .bind(readable_id)
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await?;
+            // Only backfill if the source actually provided a readable_id.
+            // hstry should never fabricate IDs -- that is the harness's job.
+            if let Some(readable_id) = readable_id {
+                sqlx::query("UPDATE conversations SET readable_id = ? WHERE id = ?")
+                    .bind(readable_id)
+                    .bind(id.to_string())
+                    .execute(&self.pool)
+                    .await?;
+            }
         }
 
         Ok(())
@@ -498,19 +481,18 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        let readable_id = if let Some(id) = conv.readable_id.clone() {
-            Some(id)
+        // Use the readable_id provided by the source/adapter, or fall back to
+        // metadata, or preserve whatever hstry already has. Never fabricate one --
+        // readable_id generation is the harness's responsibility (e.g. Pi extension).
+        let readable_id = conv.readable_id.clone()
+            .or_else(|| readable_id_from_metadata(&conv.metadata));
+        let readable_id = if readable_id.is_some() {
+            readable_id
+        } else if let Some(external_id) = conv.external_id.as_deref() {
+            self.get_conversation_readable_id(&conv.source_id, external_id)
+                .await?
         } else {
-            let from_meta = readable_id_from_metadata(&conv.metadata);
-            if from_meta.is_some() {
-                from_meta
-            } else if let Some(external_id) = conv.external_id.as_deref() {
-                self.get_conversation_readable_id(&conv.source_id, external_id)
-                    .await?
-                    .or_else(|| Some(generate_readable_id(conv)))
-            } else {
-                Some(generate_readable_id(conv))
-            }
+            None
         };
 
         sqlx::query(
@@ -1318,16 +1300,9 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        let readable_id = if let Some(id) = conv.readable_id.clone() {
-            Some(id)
-        } else {
-            let from_meta = readable_id_from_metadata(&conv.metadata);
-            if from_meta.is_some() {
-                from_meta
-            } else {
-                Some(generate_readable_id(conv))
-            }
-        };
+        // Never fabricate readable_ids -- that is the harness's job.
+        let readable_id = conv.readable_id.clone()
+            .or_else(|| readable_id_from_metadata(&conv.metadata));
 
         sqlx::query(
             r"
@@ -2334,34 +2309,6 @@ fn readable_id_from_metadata(metadata: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn generate_readable_id(conv: &Conversation) -> String {
-    // Deterministic, human-readable IDs based on stable identifiers.
-    const ADJECTIVES: &[&str] = &[
-        "amber", "brisk", "calm", "daring", "eager", "fuzzy", "gentle", "hazy", "icy", "jolly",
-        "keen", "lucky", "mellow", "nimble", "proud", "swift",
-    ];
-    const VERBS: &[&str] = &[
-        "builds", "checks", "crafts", "drives", "explores", "fixes", "guides", "helps", "joins",
-        "keeps", "learns", "moves", "patches", "routes", "shapes", "tests",
-    ];
-    const NOUNS: &[&str] = &[
-        "anchor", "beacon", "circuit", "delta", "ember", "forest", "galaxy", "harbor", "island",
-        "junction", "kernel", "ladder", "matrix", "nebula", "orchid", "pioneer",
-    ];
-
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    conv.id.hash(&mut hasher);
-    conv.source_id.hash(&mut hasher);
-    conv.external_id.hash(&mut hasher);
-    conv.title.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let adj_index = usize::try_from(hash % ADJECTIVES.len() as u64).unwrap_or_default();
-    let verb_index = usize::try_from((hash >> 8) % VERBS.len() as u64).unwrap_or_default();
-    let noun_index = usize::try_from((hash >> 16) % NOUNS.len() as u64).unwrap_or_default();
-    let adj = ADJECTIVES[adj_index];
-    let verb = VERBS[verb_index];
-    let noun = NOUNS[noun_index];
-    format!("{adj}-{verb}-{noun}")
-}
+// Removed: generate_readable_id() -- hstry must not fabricate readable_ids.
+// The harness (Pi, opencode, etc.) owns readable_id generation. If the source
+// adapter doesn't provide one, hstry stores NULL.

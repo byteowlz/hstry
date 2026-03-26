@@ -621,12 +621,12 @@ pub fn print_search_results_compact(hits: &[SearchHit]) {
         println!("{}", pad_line(&line3, width));
 
         // Line 4: occurrence count if > 1
-        if let Some(occurrences) = hit.occurrences {
-            if occurrences > 1 {
-                let occ_text = format!("+{} more occurrences", occurrences - 1);
-                let line4 = format!("{} {}", style("│").dim(), style(occ_text).dim().italic());
-                println!("{}", pad_line(&line4, width));
-            }
+        if let Some(occurrences) = hit.occurrences
+            && occurrences > 1
+        {
+            let occ_text = format!("+{} more occurrences", occurrences - 1);
+            let line4 = format!("{} {}", style("│").dim(), style(occ_text).dim().italic());
+            println!("{}", pad_line(&line4, width));
         }
     }
 

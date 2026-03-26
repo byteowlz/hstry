@@ -92,9 +92,9 @@ impl Database {
         }
 
         let mut entries: Vec<_> = std::fs::read_dir(&migrations_dir)?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .collect();
-        entries.sort_by_key(|e| e.path());
+        entries.sort_by_key(std::fs::DirEntry::path);
 
         for entry in entries {
             let path = entry.path();
@@ -1107,7 +1107,7 @@ impl Database {
         // We pass NULL for fields that shouldn't change, and the COALESCE keeps the old value.
         let now = Utc::now().timestamp();
         let id_str = id.to_string();
-        let metadata_str = metadata_json.map(|v| v.to_string());
+        let metadata_str = metadata_json.map(std::string::ToString::to_string);
 
         sqlx::query(
             r"UPDATE conversations SET
@@ -1166,13 +1166,14 @@ impl Database {
         .await?;
 
         let is_update = existing.is_some();
+        let parts_json_str = parts_json.to_string();
         if let Some(ref row) = existing {
             let existing_content: String = row.get("content");
             let existing_parts: String = row
                 .get::<Option<String>, _>("parts_json")
                 .unwrap_or_default();
             // Content-hash idempotency: skip if content and parts match
-            if existing_content == content && existing_parts == parts_json.to_string() {
+            if existing_content == content && existing_parts == parts_json_str {
                 return Ok(false);
             }
         }
@@ -1201,7 +1202,7 @@ impl Database {
         .bind(msg.idx)
         .bind(msg.role.to_string())
         .bind(&content)
-        .bind(parts_json.to_string())
+        .bind(parts_json_str)
         .bind(msg.created_at.map(|dt| dt.timestamp()))
         .bind(&msg.model)
         .bind(msg.tokens)
@@ -1410,10 +1411,10 @@ impl Database {
         let message_count = self
             .count_messages_for_conversation(conversation_id)
             .await?;
-        if let Some(snapshot) = self.get_conversation_snapshot(conversation_id).await? {
-            if snapshot.message_count == message_count {
-                return Ok(snapshot.messages);
-            }
+        if let Some(snapshot) = self.get_conversation_snapshot(conversation_id).await?
+            && snapshot.message_count == message_count
+        {
+            return Ok(snapshot.messages);
         }
 
         let messages = self.get_messages(conversation_id).await?;
@@ -1829,8 +1830,7 @@ impl Database {
     /// Optimized FTS schema initialization that checks integrity only when needed.
     async fn ensure_fts_schema_optimized(&self) -> Result<()> {
         let force_integrity_check = std::env::var("HSTRY_FTS_INTEGRITY_CHECK")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false);
+            .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
 
         if !force_integrity_check {
             self.ensure_fts_schema(false).await?;

@@ -189,10 +189,8 @@ fn render_markdown(
                     Style::default().fg(Color::Yellow),
                 ));
             }
-            MdEvent::SoftBreak => {
-                if !in_code_block {
-                    current_spans.push(Span::raw(" "));
-                }
+            MdEvent::SoftBreak if !in_code_block => {
+                current_spans.push(Span::raw(" "));
             }
             MdEvent::HardBreak => {
                 flush_line(&mut lines, &mut current_spans);
@@ -1037,11 +1035,10 @@ impl App {
         match self.sort_order {
             SortOrder::DateDesc => {
                 self.filtered_conversations
-                    .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    .sort_by_key(|conv| std::cmp::Reverse(conv.created_at));
             }
             SortOrder::DateAsc => {
-                self.filtered_conversations
-                    .sort_by(|a, b| a.created_at.cmp(&b.created_at));
+                self.filtered_conversations.sort_by_key(|a| a.created_at);
             }
             SortOrder::TitleAsc => {
                 self.filtered_conversations.sort_by(|a, b| {
@@ -1444,15 +1441,14 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
             app.search_results.clear();
             app.show_search_results = false;
         }
-        KeyAction::Char('x') => {
-            if app.show_search_results {
+        KeyAction::Char('x')
+            if app.show_search_results => {
                 app.show_search_results = false;
                 app.search_results.clear();
                 app.last_search_query = None;
                 app.conv_selection.index = 0;
                 app.status_message = "Cleared search results".to_string();
             }
-        }
         KeyAction::Char('s') => {
             app.mode = AppMode::Sort;
             app.sort_selection = SortOrder::all()
@@ -1520,26 +1516,23 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::PageUp => {
             handle_navigation(app, NavDirection::PageUp, rt);
         }
-        KeyAction::ToggleSelect => {
-            if app.focus == FocusPane::Middle {
+        KeyAction::ToggleSelect
+            if app.focus == FocusPane::Middle => {
                 app.conv_selection.toggle_selection();
                 app.conv_selection.next(app.active_list_len());
             }
-        }
-        KeyAction::SelectAll => {
-            if app.focus == FocusPane::Middle {
+        KeyAction::SelectAll
+            if app.focus == FocusPane::Middle => {
                 app.conv_selection.select_all(app.active_list_len());
             }
-        }
         KeyAction::Char('V') => {
             app.conv_selection.deselect_all();
         }
-        KeyAction::Tab => {
+        KeyAction::Tab
             // Cycle left pane view when focused on left pane
-            if app.focus == FocusPane::Left {
+            if app.focus == FocusPane::Left => {
                 app.cycle_left_pane_view();
             }
-        }
         KeyAction::Select => {
             if app.focus == FocusPane::Left {
                 // Handle selection based on nav item type
@@ -1680,16 +1673,12 @@ fn handle_search_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
             KeyAction::Select => {
                 app.perform_search(rt);
             }
-            KeyAction::Backspace => {
-                if *cursor > 0 {
-                    query.remove(*cursor - 1);
-                    *cursor -= 1;
-                }
+            KeyAction::Backspace if *cursor > 0 => {
+                query.remove(*cursor - 1);
+                *cursor -= 1;
             }
-            KeyAction::Delete => {
-                if *cursor < query.len() {
-                    query.remove(*cursor);
-                }
+            KeyAction::Delete if *cursor < query.len() => {
+                query.remove(*cursor);
             }
             KeyAction::Left => {
                 *cursor = cursor.saturating_sub(1);

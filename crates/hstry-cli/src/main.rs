@@ -2143,17 +2143,15 @@ async fn cmd_source(
                         error: None,
                     });
                 }
-            } else {
-                if json {
-                    return emit_json(JsonResponse {
-                        ok: true,
-                        result: Some(serde_json::json!({
-                            "duplicate_count": total_duplicates,
-                            "source_ids": to_remove,
-                        })),
-                        error: None,
-                    });
-                }
+            } else if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({
+                        "duplicate_count": total_duplicates,
+                        "source_ids": to_remove,
+                    })),
+                    error: None,
+                });
             }
         }
     }
@@ -2295,11 +2293,12 @@ fn cmd_adapters(
 
             let mut config_changed = false;
             for repo in &mut repos_to_update {
-                if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source {
-                    if url == hstry_core::config::DEFAULT_ADAPTER_REPO && git_ref == "main" {
-                        *git_ref = expected_ref.clone();
-                        config_changed = true;
-                    }
+                if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source
+                    && url == hstry_core::config::DEFAULT_ADAPTER_REPO
+                    && git_ref == "main"
+                {
+                    *git_ref = expected_ref.clone();
+                    config_changed = true;
                 }
             }
 
@@ -3116,11 +3115,12 @@ fn ensure_adapter_updates(config: &mut Config, config_path: &Path, json: bool) -
 
     let mut config_changed = false;
     for repo in &mut repos_to_update {
-        if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source {
-            if url == hstry_core::config::DEFAULT_ADAPTER_REPO && git_ref == "main" {
-                *git_ref = expected_ref.clone();
-                config_changed = true;
-            }
+        if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source
+            && url == hstry_core::config::DEFAULT_ADAPTER_REPO
+            && git_ref == "main"
+        {
+            *git_ref = expected_ref.clone();
+            config_changed = true;
         }
     }
 
@@ -3482,10 +3482,8 @@ fn display_title_for_list(title: Option<&str>, first_user: Option<&str>) -> Stri
     let title = title.unwrap_or("");
     let first_user = first_user.unwrap_or("");
 
-    if title.is_empty() || is_system_context(title) {
-        if !first_user.trim().is_empty() {
-            return first_user.to_string();
-        }
+    if (title.is_empty() || is_system_context(title)) && !first_user.trim().is_empty() {
+        return first_user.to_string();
     }
 
     if title.trim().is_empty() {
@@ -3736,18 +3734,18 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     // "N days/weeks/months ago"
     if let Some(rest) = lower.strip_suffix(" ago") {
         let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() == 2 {
-            if let Ok(n) = parts[0].parse::<i64>() {
-                let duration = match parts[1].trim_end_matches('s') {
-                    "day" => Some(chrono::Duration::days(n)),
-                    "week" => Some(chrono::Duration::weeks(n)),
-                    "month" => Some(chrono::Duration::days(n * 30)),
-                    "hour" => Some(chrono::Duration::hours(n)),
-                    _ => None,
-                };
-                if let Some(d) = duration {
-                    return Ok(now - d);
-                }
+        if parts.len() == 2
+            && let Ok(n) = parts[0].parse::<i64>()
+        {
+            let duration = match parts[1].trim_end_matches('s') {
+                "day" => Some(chrono::Duration::days(n)),
+                "week" => Some(chrono::Duration::weeks(n)),
+                "month" => Some(chrono::Duration::days(n * 30)),
+                "hour" => Some(chrono::Duration::hours(n)),
+                _ => None,
+            };
+            if let Some(d) = duration {
+                return Ok(now - d);
             }
         }
     }
@@ -4367,10 +4365,10 @@ async fn cmd_resume(
 /// Resolve a conversation by UUID, partial UUID, or external_id.
 async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conversation> {
     // Try full UUID first
-    if let Ok(uuid) = uuid::Uuid::parse_str(id_str) {
-        if let Some(conv) = db.get_conversation(uuid).await? {
-            return Ok(conv);
-        }
+    if let Ok(uuid) = uuid::Uuid::parse_str(id_str)
+        && let Some(conv) = db.get_conversation(uuid).await?
+    {
+        return Ok(conv);
     }
 
     // Try partial UUID match or external_id match
@@ -4617,7 +4615,7 @@ async fn cmd_stats(db: &Database, json: bool) -> Result<()> {
         for stats in &per_source {
             let last_sync = stats
                 .last_sync_at
-                .map(|dt| pretty::relative_time_short(dt))
+                .map(pretty::relative_time_short)
                 .unwrap_or_else(|| "never".to_string());
             println!(
                 "  {:<15} {:<12} {:>8} {:>10} {:>12}",

@@ -106,10 +106,10 @@ async fn try_connect_search_client() -> Option<SearchServiceClient<tonic::transp
     {
         use crate::paths::service_socket_path;
         let socket_path = service_socket_path();
-        if socket_path.exists() {
-            if let Some(client) = try_connect_unix(&socket_path).await {
-                return Some(client);
-            }
+        if socket_path.exists()
+            && let Some(client) = try_connect_unix(&socket_path).await
+        {
+            return Some(client);
         }
     }
 
@@ -292,8 +292,8 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
             serde_json::from_str(&proto.metadata_json).unwrap_or_default()
         },
         harness: proto.harness,
-        version: proto.version as i64,
-        message_count: proto.message_count as i64,
+        version: i64::try_from(proto.version).unwrap_or(i64::MAX),
+        message_count: i64::from(proto.message_count),
     }
 }
 
@@ -387,10 +387,7 @@ pub fn message_event_to_proto(event: &MessageEvent) -> proto::MessageEvent {
         conversation_id: event.conversation_id.to_string(),
         idx: event.idx,
         payload_json: event.payload_json.clone(),
-        created_at_ms: event
-            .created_at
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or(0),
+        created_at_ms: event.created_at.map_or(0, |dt| dt.timestamp_millis()),
         metadata_json: event.metadata.to_string(),
     }
 }

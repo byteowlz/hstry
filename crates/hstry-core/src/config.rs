@@ -173,7 +173,7 @@ pub struct WebConfig {
     pub providers: WebProvidersConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WebProvidersConfig {
     pub chatgpt: WebProviderConfig,
@@ -181,7 +181,7 @@ pub struct WebProvidersConfig {
     pub gemini: WebProviderConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WebProviderConfig {
     /// Enable sync for this provider.
@@ -198,22 +198,6 @@ impl Default for WebConfig {
             storage_dir: None,
             providers: WebProvidersConfig::default(),
         }
-    }
-}
-
-impl Default for WebProvidersConfig {
-    fn default() -> Self {
-        Self {
-            chatgpt: WebProviderConfig::default(),
-            claude: WebProviderConfig::default(),
-            gemini: WebProviderConfig::default(),
-        }
-    }
-}
-
-impl Default for WebProviderConfig {
-    fn default() -> Self {
-        Self { enabled: false }
     }
 }
 

@@ -51,7 +51,6 @@ impl ToolStatus {
     /// Parse from various status strings.
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "pending" | "queued" => Self::Pending,
             "running" | "in_progress" | "executing" => Self::Running,
             "success" | "completed" | "done" | "ok" => Self::Success,
             "error" | "failed" | "failure" => Self::Error,
@@ -124,8 +123,9 @@ impl MediaSource {
     /// Get the MIME type if known.
     pub fn mime_type(&self) -> Option<&str> {
         match self {
-            Self::Url { mime_type, .. } => mime_type.as_deref(),
-            Self::AttachmentRef { mime_type, .. } => mime_type.as_deref(),
+            Self::Url { mime_type, .. } | Self::AttachmentRef { mime_type, .. } => {
+                mime_type.as_deref()
+            }
             Self::Base64 { mime_type, .. } => Some(mime_type),
         }
     }
@@ -261,6 +261,10 @@ pub enum Part {
     },
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires fn(&T) for field predicates"
+)]
 fn is_default_status(s: &ToolStatus) -> bool {
     *s == ToolStatus::Pending
 }
@@ -370,7 +374,6 @@ impl std::fmt::Display for SenderType {
 impl From<&str> for SenderType {
     fn from(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "user" | "human" => Self::User,
             "agent" | "assistant" | "ai" | "bot" => Self::Agent,
             "system" => Self::System,
             _ => Self::User,

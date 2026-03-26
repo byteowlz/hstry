@@ -170,13 +170,13 @@ impl WriteService for ServerState {
         }
 
         // Update conversation updated_at if provided
-        if let Some(updated_at_ms) = request.updated_at_ms {
-            if let Some(updated_at) = chrono::DateTime::from_timestamp_millis(updated_at_ms) {
-                let _ = self
-                    .db
-                    .update_conversation_updated_at(conv_id, updated_at.with_timezone(&chrono::Utc))
-                    .await;
-            }
+        if let Some(updated_at_ms) = request.updated_at_ms
+            && let Some(updated_at) = chrono::DateTime::from_timestamp_millis(updated_at_ms)
+        {
+            let _ = self
+                .db
+                .update_conversation_updated_at(conv_id, updated_at.with_timezone(&chrono::Utc))
+                .await;
         }
 
         // Fetch current version and message_count
@@ -807,7 +807,7 @@ async fn run_service(config_path: &Path) -> Result<()> {
             }
             _ = debounce_sleep => {
                 // Debounce window expired: process the accumulated events as a single batch
-                let paths: Vec<PathBuf> = pending_paths.drain(..).collect();
+                let paths: Vec<PathBuf> = std::mem::take(&mut pending_paths);
                 debounce_deadline = None;
                 state.handle_events_batch(paths).await?;
             }
@@ -1292,14 +1292,12 @@ impl ServiceState {
             if existing.adapter != adapter_name {
                 continue;
             }
-            if let Some(existing_path) = &existing.path {
-                if let Ok(existing) = std::path::Path::new(existing_path).canonicalize() {
-                    if let Ok(path_canon) = normalized_path.canonicalize() {
-                        if path_canon.starts_with(&existing) {
-                            return Ok(());
-                        }
-                    }
-                }
+            if let Some(existing_path) = &existing.path
+                && let Ok(existing) = std::path::Path::new(existing_path).canonicalize()
+                && let Ok(path_canon) = normalized_path.canonicalize()
+                && path_canon.starts_with(&existing)
+            {
+                return Ok(());
             }
         }
 
@@ -1334,19 +1332,19 @@ impl ServiceState {
             }
 
             // Check backoff: skip sources that have been failing recently
-            if let Some((failures, retry_after)) = self.source_backoff.get(&source.id) {
-                if now < *retry_after {
-                    // Still in backoff period, skip this source
-                    if *failures == 1 {
-                        // Only log once when backoff starts
-                        println!(
-                            "Skipping {id} ({adapter}): backing off after failure",
-                            id = source.id,
-                            adapter = source.adapter
-                        );
-                    }
-                    continue;
+            if let Some((failures, retry_after)) = self.source_backoff.get(&source.id)
+                && now < *retry_after
+            {
+                // Still in backoff period, skip this source
+                if *failures == 1 {
+                    // Only log once when backoff starts
+                    println!(
+                        "Skipping {id} ({adapter}): backing off after failure",
+                        id = source.id,
+                        adapter = source.adapter
+                    );
                 }
+                continue;
             }
 
             println!(
@@ -1447,10 +1445,10 @@ impl ServiceState {
             }
 
             // Check backoff
-            if let Some((_failures, retry_after)) = self.source_backoff.get(&source.id) {
-                if now < *retry_after {
-                    continue;
-                }
+            if let Some((_failures, retry_after)) = self.source_backoff.get(&source.id)
+                && now < *retry_after
+            {
+                continue;
             }
 
             println!(

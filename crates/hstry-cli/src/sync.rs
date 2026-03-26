@@ -7,6 +7,7 @@ use hstry_runtime::{
     AdapterRunner,
     runner::{ParseOptions, ParseStreamResult},
 };
+use std::collections::HashMap;
 
 const DEFAULT_BATCH_SIZE: usize = 25;
 
@@ -84,12 +85,22 @@ pub async fn sync_source(
         let mut batch_convs: Vec<hstry_core::models::Conversation> = Vec::new();
         let mut batch_msgs: Vec<hstry_core::models::Message> = Vec::new();
 
+        // Track conversation ids chosen in this batch by external_id so duplicate
+        // adapter rows for the same conversation map to one hstry conversation id.
+        let mut batch_external_to_conv_id: HashMap<String, uuid::Uuid> = HashMap::new();
+
         for conv in batch.conversations {
             let mut conv_id = uuid::Uuid::new_v4();
             let mut existing_conv: Option<hstry_core::models::Conversation> = None;
+            let mut seen_in_batch = false;
 
             if let Some(external_id) = conv.external_id.as_deref() {
-                if let Some(existing) = db.get_conversation_id(&source.id, external_id).await? {
+                if let Some(existing_in_batch) = batch_external_to_conv_id.get(external_id) {
+                    conv_id = *existing_in_batch;
+                    seen_in_batch = true;
+                } else if let Some(existing) =
+                    db.get_conversation_id(&source.id, external_id).await?
+                {
                     conv_id = existing;
                     existing_conv = db
                         .get_conversation_by_reference(
@@ -100,12 +111,15 @@ pub async fn sync_source(
                             None,
                         )
                         .await?;
+                    batch_external_to_conv_id.insert(external_id.to_string(), conv_id);
                 } else if db
                     .conversation_exists_for_session(&source.id, external_id)
                     .await?
                 {
                     tracing::debug!("Skipping session {} - already exists in hstry", external_id);
                     continue;
+                } else {
+                    batch_external_to_conv_id.insert(external_id.to_string(), conv_id);
                 }
             }
 
@@ -173,8 +187,11 @@ pub async fn sync_source(
                 message_count: 0,
             };
 
-            affected_conversation_ids.push(hstry_conv.id);
-            batch_convs.push(hstry_conv.clone());
+            if !seen_in_batch {
+                affected_conversation_ids.push(hstry_conv.id);
+                batch_convs.push(hstry_conv.clone());
+                new_count += 1;
+            }
 
             for (idx, msg) in conv.messages.iter().enumerate() {
                 let Ok(idx) = i32::try_from(idx) else {
@@ -202,8 +219,6 @@ pub async fn sync_source(
                 };
                 batch_msgs.push(hstry_msg);
             }
-
-            new_count += 1;
         }
 
         // Write the entire batch inside a single transaction

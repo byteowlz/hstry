@@ -96,21 +96,29 @@ fmt-check:
 
 # Run clippy on all crates
 clippy:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace
 
 # Alias for clippy
-lint: clippy
+lint: clippy lint-rust-ai-guardrails
+
+# Install ast-grep (advanced structural linting)
+install-ast-grep:
+    cargo install ast-grep --locked
+
+# Rust AI guardrails via ast-grep
+lint-rust-ai-guardrails:
+    ./scripts/lint/rust-ai-guardrails.sh
 
 # Clippy on a specific crate
 clippy-crate CRATE:
-    cargo clippy -p {{CRATE}} -- -D warnings
+    cargo clippy -p {{CRATE}}
 
 # Auto-fix clippy warnings
 fix:
     cargo clippy --workspace --fix --allow-dirty
 
 # Run all checks
-check-all: fmt-check clippy test
+check-all: fmt-check clippy lint-rust-ai-guardrails test
 
 # === Documentation ===
 

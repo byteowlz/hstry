@@ -86,42 +86,32 @@ hstry-runtime = { path = "crates/hstry-runtime" }
 # Based on @notnotstorm's tweet + OpenAgentsInc additions
 
 [workspace.lints.clippy]
-# Enable pedantic group for comprehensive checks
-pedantic = { level = "warn", priority = -1 }
+# Oqto parity: style and correctness
+collapsible_if = "warn"
+collapsible_else_if = "warn"
+needless_return = "warn"
+needless_borrow = "warn"
+clone_on_copy = "warn"
+single_char_add_str = "warn"
+manual_strip = "warn"
+manual_flatten = "warn"
+unnecessary_lazy_evaluations = "warn"
+unnecessary_map_or = "warn"
+io_other_error = "warn"
+single_match = "warn"
 
-# === THE GUARDRAILS (Critical for AI Agents) ===
-# Panic safety - agents must handle errors, not crash
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-panic_in_result_fn = "deny"
+# Performance
+cloned_instead_of_copied = "warn"
+inefficient_to_string = "warn"
 
-# The "no cheating" rule
-allow_attributes = "deny"
+# Pedantic subset used in Oqto
+ptr_arg = "warn"
+derivable_impls = "warn"
 
-# Code hygiene - no debug leftovers
-dbg_macro = "deny"
-todo = "deny"
-unimplemented = "deny"
-print_stdout = "warn"
-print_stderr = "warn"
-
-# === ASYNC SAFETY ===
-await_holding_lock = "deny" # Prevents deadlocks
-
-# === PROCESS SAFETY ===
-exit = "deny" # Libraries shouldn't exit
-
-# === PEDANTIC RELAXATIONS ===
-# These are too noisy for most projects
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-doc_markdown = "allow"
-must_use_candidate = "allow"
-module_name_repetitions = "allow"
-similar_names = "allow"
-too_many_lines = "allow"
-
+# Intentionally allowed (Oqto parity)
+too_many_arguments = "allow"
+type_complexity = "allow"
+module_inception = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,11 @@
+id: rust-no-unwrap-expect
+language: Rust
+severity: warning
+message: "Avoid unwrap/expect in production Rust code; propagate errors with anyhow::Context or explicit handling."
+note: |
+  AI-generated code tends to introduce unwrap()/expect() shortcuts.
+  Prefer proper error handling and context propagation.
+rule:
+  any:
+    - pattern: $X.unwrap()
+    - pattern: $X.expect($MSG)

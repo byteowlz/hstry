@@ -1,0 +1,8 @@
+ruleDirs:
+  - rules
+
+# Keep scans focused and deterministic for repo policy linting.
+# We intentionally lint Rust source only.
+languageGlobs:
+  Rust:
+    - "**/*.rs"

@@ -1,0 +1,9 @@
+id: rust-no-clippy-allow
+language: Rust
+severity: warning
+message: "Avoid adding #[allow(clippy::...)] suppressions without explicit review."
+note: "Fix root causes when possible. If suppression is required, document why in review."
+rule:
+  any:
+    - pattern: "#[allow(clippy::$LINT)]"
+    - pattern: "#[expect(clippy::$LINT)]"

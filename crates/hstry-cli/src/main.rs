@@ -306,9 +306,13 @@ enum Command {
         #[arg(long, short = 'r', value_enum)]
         role: Vec<SearchRoleArg>,
 
-        /// Output directory (for multi-file formats like pi, opencode)
+        /// Output path (file for single-output exports, directory for multi-file exports)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Export one file per conversation for markdown/json
+        #[arg(long)]
+        session_files: bool,
 
         /// Pretty print JSON output
         #[arg(long)]
@@ -976,6 +980,7 @@ async fn main() -> Result<()> {
             workspace,
             role,
             output,
+            session_files,
             pretty,
         } => {
             let db = Database::open(&config.database).await?;
@@ -992,6 +997,7 @@ async fn main() -> Result<()> {
                 workspace,
                 role,
                 output,
+                session_files,
                 pretty,
                 cli.json,
             )
@@ -3538,6 +3544,7 @@ async fn cmd_export(
     workspace_filter: Option<String>,
     role_filter: Vec<SearchRoleArg>,
     output: Option<PathBuf>,
+    session_files: bool,
     pretty: bool,
     json_output: bool,
 ) -> Result<()> {
@@ -3646,6 +3653,53 @@ async fn cmd_export(
         });
     }
 
+    if !json_output && session_files && (format == "markdown" || format == "json") {
+        let output_dir = output.unwrap_or_else(|| PathBuf::from("."));
+        fs::create_dir_all(&output_dir)?;
+
+        let mut written = 0usize;
+        for (index, conv) in export_convs.iter().enumerate() {
+            let single_result = runner
+                .export(
+                    &adapter_path,
+                    vec![conv.clone()],
+                    ExportOptions {
+                        format: format.to_string(),
+                        pretty: Some(pretty),
+                        include_tools: Some(true),
+                        include_attachments: Some(true),
+                    },
+                )
+                .await?;
+
+            if let Some(content) = &single_result.content {
+                let filename = build_session_export_filename(conv, index, format);
+                fs::write(output_dir.join(filename), content)?;
+                written += 1;
+                continue;
+            }
+
+            if let Some(files) = &single_result.files {
+                for file in files {
+                    let file_path = output_dir.join(&file.path);
+                    if let Some(parent) = file_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&file_path, &file.content)?;
+                    written += 1;
+                }
+            }
+        }
+
+        println!(
+            "Exported {} conversations to {} files in {}",
+            conversations.len(),
+            written,
+            output_dir.display()
+        );
+        return Ok(());
+    }
+
     let opts = ExportOptions {
         format: format.to_string(),
         pretty: Some(pretty),
@@ -3693,6 +3747,42 @@ async fn cmd_export(
     }
 
     Ok(())
+}
+
+fn build_session_export_filename(conv: &ExportConversation, index: usize, format: &str) -> String {
+    let ext = match format {
+        "markdown" => "md",
+        "json" => "json",
+        _ => "txt",
+    };
+
+    let stem = conv
+        .readable_id
+        .as_deref()
+        .or(conv.external_id.as_deref())
+        .or(conv.title.as_deref())
+        .map(sanitize_filename_segment)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("conversation-{:03}", index + 1));
+
+    format!("{:03}_{stem}.{ext}", index + 1)
+}
+
+fn sanitize_filename_segment(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut last_was_sep = false;
+
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+            last_was_sep = false;
+        } else if !last_was_sep {
+            out.push('-');
+            last_was_sep = true;
+        }
+    }
+
+    out.trim_matches('-').to_string()
 }
 
 /// Parse a natural-language or ISO date string into a `DateTime<Utc>`.

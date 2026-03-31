@@ -39,7 +39,7 @@ tonic-build = "0.14"
 tonic-prost-build = "0.14"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 
 # Utils
 tempfile = "3.14"

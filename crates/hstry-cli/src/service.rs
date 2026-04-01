@@ -924,6 +924,11 @@ async fn start_unix_server(server: ServerState) -> Result<tokio::task::JoinHandl
     Ok(handle)
 }
 
+enum SyncReason {
+    Audit,
+    Event,
+}
+
 enum SourceSyncOutcome {
     Synced,
     SkippedUnchanged,
@@ -965,6 +970,9 @@ struct ServiceState {
     /// Track consecutive failures per source for exponential backoff.
     /// Maps source_id -> (consecutive_failures, next_retry_after).
     source_backoff: HashMap<String, (u32, Instant)>,
+    /// Suppress chatty event-driven resyncs when a source repeatedly yields no changes.
+    /// Maps source_id -> do_not_sync_before.
+    source_quiet_until: HashMap<String, Instant>,
 }
 
 impl ServiceState {
@@ -1002,6 +1010,7 @@ impl ServiceState {
             last_workspace_discovery: Instant::now() - Duration::from_secs(3600),
             last_event_sync: Instant::now() - Duration::from_secs(300), // allow immediate first sync
             source_backoff: HashMap::new(),
+            source_quiet_until: HashMap::new(),
         };
 
         // NOTE: refresh_watches() is called separately by the caller after
@@ -1436,6 +1445,7 @@ impl ServiceState {
         &mut self,
         source: &Source,
         now: Instant,
+        reason: SyncReason,
     ) -> Result<SourceSyncOutcome> {
         if !self.enabled_adapters.contains(&source.adapter) {
             return Ok(SourceSyncOutcome::Skipped);
@@ -1459,6 +1469,13 @@ impl ServiceState {
             return Ok(SourceSyncOutcome::Skipped);
         }
 
+        if matches!(reason, SyncReason::Event)
+            && let Some(quiet_until) = self.source_quiet_until.get(&source.id)
+            && now < *quiet_until
+        {
+            return Ok(SourceSyncOutcome::Skipped);
+        }
+
         let current_fingerprint = Self::current_source_fingerprint(source);
         let cached_fingerprint = Self::cached_source_fingerprint(source);
         if current_fingerprint.is_some() && current_fingerprint == cached_fingerprint {
@@ -1473,6 +1490,14 @@ impl ServiceState {
         match sync::sync_source(&self.db, &self.runner, source).await {
             Ok(result) => {
                 self.source_backoff.remove(&source.id);
+                if matches!(reason, SyncReason::Event) {
+                    if result.conversations == 0 && result.messages == 0 {
+                        self.source_quiet_until
+                            .insert(source.id.clone(), now + Duration::from_secs(30));
+                    } else {
+                        self.source_quiet_until.remove(&source.id);
+                    }
+                }
                 if result.conversations > 0 {
                     println!(
                         "  Synced {count} conversations",
@@ -1512,7 +1537,7 @@ impl ServiceState {
         let mut stats = SyncCycleStats::default();
 
         for source in &sources {
-            let outcome = self.sync_one_source(source, now).await?;
+            let outcome = self.sync_one_source(source, now, SyncReason::Audit).await?;
             stats.record(outcome);
         }
 
@@ -1560,7 +1585,7 @@ impl ServiceState {
                 continue;
             }
 
-            let outcome = self.sync_one_source(source, now).await?;
+            let outcome = self.sync_one_source(source, now, SyncReason::Event).await?;
             stats.record(outcome);
         }
 

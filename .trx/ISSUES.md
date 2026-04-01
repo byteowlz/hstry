@@ -11,6 +11,15 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
+### [trx-z42c] SOTA sync architecture: event-driven incremental ingestion + outbox indexing (P1, epic)
+Replace frequent full sync loops with an event-driven incremental pipeline to eliminate idle CPU spikes and improve scalability.
+
+Problem:
+- Service currently performs frequent broad sync checks across many sources, causing unnecessary parse/diff work when no data changed.
+- Search indexing is incremental, but upstream sync scheduling still burns CPU/IO.
+...
+
+
 ### [trx-h5q5] Pi adapter stores conversations with empty workspace field (P1, bug)
 The Pi adapter sync sometimes creates conversations with empty workspace field despite valid cwd in JSONL header. Also decodeWorkspaceFromPath() at line 880 of adapter.ts is lossy - replaces ALL hyphens with slashes (content-creation becomes content/creation). Fixed 34+ sessions on octo-azure with direct SQL UPDATE.
 

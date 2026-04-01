@@ -958,6 +958,8 @@ struct ServiceState {
     watcher: RecommendedWatcher,
     event_rx: mpsc::Receiver<PathBuf>,
     last_remote_sync: Instant,
+    /// Run expensive workspace discovery infrequently to avoid idle CPU spikes.
+    last_workspace_discovery: Instant,
     /// Track when the last event-triggered sync completed to enforce a cooldown.
     last_event_sync: Instant,
     /// Track consecutive failures per source for exponential backoff.
@@ -997,6 +999,7 @@ impl ServiceState {
             watcher,
             event_rx,
             last_remote_sync: Instant::now(),
+            last_workspace_discovery: Instant::now() - Duration::from_secs(3600),
             last_event_sync: Instant::now() - Duration::from_secs(300), // allow immediate first sync
             source_backoff: HashMap::new(),
         };
@@ -1094,7 +1097,9 @@ impl ServiceState {
         // Deduplicate paths
         let unique_paths: HashSet<PathBuf> = paths.into_iter().collect();
         for path in &unique_paths {
-            self.discover_from_path(path).await?;
+            if should_attempt_discovery(path) {
+                self.discover_from_path(path).await?;
+            }
         }
         let stats = self.sync_sources_for_paths(&unique_paths).await?;
         self.sync_remotes_if_due().await?;
@@ -1110,7 +1115,7 @@ impl ServiceState {
         let _ = self.reload_config_if_needed().await?;
         self.ensure_config_sources().await?;
         self.discover_default_sources().await?;
-        self.discover_workspaces().await?;
+        self.maybe_discover_workspaces().await?;
         let stats = self.sync_existing_sources().await?;
         self.sync_remotes_if_due().await?;
         println!(
@@ -1214,6 +1219,17 @@ impl ServiceState {
             }
         }
         Ok(())
+    }
+
+    async fn maybe_discover_workspaces(&mut self) -> Result<()> {
+        const WORKSPACE_DISCOVERY_INTERVAL_SECS: u64 = 3600;
+        if self.last_workspace_discovery.elapsed()
+            < Duration::from_secs(WORKSPACE_DISCOVERY_INTERVAL_SECS)
+        {
+            return Ok(());
+        }
+        self.last_workspace_discovery = Instant::now();
+        self.discover_workspaces().await
     }
 
     async fn discover_workspaces(&self) -> Result<()> {
@@ -1574,7 +1590,7 @@ fn build_watcher(event_tx: mpsc::Sender<PathBuf>) -> Result<RecommendedWatcher> 
 }
 
 async fn collect_watch_paths(
-    config: &Config,
+    _config: &Config,
     runner: &AdapterRunner,
     enabled_adapters: &HashSet<String>,
     sources: &[Source],
@@ -1582,13 +1598,6 @@ async fn collect_watch_paths(
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     paths.push(config_path.to_path_buf());
-
-    for workspace in &config.workspaces {
-        let expanded = Config::expand_path(workspace);
-        if expanded.exists() {
-            paths.push(expanded);
-        }
-    }
 
     for adapter_name in runner.list_adapters() {
         if !enabled_adapters.contains(&adapter_name) {
@@ -1642,6 +1651,16 @@ fn should_skip(entry: &walkdir::DirEntry) -> bool {
         name.as_ref(),
         ".git" | ".hg" | ".svn" | "node_modules" | "target" | "dist" | "build" | ".cache"
     )
+}
+
+fn should_attempt_discovery(path: &Path) -> bool {
+    if path.is_dir() {
+        return is_candidate_dir(path);
+    }
+    if is_candidate_file(path) {
+        return true;
+    }
+    path.parent().is_some_and(is_candidate_dir)
 }
 
 fn is_candidate_dir(path: &Path) -> bool {

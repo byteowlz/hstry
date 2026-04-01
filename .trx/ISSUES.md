@@ -11,6 +11,9 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
+### [trx-h5q5] Pi adapter stores conversations with empty workspace field (P1, bug)
+The Pi adapter sync sometimes creates conversations with empty workspace field despite valid cwd in JSONL header. Also decodeWorkspaceFromPath() at line 880 of adapter.ts is lossy - replaces ALL hyphens with slashes (content-creation becomes content/creation). Fixed 34+ sessions on octo-azure with direct SQL UPDATE.
+
 ### [trx-6124] Pi adapter sync broken: HSTRY_REQUEST not provided (P1, bug)
 The pi adapter always fails with 'HSTRY_REQUEST not provided' during hstry sync. This means sessions that weren't persisted via gRPC during the live session are never recoverable. Observed on octo-azure for user oqto_usr_wismut. The adapter.ts at /usr/local/share/hstry/adapters/pi/ expects HSTRY_REQUEST env var but hstry CLI doesn't set it.
 
@@ -71,6 +74,8 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-krtd] hstry-core fabricated fake readable_ids instead of storing NULL (closed 2026-03-26)
+- [trx-dyty] Pi adapter was not extracting readable_id from session title brackets (closed 2026-03-26)
 - [trx-2wpe] Adapter protocol: add optional conversation version/message_count fields for import/export parity (closed 2026-03-19)
 - [trx-bw1g] Add monotonic conversation version for deterministic message sync (closed 2026-03-19)
 - [trx-7ghs] Add message_count and version fields to GetConversation and ListConversations responses (closed 2026-03-13)

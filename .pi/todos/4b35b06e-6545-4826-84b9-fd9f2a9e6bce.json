@@ -1,0 +1,29 @@
+{
+  "todos": [
+    {
+      "id": "2b1fd5ac",
+      "content": "Locate export command implementation and current format behavior (markdown/json/session files)",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "2af41908",
+      "content": "Implement option to export individual session files for markdown/json",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "b7e13ff2",
+      "content": "Run formatting/tests for touched crate",
+      "status": "completed",
+      "priority": "medium"
+    },
+    {
+      "id": "094a012d",
+      "content": "Summarize changes and usage",
+      "status": "completed",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-03-28T18:40:11.773Z"
+}

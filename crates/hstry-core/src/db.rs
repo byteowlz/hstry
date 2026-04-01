@@ -470,6 +470,13 @@ impl Database {
     // =========================================================================
 
     /// Insert a conversation (upsert by source_id + external_id).
+    ///
+    /// NOTE: workspace uses COALESCE(NULLIF(...), existing) to prevent adapter
+    /// syncs from overwriting a correct workspace with an empty value.  The Pi
+    /// adapter's `decodeWorkspaceFromPath` fallback is lossy (replaces all
+    /// hyphens with slashes) and sometimes yields empty/corrupt workspace
+    /// strings.  The runner writes the correct workspace first via gRPC, so we
+    /// must not clobber it.
     pub async fn upsert_conversation(&self, conv: &Conversation) -> Result<()> {
         // Auto-create the source if it doesn't exist. Without this row the
         // FK constraint on conversations.source_id fails.
@@ -484,7 +491,9 @@ impl Database {
         // Use the readable_id provided by the source/adapter, or fall back to
         // metadata, or preserve whatever hstry already has. Never fabricate one --
         // readable_id generation is the harness's responsibility (e.g. Pi extension).
-        let readable_id = conv.readable_id.clone()
+        let readable_id = conv
+            .readable_id
+            .clone()
             .or_else(|| readable_id_from_metadata(&conv.metadata));
         let readable_id = if readable_id.is_some() {
             readable_id
@@ -506,7 +515,7 @@ impl Database {
                 updated_at = excluded.updated_at,
                 model = excluded.model,
                 provider = excluded.provider,
-                workspace = excluded.workspace,
+                workspace = COALESCE(NULLIF(excluded.workspace, ''), conversations.workspace),
                 tokens_in = excluded.tokens_in,
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,
@@ -1286,6 +1295,8 @@ impl Database {
     }
 
     /// Upsert a conversation within an existing transaction.
+    ///
+    /// See [`upsert_conversation`] for the workspace COALESCE rationale.
     pub async fn upsert_conversation_in_tx(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1301,7 +1312,9 @@ impl Database {
         .await?;
 
         // Never fabricate readable_ids -- that is the harness's job.
-        let readable_id = conv.readable_id.clone()
+        let readable_id = conv
+            .readable_id
+            .clone()
             .or_else(|| readable_id_from_metadata(&conv.metadata));
 
         sqlx::query(
@@ -1315,7 +1328,7 @@ impl Database {
                 updated_at = excluded.updated_at,
                 model = excluded.model,
                 provider = excluded.provider,
-                workspace = excluded.workspace,
+                workspace = COALESCE(NULLIF(excluded.workspace, ''), conversations.workspace),
                 tokens_in = excluded.tokens_in,
                 tokens_out = excluded.tokens_out,
                 cost_usd = excluded.cost_usd,

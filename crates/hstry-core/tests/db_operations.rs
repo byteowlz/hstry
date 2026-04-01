@@ -252,6 +252,71 @@ async fn upsert_conversation_updates_by_external_id() {
 }
 
 #[tokio::test]
+async fn upsert_conversation_preserves_workspace_when_new_value_empty() {
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    setup_source(&db).await;
+
+    // Runner writes conversation with correct workspace
+    let conv_v1 = Conversation {
+        id: Uuid::new_v4(),
+        source_id: "test-source".to_string(),
+        external_id: Some("ext-ws-preserve".to_string()),
+        readable_id: None,
+        platform_id: None,
+        title: Some("Session A".to_string()),
+        created_at: Utc::now(),
+        updated_at: None,
+        model: None,
+        provider: None,
+        workspace: Some("/home/oqto_shared_content-creation/oqto/OUTATIME".to_string()),
+        tokens_in: None,
+        tokens_out: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        harness: None,
+        version: 0,
+        message_count: 0,
+    };
+    db.upsert_conversation(&conv_v1).await.expect("upsert v1");
+
+    // Adapter sync re-upserts with empty workspace (bug in decodeWorkspaceFromPath)
+    let conv_v2 = Conversation {
+        id: Uuid::new_v4(),
+        source_id: "test-source".to_string(),
+        external_id: Some("ext-ws-preserve".to_string()),
+        readable_id: None,
+        platform_id: None,
+        title: Some("Session A".to_string()),
+        created_at: conv_v1.created_at,
+        updated_at: Some(Utc::now()),
+        model: None,
+        provider: None,
+        workspace: Some(String::new()), // empty string from adapter
+        tokens_in: None,
+        tokens_out: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        harness: None,
+        version: 0,
+        message_count: 0,
+    };
+    db.upsert_conversation(&conv_v2).await.expect("upsert v2");
+
+    let id = db
+        .get_conversation_id("test-source", "ext-ws-preserve")
+        .await
+        .expect("get id")
+        .expect("exists");
+    let fetched = db.get_conversation(id).await.expect("get").expect("exists");
+    assert_eq!(
+        fetched.workspace,
+        Some("/home/oqto_shared_content-creation/oqto/OUTATIME".to_string()),
+        "Empty workspace from adapter sync must not overwrite correct workspace from runner"
+    );
+}
+
+#[tokio::test]
 async fn list_conversations_with_filters() {
     let db_path = temp_db_path();
     let db = Database::open(&db_path).await.expect("open db");

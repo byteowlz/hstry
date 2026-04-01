@@ -11,6 +11,27 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
+### [trx-z42c.9] Regression suite for incremental sync correctness and missed-event recovery (P1, task)
+Add tests for watermark advancement, event miss recovery via safety audit, fingerprint invalidation, and idempotent outbox indexing.
+
+### [trx-z42c.6] Dedicated index worker consuming outbox jobs (P1, task)
+Build index worker loop with bounded batch size, retries, poison handling, and exactly-once semantics. Remove hot-path DB rescans for indexing.
+
+### [trx-z42c.5] Indexer outbox table + enqueue on message upsert (P1, task)
+Introduce index_jobs outbox with idempotency key (message_id+version). Enqueue jobs transactionally alongside message writes.
+
+### [trx-z42c.4] File source fingerprint cache to skip unchanged artifact parsing (P1, task)
+Store fast fingerprints (path, inode, size, mtime_ns) and optional content hash-on-change. Parse only changed files and update cache atomically.
+
+### [trx-z42c.3] Incremental state model: persist watermarks/checkpoints per source (P1, task)
+Add durable source sync state (cursor/change-token/fsevent checkpoint, last_success_at, next_sync_at). Include migration and compatibility with existing source config.
+
+### [trx-z42c.2] Event pipeline: watcher debounce, coalescing, and source-targeted sync (P1, task)
+Refine file/API event ingestion: debounce, coalesce, map changed paths to affected sources, and sync only impacted sources.
+
+### [trx-z42c.1] Scheduler v2: per-source adaptive cadence + remove global 30s full sync (P1, task)
+Implement per-source next_sync_at scheduling with adaptive backoff/jitter. Replace global tick-driven sync_all as primary path. Keep low-frequency safety audit timer configurable.
+
 ### [trx-z42c] SOTA sync architecture: event-driven incremental ingestion + outbox indexing (P1, epic)
 Replace frequent full sync loops with an event-driven incremental pipeline to eliminate idle CPU spikes and improve scalability.
 
@@ -38,6 +59,12 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
+
+### [trx-z42c.8] Observability: per-source metrics, queue depth, and structured sync logs (P2, task)
+Expose sync timings, changed/unchanged counters, error/backoff state, index queue lag/depth, and skipped-source reasons.
+
+### [trx-z42c.7] Resource controls: bounded concurrency, CPU/time budgets, and QoS (P2, task)
+Add global/per-source worker limits and budgeted execution to prevent service CPU monopolization on active machines.
 
 ### [trx-smd7] Add tests for parallel sync correctness (P2, task)
 

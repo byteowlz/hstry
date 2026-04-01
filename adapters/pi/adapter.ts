@@ -846,7 +846,11 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       title,
       createdAt,
       updatedAt,
-      workspace: header.cwd || decodeWorkspaceFromPath(filePath),
+      // Always prefer header.cwd (authoritative). The decodeWorkspaceFromPath
+      // fallback is lossy: it replaces ALL hyphens with slashes, corrupting
+      // directory names that contain hyphens (e.g. "content-creation" becomes
+      // "content/creation"). Only use it when no cwd is available at all.
+      workspace: header.cwd || undefined,
       model,
       provider,
       tokensIn,
@@ -909,12 +913,18 @@ async function findJsonlFiles(
   return files;
 }
 
-function decodeWorkspaceFromPath(filePath: string): string | undefined {
-  const dirName = basename(dirname(filePath));
-  if (!dirName.startsWith('--') || !dirName.endsWith('--')) return undefined;
-  const encoded = dirName.slice(2, -2);
-  if (!encoded) return undefined;
-  return `/${encoded.replace(/-/g, '/')}`;
+/**
+ * DEPRECATED: This function is lossy -- it replaces ALL hyphens with slashes,
+ * so directory names containing hyphens (e.g. "oqto_shared_content-creation")
+ * get corrupted ("oqto_shared_content/creation"). Pi's safe_cwd encoding
+ * uses `-` as the path separator, making it impossible to distinguish literal
+ * hyphens from path separators.
+ *
+ * The session header's `cwd` field is authoritative and should always be
+ * preferred. This function is kept only for reference.
+ */
+function decodeWorkspaceFromPath(_filePath: string): string | undefined {
+  return undefined;
 }
 
 runAdapter(adapter);

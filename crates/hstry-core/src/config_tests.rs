@@ -160,7 +160,7 @@ mod service_config_tests {
     #[test]
     fn default_poll_interval() {
         let config = ServiceConfig::default();
-        assert_eq!(config.poll_interval_secs, 30);
+        assert_eq!(config.poll_interval_secs, 1_200);
     }
 
     #[test]

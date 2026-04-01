@@ -552,7 +552,9 @@ pub struct ServiceConfig {
     /// Whether the service should auto-run when started.
     pub enabled: bool,
 
-    /// Poll interval in seconds (fallback when filesystem events are missed).
+    /// Safety poll interval in seconds (fallback when filesystem events are missed).
+    ///
+    /// This is intentionally infrequent: filesystem events are the primary trigger.
     pub poll_interval_secs: u64,
 
     /// Expose local search API (localhost only).
@@ -574,7 +576,7 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            poll_interval_secs: 30,
+            poll_interval_secs: 1_200,
             search_api: true,
             search_port: None,
             transport: ServiceTransport::Tcp,

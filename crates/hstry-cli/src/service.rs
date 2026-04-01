@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -775,11 +775,13 @@ async fn run_service(config_path: &Path) -> Result<()> {
 
     state.sync_all().await?;
 
-    let mut tick = interval(Duration::from_secs(state.config.service.poll_interval_secs));
+    let safety_poll_secs = state.config.service.poll_interval_secs.max(300);
+    let mut tick = interval(Duration::from_secs(safety_poll_secs));
 
     // Debounce file-watcher events: collect events over a short window before syncing.
-    // This prevents a tight loop when watched directories see rapid writes.
-    const DEBOUNCE_SECS: u64 = 5;
+    // This prevents a tight loop when watched directories see rapid writes while
+    // still keeping sync latency low enough for "fresh" behavior.
+    const DEBOUNCE_MS: u64 = 750;
     let mut debounce_deadline: Option<Instant> = None;
     let mut pending_paths: Vec<PathBuf> = Vec::new();
 
@@ -802,7 +804,7 @@ async fn run_service(config_path: &Path) -> Result<()> {
                 pending_paths.push(event_path);
                 // Set (or extend) the debounce window
                 if debounce_deadline.is_none() {
-                    debounce_deadline = Some(Instant::now() + Duration::from_secs(DEBOUNCE_SECS));
+                    debounce_deadline = Some(Instant::now() + Duration::from_millis(DEBOUNCE_MS));
                 }
             }
             _ = debounce_sleep => {
@@ -920,6 +922,28 @@ async fn start_unix_server(server: ServerState) -> Result<tokio::task::JoinHandl
     });
 
     Ok(handle)
+}
+
+enum SourceSyncOutcome {
+    Synced,
+    SkippedUnchanged,
+    Skipped,
+}
+
+#[derive(Default, Clone, Copy)]
+struct SyncCycleStats {
+    sources_synced: usize,
+    sources_skipped_unchanged: usize,
+}
+
+impl SyncCycleStats {
+    fn record(&mut self, outcome: SourceSyncOutcome) {
+        match outcome {
+            SourceSyncOutcome::Synced => self.sources_synced += 1,
+            SourceSyncOutcome::SkippedUnchanged => self.sources_skipped_unchanged += 1,
+            SourceSyncOutcome::Skipped => {}
+        }
+    }
 }
 
 struct ServiceState {
@@ -1061,7 +1085,7 @@ impl ServiceState {
         // Enforce a minimum cooldown between event-triggered syncs.
         // The poll-interval tick handles full periodic syncs; event batches
         // should only provide faster feedback for changed sources.
-        const EVENT_SYNC_COOLDOWN_SECS: u64 = 10;
+        const EVENT_SYNC_COOLDOWN_SECS: u64 = 2;
         if self.last_event_sync.elapsed() < Duration::from_secs(EVENT_SYNC_COOLDOWN_SECS) {
             return Ok(());
         }
@@ -1072,8 +1096,12 @@ impl ServiceState {
         for path in &unique_paths {
             self.discover_from_path(path).await?;
         }
-        self.sync_sources_for_paths(&unique_paths).await?;
+        let stats = self.sync_sources_for_paths(&unique_paths).await?;
         self.sync_remotes_if_due().await?;
+        println!(
+            "sync_cycle reason=event sources_synced={} sources_skipped_unchanged={}",
+            stats.sources_synced, stats.sources_skipped_unchanged
+        );
         self.last_event_sync = Instant::now();
         Ok(())
     }
@@ -1083,8 +1111,12 @@ impl ServiceState {
         self.ensure_config_sources().await?;
         self.discover_default_sources().await?;
         self.discover_workspaces().await?;
-        self.sync_existing_sources().await?;
+        let stats = self.sync_existing_sources().await?;
         self.sync_remotes_if_due().await?;
+        println!(
+            "sync_cycle reason=audit sources_synced={} sources_skipped_unchanged={}",
+            stats.sources_synced, stats.sources_skipped_unchanged
+        );
         Ok(())
     }
 
@@ -1317,72 +1349,58 @@ impl ServiceState {
         Ok(())
     }
 
-    async fn sync_existing_sources(&mut self) -> Result<()> {
-        let sources = self.db.list_sources().await?;
-        let now = Instant::now();
-
-        for source in sources {
-            if !self.enabled_adapters.contains(&source.adapter) {
-                continue;
-            }
-            if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id)
-                && !auto_sync
-            {
-                continue;
-            }
-
-            // Check backoff: skip sources that have been failing recently
-            if let Some((failures, retry_after)) = self.source_backoff.get(&source.id)
-                && now < *retry_after
-            {
-                // Still in backoff period, skip this source
-                if *failures == 1 {
-                    // Only log once when backoff starts
-                    println!(
-                        "Skipping {id} ({adapter}): backing off after failure",
-                        id = source.id,
-                        adapter = source.adapter
-                    );
-                }
-                continue;
-            }
-
-            println!(
-                "Syncing {id} ({adapter})...",
-                id = source.id,
-                adapter = source.adapter
-            );
-            match sync::sync_source(&self.db, &self.runner, &source).await {
-                Ok(result) => {
-                    // Clear backoff on success
-                    self.source_backoff.remove(&source.id);
-                    if result.conversations > 0 {
-                        println!(
-                            "  Synced {count} conversations",
-                            count = result.conversations
-                        );
-                    } else {
-                        println!("  No new conversations");
-                    }
-                }
-                Err(err) => {
-                    eprintln!("  Error: {err}");
-                    // Exponential backoff: 30s, 60s, 120s, 240s, capped at 300s
-                    let (prev_failures, _) = self
-                        .source_backoff
-                        .get(&source.id)
-                        .copied()
-                        .unwrap_or((0, now));
-                    let failures = prev_failures + 1;
-                    let backoff_secs =
-                        (30u64 * 2u64.saturating_pow(failures.saturating_sub(1))).min(300);
-                    let retry_after = now + Duration::from_secs(backoff_secs);
-                    self.source_backoff
-                        .insert(source.id.clone(), (failures, retry_after));
-                    eprintln!("  Will retry in {backoff_secs}s (failure #{failures})",);
-                }
-            }
+    fn source_fingerprint(path: &Path) -> Option<String> {
+        let metadata = path.metadata().ok()?;
+        if !metadata.is_file() {
+            return None;
         }
+
+        let modified = metadata.modified().ok()?;
+        let modified_ns = modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_nanos())?;
+
+        Some(format!(
+            "{}:{modified_ns}:{}",
+            path.display(),
+            metadata.len()
+        ))
+    }
+
+    fn cached_source_fingerprint(source: &Source) -> Option<String> {
+        source
+            .config
+            .get("file_fingerprint")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    }
+
+    fn current_source_fingerprint(source: &Source) -> Option<String> {
+        let path = source.path.as_ref()?;
+        let expanded = Config::expand_path(path);
+        Self::source_fingerprint(&expanded)
+    }
+
+    async fn persist_source_fingerprint(&self, source: &Source, fingerprint: &str) -> Result<()> {
+        let Some(mut updated) = self.db.get_source(&source.id).await? else {
+            return Ok(());
+        };
+
+        let mut config = match updated.config {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::default(),
+        };
+        config.insert(
+            "file_fingerprint".to_string(),
+            serde_json::Value::String(fingerprint.to_string()),
+        );
+        updated.config = serde_json::Value::Object(config);
+        self.db.upsert_source(&updated).await?;
+        Ok(())
+    }
+
+    async fn index_new_messages(&self) -> Result<usize> {
         let index_path = self.config.search_index_path();
         let batch_size = self.config.search.index_batch_size;
         let mut total_indexed = 0usize;
@@ -1395,17 +1413,110 @@ impl ServiceState {
                 break;
             }
         }
-        if total_indexed > 0 {
-            println!("Indexed {total_indexed} messages for search.");
+        Ok(total_indexed)
+    }
+
+    async fn sync_one_source(
+        &mut self,
+        source: &Source,
+        now: Instant,
+    ) -> Result<SourceSyncOutcome> {
+        if !self.enabled_adapters.contains(&source.adapter) {
+            return Ok(SourceSyncOutcome::Skipped);
         }
-        Ok(())
+        if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id)
+            && !auto_sync
+        {
+            return Ok(SourceSyncOutcome::Skipped);
+        }
+
+        if let Some((failures, retry_after)) = self.source_backoff.get(&source.id)
+            && now < *retry_after
+        {
+            if *failures == 1 {
+                println!(
+                    "Skipping {id} ({adapter}): backing off after failure",
+                    id = source.id,
+                    adapter = source.adapter
+                );
+            }
+            return Ok(SourceSyncOutcome::Skipped);
+        }
+
+        let current_fingerprint = Self::current_source_fingerprint(source);
+        let cached_fingerprint = Self::cached_source_fingerprint(source);
+        if current_fingerprint.is_some() && current_fingerprint == cached_fingerprint {
+            return Ok(SourceSyncOutcome::SkippedUnchanged);
+        }
+
+        println!(
+            "Syncing {id} ({adapter})...",
+            id = source.id,
+            adapter = source.adapter
+        );
+        match sync::sync_source(&self.db, &self.runner, source).await {
+            Ok(result) => {
+                self.source_backoff.remove(&source.id);
+                if result.conversations > 0 {
+                    println!(
+                        "  Synced {count} conversations",
+                        count = result.conversations
+                    );
+                } else {
+                    println!("  No new conversations");
+                }
+                if let Some(fingerprint) = current_fingerprint {
+                    self.persist_source_fingerprint(source, &fingerprint)
+                        .await?;
+                }
+                Ok(SourceSyncOutcome::Synced)
+            }
+            Err(err) => {
+                eprintln!("  Error: {err}");
+                let (prev_failures, _) = self
+                    .source_backoff
+                    .get(&source.id)
+                    .copied()
+                    .unwrap_or((0, now));
+                let failures = prev_failures + 1;
+                let backoff_secs =
+                    (30u64 * 2u64.saturating_pow(failures.saturating_sub(1))).min(300);
+                let retry_after = now + Duration::from_secs(backoff_secs);
+                self.source_backoff
+                    .insert(source.id.clone(), (failures, retry_after));
+                eprintln!("  Will retry in {backoff_secs}s (failure #{failures})",);
+                Ok(SourceSyncOutcome::Skipped)
+            }
+        }
+    }
+
+    async fn sync_existing_sources(&mut self) -> Result<SyncCycleStats> {
+        let sources = self.db.list_sources().await?;
+        let now = Instant::now();
+        let mut stats = SyncCycleStats::default();
+
+        for source in &sources {
+            let outcome = self.sync_one_source(source, now).await?;
+            stats.record(outcome);
+        }
+
+        if stats.sources_synced > 0 {
+            let total_indexed = self.index_new_messages().await?;
+            if total_indexed > 0 {
+                println!("Indexed {total_indexed} messages for search.");
+            }
+        }
+        Ok(stats)
     }
 
     /// Sync only sources whose path overlaps with the given set of changed paths.
     ///
     /// A source is considered affected if any changed path starts with (is under)
     /// the source's configured path, or vice versa.
-    async fn sync_sources_for_paths(&mut self, changed_paths: &HashSet<PathBuf>) -> Result<()> {
+    async fn sync_sources_for_paths(
+        &mut self,
+        changed_paths: &HashSet<PathBuf>,
+    ) -> Result<SyncCycleStats> {
         let sources = self.db.list_sources().await?;
         let now = Instant::now();
 
@@ -1415,19 +1526,9 @@ impl ServiceState {
             .filter_map(|p| p.canonicalize().ok().or_else(|| Some(p.clone())))
             .collect();
 
-        let mut any_synced = false;
+        let mut stats = SyncCycleStats::default();
 
         for source in &sources {
-            if !self.enabled_adapters.contains(&source.adapter) {
-                continue;
-            }
-            if let Some(auto_sync) = self.auto_sync_by_id.get(&source.id)
-                && !auto_sync
-            {
-                continue;
-            }
-
-            // Check if this source's path overlaps with any changed path
             let source_path = match &source.path {
                 Some(p) => {
                     let expanded = Config::expand_path(p);
@@ -1439,74 +1540,22 @@ impl ServiceState {
             let affected = canonical_changed.iter().any(|changed| {
                 changed.starts_with(&source_path) || source_path.starts_with(changed)
             });
-
             if !affected {
                 continue;
             }
 
-            // Check backoff
-            if let Some((_failures, retry_after)) = self.source_backoff.get(&source.id)
-                && now < *retry_after
-            {
-                continue;
-            }
-
-            println!(
-                "Syncing {id} ({adapter})...",
-                id = source.id,
-                adapter = source.adapter
-            );
-            match sync::sync_source(&self.db, &self.runner, source).await {
-                Ok(result) => {
-                    self.source_backoff.remove(&source.id);
-                    any_synced = true;
-                    if result.conversations > 0 {
-                        println!(
-                            "  Synced {count} conversations",
-                            count = result.conversations
-                        );
-                    } else {
-                        println!("  No new conversations");
-                    }
-                }
-                Err(err) => {
-                    eprintln!("  Error: {err}");
-                    let (prev_failures, _) = self
-                        .source_backoff
-                        .get(&source.id)
-                        .copied()
-                        .unwrap_or((0, now));
-                    let failures = prev_failures + 1;
-                    let backoff_secs =
-                        (30u64 * 2u64.saturating_pow(failures.saturating_sub(1))).min(300);
-                    let retry_after = now + Duration::from_secs(backoff_secs);
-                    self.source_backoff
-                        .insert(source.id.clone(), (failures, retry_after));
-                    eprintln!("  Will retry in {backoff_secs}s (failure #{failures})",);
-                }
-            }
+            let outcome = self.sync_one_source(source, now).await?;
+            stats.record(outcome);
         }
 
-        // Index any new messages from the targeted syncs
-        if any_synced {
-            let index_path = self.config.search_index_path();
-            let batch_size = self.config.search.index_batch_size;
-            let mut total_indexed = 0usize;
-            loop {
-                let indexed = search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
-                    .await
-                    .context("Indexing new messages for search")?;
-                total_indexed += indexed;
-                if indexed < batch_size {
-                    break;
-                }
-            }
+        if stats.sources_synced > 0 {
+            let total_indexed = self.index_new_messages().await?;
             if total_indexed > 0 {
                 println!("Indexed {total_indexed} messages for search.");
             }
         }
 
-        Ok(())
+        Ok(stats)
     }
 }
 

@@ -1401,12 +1401,6 @@ impl ServiceState {
             .map(str::to_string)
     }
 
-    fn current_source_fingerprint(source: &Source) -> Option<String> {
-        let path = source.path.as_ref()?;
-        let expanded = Config::expand_path(path);
-        Self::source_fingerprint(&expanded)
-    }
-
     async fn persist_source_fingerprint(&self, source: &Source, fingerprint: &str) -> Result<()> {
         let Some(mut updated) = self.db.get_source(&source.id).await? else {
             return Ok(());
@@ -1456,6 +1450,21 @@ impl ServiceState {
             return Ok(SourceSyncOutcome::Skipped);
         }
 
+        let source_path = match source.path.as_ref() {
+            Some(path) => Config::expand_path(path),
+            None => return Ok(SourceSyncOutcome::Skipped),
+        };
+        if !source_path.exists() {
+            return Ok(SourceSyncOutcome::Skipped);
+        }
+
+        if matches!(reason, SyncReason::Audit)
+            && let Some(last_sync_at) = source.last_sync_at
+            && (chrono::Utc::now() - last_sync_at).num_seconds() < 1_800
+        {
+            return Ok(SourceSyncOutcome::Skipped);
+        }
+
         if let Some((failures, retry_after)) = self.source_backoff.get(&source.id)
             && now < *retry_after
         {
@@ -1476,7 +1485,7 @@ impl ServiceState {
             return Ok(SourceSyncOutcome::Skipped);
         }
 
-        let current_fingerprint = Self::current_source_fingerprint(source);
+        let current_fingerprint = Self::source_fingerprint(&source_path);
         let cached_fingerprint = Self::cached_source_fingerprint(source);
         if current_fingerprint.is_some() && current_fingerprint == cached_fingerprint {
             return Ok(SourceSyncOutcome::SkippedUnchanged);

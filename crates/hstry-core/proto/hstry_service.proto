@@ -50,6 +50,11 @@ message SearchRequest {
   string source = 4;
   string workspace = 5;
   SearchMode mode = 6;
+  int64 after_ms = 7;              // Only messages created after this timestamp (ms)
+  int64 before_ms = 8;             // Only messages created before this timestamp (ms)
+  string role = 9;                 // Filter by message role ("user", "assistant", etc.)
+  string model = 10;               // Filter by conversation model
+  string harness = 11;             // Filter by agent harness ("pi", "claude", etc.)
 }
 
 message SearchHit {

@@ -153,8 +153,7 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         source_id: Some(source.id.clone()),
         workspace: Some("/tmp/workspace".to_string()),
         limit: Some(10),
-        offset: None,
-        mode: hstry_core::db::SearchMode::Auto,
+        ..Default::default()
     };
     let hits = db.search("target", opts).await?;
 

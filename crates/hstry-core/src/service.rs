@@ -57,6 +57,23 @@ pub fn search_request_to_opts(request: &proto::SearchRequest) -> SearchOptions {
             None
         },
         mode: search_mode_from_proto(request.mode),
+        after: ts_from_ms(request.after_ms),
+        before: ts_from_ms(request.before_ms),
+        role: if request.role.is_empty() {
+            None
+        } else {
+            Some(request.role.clone())
+        },
+        model: if request.model.is_empty() {
+            None
+        } else {
+            Some(request.model.clone())
+        },
+        harness: if request.harness.is_empty() {
+            None
+        } else {
+            Some(request.harness.clone())
+        },
     }
 }
 
@@ -68,6 +85,11 @@ fn search_request_from_opts(query: &str, opts: &SearchOptions) -> proto::SearchR
         source: opts.source_id.clone().unwrap_or_default(),
         workspace: opts.workspace.clone().unwrap_or_default(),
         mode: search_mode_to_proto(opts.mode) as i32,
+        after_ms: opts.after.map_or(0, |dt| dt.timestamp_millis()),
+        before_ms: opts.before.map_or(0, |dt| dt.timestamp_millis()),
+        role: opts.role.clone().unwrap_or_default(),
+        model: opts.model.clone().unwrap_or_default(),
+        harness: opts.harness.clone().unwrap_or_default(),
     }
 }
 

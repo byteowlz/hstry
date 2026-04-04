@@ -1310,7 +1310,9 @@ version = "0.5.12"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clap",
+ "dateparser",
  "env_logger",
  "hstry-core",
  "log",

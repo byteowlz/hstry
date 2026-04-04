@@ -1877,6 +1877,21 @@ impl Database {
         if opts.workspace.is_some() {
             sql.push_str(" AND c.workspace = ?");
         }
+        if opts.after.is_some() {
+            sql.push_str(" AND m.created_at > ?");
+        }
+        if opts.before.is_some() {
+            sql.push_str(" AND m.created_at < ?");
+        }
+        if opts.role.is_some() {
+            sql.push_str(" AND m.role = ?");
+        }
+        if opts.model.is_some() {
+            sql.push_str(" AND c.model = ?");
+        }
+        if opts.harness.is_some() {
+            sql.push_str(" AND c.harness = ?");
+        }
 
         sql.push_str(" ORDER BY score ASC");
 
@@ -1895,6 +1910,21 @@ impl Database {
         }
         if let Some(ref workspace) = opts.workspace {
             query_builder = query_builder.bind(workspace);
+        }
+        if let Some(after) = opts.after {
+            query_builder = query_builder.bind(after.timestamp());
+        }
+        if let Some(before) = opts.before {
+            query_builder = query_builder.bind(before.timestamp());
+        }
+        if let Some(ref role) = opts.role {
+            query_builder = query_builder.bind(role);
+        }
+        if let Some(ref model) = opts.model {
+            query_builder = query_builder.bind(model);
+        }
+        if let Some(ref harness) = opts.harness {
+            query_builder = query_builder.bind(harness);
         }
 
         let rows = query_builder.fetch_all(&self.pool).await?;
@@ -2232,6 +2262,16 @@ pub struct SearchOptions {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
     pub mode: SearchMode,
+    /// Only include messages created after this timestamp.
+    pub after: Option<chrono::DateTime<Utc>>,
+    /// Only include messages created before this timestamp.
+    pub before: Option<chrono::DateTime<Utc>>,
+    /// Filter by message role (e.g. "user", "assistant").
+    pub role: Option<String>,
+    /// Filter by conversation model (e.g. "claude-sonnet-4").
+    pub model: Option<String>,
+    /// Filter by agent harness (e.g. "pi", "claude").
+    pub harness: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

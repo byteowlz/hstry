@@ -367,6 +367,19 @@ fn search_with_components(
         )));
     }
 
+    if let Some(role) = &opts.role {
+        let term = Term::from_field_text(fields.role, role);
+        filters.push(Box::new(TermQuery::new(
+            term,
+            tantivy::schema::IndexRecordOption::Basic,
+        )));
+    }
+
+    // Note: after/before/model/harness filters are applied post-search when using
+    // the Tantivy path. The FTS5 fallback handles them as WHERE clauses natively.
+    // Tantivy range queries for i64 fields require Bound<Term> which is complex;
+    // the FTS5 path is preferred for time-filtered searches.
+
     let query = if filters.len() == 1 {
         filters.remove(0)
     } else {

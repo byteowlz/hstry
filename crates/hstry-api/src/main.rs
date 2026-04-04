@@ -125,6 +125,16 @@ struct SearchQuery {
     source: Option<String>,
     workspace: Option<String>,
     mode: Option<String>,
+    /// ISO 8601 timestamp: only messages after this time
+    after: Option<String>,
+    /// ISO 8601 timestamp: only messages before this time
+    before: Option<String>,
+    /// Filter by message role
+    role: Option<String>,
+    /// Filter by conversation model
+    model: Option<String>,
+    /// Filter by agent harness
+    harness: Option<String>,
 }
 
 async fn search(
@@ -138,14 +148,33 @@ async fn search(
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
+    let after = params
+        .after
+        .as_deref()
+        .and_then(|s| dateparser::parse(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    let before = params
+        .before
+        .as_deref()
+        .and_then(|s| dateparser::parse(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
     let source = params.source.clone();
     let workspace = params.workspace.clone();
+    let role = params.role.clone();
+    let model = params.model.clone();
+    let harness = params.harness.clone();
     let opts = SearchOptions {
         source_id: source.clone(),
         workspace: workspace.clone(),
         limit: params.limit,
         offset: params.offset,
         mode,
+        after,
+        before,
+        role: role.clone(),
+        model: model.clone(),
+        harness: harness.clone(),
     };
 
     let results = match state.search_index.search(&params.query, &opts) {
@@ -160,6 +189,11 @@ async fn search(
                     limit: params.limit,
                     offset: params.offset,
                     mode,
+                    after,
+                    before,
+                    role,
+                    model,
+                    harness,
                 },
             )
             .await

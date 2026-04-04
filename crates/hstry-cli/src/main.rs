@@ -215,6 +215,22 @@ enum Command {
         #[arg(long)]
         include_system: bool,
 
+        /// Only include messages after this date (ISO 8601 or relative: "2d", "1w", "2025-01-15")
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Only include messages before this date (ISO 8601 or relative)
+        #[arg(long)]
+        before: Option<String>,
+
+        /// Filter by conversation model (e.g. "claude-sonnet-4")
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Filter by agent harness (e.g. "pi", "claude")
+        #[arg(long)]
+        harness_filter: Option<String>,
+
         /// Show each session only once with occurrence count
         #[arg(short, long)]
         compact: bool,
@@ -823,6 +839,10 @@ async fn main() -> Result<()> {
             no_tools,
             dedup,
             include_system,
+            after,
+            before,
+            model,
+            harness_filter,
             compact,
             input,
         } => {
@@ -853,6 +873,10 @@ async fn main() -> Result<()> {
                 no_tools,
                 dedup,
                 include_system,
+                after,
+                before,
+                model,
+                harness_filter,
                 compact,
                 cli.json,
             )
@@ -1575,9 +1599,24 @@ async fn cmd_search_fast(
     no_tools: bool,
     dedup: bool,
     include_system: bool,
+    after: Option<String>,
+    before: Option<String>,
+    model: Option<String>,
+    harness_filter: Option<String>,
     compact: bool,
     json: bool,
 ) -> Result<()> {
+    // Parse date strings into DateTime<Utc>
+    let after_dt = after.as_deref().map(parse_date_filter).transpose()?;
+    let before_dt = before.as_deref().map(parse_date_filter).transpose()?;
+
+    // Push single role filter to DB level for efficiency
+    let db_role = if roles.len() == 1 {
+        Some(roles[0].to_string())
+    } else {
+        None
+    };
+
     // Request more results than needed if we're filtering, to ensure we get enough after filtering
     let has_filters = !include_system || !roles.is_empty() || no_tools || dedup;
     let fetch_limit = if has_filters { limit * 4 } else { limit };
@@ -1587,6 +1626,11 @@ async fn cmd_search_fast(
         limit: Some(fetch_limit),
         offset: None,
         mode: mode.into(),
+        after: after_dt,
+        before: before_dt,
+        role: db_role,
+        model,
+        harness: harness_filter,
     };
     let mut messages = Vec::new();
 
@@ -1841,6 +1885,17 @@ enum SearchRoleArg {
     Assistant,
     System,
     Tool,
+}
+
+impl std::fmt::Display for SearchRoleArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SearchRoleArg::User => write!(f, "user"),
+            SearchRoleArg::Assistant => write!(f, "assistant"),
+            SearchRoleArg::System => write!(f, "system"),
+            SearchRoleArg::Tool => write!(f, "tool"),
+        }
+    }
 }
 
 async fn cmd_list(

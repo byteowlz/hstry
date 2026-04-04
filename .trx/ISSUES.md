@@ -11,9 +11,6 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
-### [trx-702h] Add parent_conversation_id column for session tree tracking (P1, feature)
-hstry has no first-class parent/child relationship between conversations. Pi tracks parentSession in JSONL headers and the adapter puts it into the metadata JSON blob, but there is no parent_conversation_id column on the conversations table. This means you cannot query 'show all child sessions of X', 'show the full session tree', or navigate fork lineage. Needed for: Oqto thread dispatch (worker sessions link to orchestrator), session tree rendering in sidebar, unified search across session trees. Implementation: add parent_conversation_id TEXT column (nullable, self-referencing FK), migration 012, index on parent_conversation_id, update Pi adapter to populate it from header.parentSession, add list_children(conversation_id) and get_ancestors(conversation_id) to Database.
-
 ### [trx-z42c.9] Regression suite for incremental sync correctness and missed-event recovery (P1, task)
 Add tests for watermark advancement, event miss recovery via safety audit, fingerprint invalidation, and idempotent outbox indexing.
 
@@ -128,6 +125,7 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-702h] Add parent_conversation_id column for session tree tracking (closed 2026-04-04)
 - [trx-krtd] hstry-core fabricated fake readable_ids instead of storing NULL (closed 2026-03-26)
 - [trx-dyty] Pi adapter was not extracting readable_id from session title brackets (closed 2026-03-26)
 - [trx-2wpe] Adapter protocol: add optional conversation version/message_count fields for import/export parity (closed 2026-03-19)

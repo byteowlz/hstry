@@ -66,12 +66,6 @@ For unified search across hstry/mmry/trx, search results need a common envelope 
 ### [trx-j4z6] Expose conversation tags in search and CLI (P2, feature)
 The schema already has tags and conversation_tags tables (migration 001) but they are never populated or queryable through the API. Add: tag management (add/remove tags on conversations), tag filter on search and list_conversations, CLI commands for tagging. Tags are the cross-tool connector for unified search across hstry/mmry/trx.
 
-### [trx-bwvy] Add role filter to search() (P2, feature)
-Cannot restrict search to 'only user messages' or 'only assistant messages'. Add optional role field to SearchOptions, apply as WHERE m.role = ? clause. Useful for finding what users asked vs what agents answered.
-
-### [trx-tj2t] Add date range filters (after/before) to search() (P2, feature)
-list_conversations supports after/before filters but search() does not. You cannot say 'search for X from last 2 weeks'. Add after/before fields to SearchOptions and apply as WHERE clauses on m.created_at or c.created_at in both FTS and Tantivy search paths.
-
 ### [trx-z42c.8] Observability: per-source metrics, queue depth, and structured sync logs (P2, task)
 Expose sync timings, changed/unchanged counters, error/backoff state, index queue lag/depth, and skipped-source reasons.
 
@@ -104,9 +98,6 @@ Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON m
 
 ### [trx-qtxm] Add Claude Code adapter (P2, feature)
 
-### [trx-hbfm] Add model and harness filters to search() (P3, feature)
-Cannot filter search by model (e.g. 'all Claude conversations') or harness (e.g. 'all Pi sessions'). Add optional model and harness fields to SearchOptions, apply as WHERE clauses joining through conversations table.
-
 ### [trx-ctd3] Docs: update example config and usage for remote fetch/sync (P3, task)
 
 ### [trx-bj82] Tests: config parsing + remote fetch/sync happy paths (P3, task)
@@ -125,6 +116,9 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-hbfm] Add model and harness filters to search() (closed 2026-04-04)
+- [trx-bwvy] Add role filter to search() (closed 2026-04-04)
+- [trx-tj2t] Add date range filters (after/before) to search() (closed 2026-04-04)
 - [trx-702h] Add parent_conversation_id column for session tree tracking (closed 2026-04-04)
 - [trx-krtd] hstry-core fabricated fake readable_ids instead of storing NULL (closed 2026-03-26)
 - [trx-dyty] Pi adapter was not extracting readable_id from session title brackets (closed 2026-03-26)

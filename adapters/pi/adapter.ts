@@ -840,6 +840,12 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
     // Calculate totals from assistant messages with usage
     const { tokensIn, tokensOut, costUsd, model, provider } = calculateTotals(entries);
 
+    // Extract parent session ID from the parentSession file path.
+    // Pi stores parentSession as a full path like:
+    //   ~/.pi/agent/sessions/--cwd--/2026-01-29T13-41-36_8290b37b-....jsonl
+    // The session UUID is the part after the last underscore in the filename.
+    const parentExternalId = extractSessionIdFromPath(header.parentSession);
+
     conversations.push({
       externalId: header.id,
       readableId,
@@ -857,6 +863,8 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       tokensOut,
       costUsd,
       messages,
+      parentExternalId,
+      forkType: parentExternalId ? 'fork' : undefined,
       metadata: {
         file: filePath,
         version: header.version,
@@ -923,6 +931,26 @@ async function findJsonlFiles(
  * The session header's `cwd` field is authoritative and should always be
  * preferred. This function is kept only for reference.
  */
+/**
+ * Extract a Pi session UUID from a session file path.
+ * Pi parentSession paths look like:
+ *   ~/.pi/agent/sessions/--cwd--/2026-01-29T13-41-36-973Z_8290b37b-937b-4d70-b22a-80f9004da27b.jsonl
+ * Returns the UUID portion or undefined if the path doesn't match.
+ */
+function extractSessionIdFromPath(path?: string): string | undefined {
+  if (!path) return undefined;
+  const filename = basename(path, '.jsonl');
+  // UUID is after the last underscore: "timestamp_uuid"
+  const lastUnderscore = filename.lastIndexOf('_');
+  if (lastUnderscore < 0) return undefined;
+  const candidate = filename.slice(lastUnderscore + 1);
+  // Validate it looks like a UUID (8-4-4-4-12 hex)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)) {
+    return candidate;
+  }
+  return undefined;
+}
+
 function decodeWorkspaceFromPath(_filePath: string): string | undefined {
   return undefined;
 }

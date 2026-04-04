@@ -439,6 +439,9 @@ mod parsed_conversation_tests {
             metadata: None,
             version: None,
             message_count: None,
+            parent_external_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         let json = serde_json::to_string(&conv).expect("serialize");
         assert!(
@@ -469,6 +472,9 @@ mod parsed_conversation_tests {
             metadata: None,
             version: Some(10),
             message_count: Some(5),
+            parent_external_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         let value = serde_json::to_value(&conv).expect("serialize");
         assert_eq!(value["version"], 10);

@@ -506,8 +506,8 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count, parent_conversation_id, parent_message_idx, fork_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
@@ -521,6 +521,9 @@ impl Database {
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata,
                 harness = COALESCE(excluded.harness, conversations.harness),
+                parent_conversation_id = COALESCE(excluded.parent_conversation_id, conversations.parent_conversation_id),
+                parent_message_idx = COALESCE(excluded.parent_message_idx, conversations.parent_message_idx),
+                fork_type = COALESCE(excluded.fork_type, conversations.fork_type),
                 version = conversations.version + 1
             ",
         )
@@ -540,6 +543,9 @@ impl Database {
         .bind(conv.cost_usd)
         .bind(conv.metadata.to_string())
         .bind(&conv.harness)
+        .bind(&conv.parent_conversation_id)
+        .bind(conv.parent_message_idx)
+        .bind(&conv.fork_type)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1065,6 +1071,77 @@ impl Database {
         Ok(ids.len())
     }
 
+    // =========================================================================
+    // Session Tree Queries
+    // =========================================================================
+
+    /// List direct children of a conversation.
+    pub async fn list_children(&self, parent_id: Uuid) -> Result<Vec<Conversation>> {
+        let rows = sqlx::query(
+            "SELECT * FROM conversations WHERE parent_conversation_id = ? ORDER BY created_at ASC",
+        )
+        .bind(parent_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(conversation_from_row).collect())
+    }
+
+    /// Walk up the tree from a conversation to the root, returning ancestors
+    /// in order from immediate parent to root. Returns an empty vec for root
+    /// conversations.
+    pub async fn get_ancestors(&self, id: Uuid) -> Result<Vec<Conversation>> {
+        let mut ancestors = Vec::new();
+        let mut current_id = id;
+        let mut seen = std::collections::HashSet::new();
+
+        loop {
+            let conv = self.get_conversation(current_id).await?;
+            let Some(conv) = conv else { break };
+
+            let Some(ref parent_id_str) = conv.parent_conversation_id else {
+                break;
+            };
+            let Ok(parent_id) = Uuid::parse_str(parent_id_str) else {
+                break;
+            };
+
+            // Cycle detection
+            if !seen.insert(parent_id) {
+                break;
+            }
+
+            let Some(parent) = self.get_conversation(parent_id).await? else {
+                break;
+            };
+            current_id = parent.id;
+            ancestors.push(parent);
+        }
+
+        Ok(ancestors)
+    }
+
+    /// Get the full subtree rooted at a conversation (BFS, including the root).
+    pub async fn get_subtree(&self, root_id: Uuid) -> Result<Vec<Conversation>> {
+        let mut result = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+
+        if let Some(root) = self.get_conversation(root_id).await? {
+            queue.push_back(root.id);
+            result.push(root);
+        }
+
+        while let Some(current_id) = queue.pop_front() {
+            let children = self.list_children(current_id).await?;
+            for child in children {
+                queue.push_back(child.id);
+                result.push(child);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Update a conversation's updated_at timestamp.
     pub async fn update_conversation_updated_at(
         &self,
@@ -1094,6 +1171,39 @@ impl Database {
         harness: Option<&str>,
         platform_id: Option<&str>,
     ) -> Result<()> {
+        self.update_conversation_metadata_full(
+            id,
+            title,
+            workspace,
+            model,
+            provider,
+            metadata_json,
+            readable_id,
+            harness,
+            platform_id,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Full metadata update including session tree fields.
+    pub async fn update_conversation_metadata_full(
+        &self,
+        id: Uuid,
+        title: Option<&str>,
+        workspace: Option<&str>,
+        model: Option<&str>,
+        provider: Option<&str>,
+        metadata_json: Option<&serde_json::Value>,
+        readable_id: Option<&str>,
+        harness: Option<&str>,
+        platform_id: Option<&str>,
+        parent_conversation_id: Option<&str>,
+        parent_message_idx: Option<i32>,
+        fork_type: Option<&str>,
+    ) -> Result<()> {
         // Use COALESCE pattern: each field only updates if a non-NULL value is provided.
         // We pass NULL for fields that shouldn't change, and the COALESCE keeps the old value.
         let now = Utc::now().timestamp();
@@ -1110,6 +1220,9 @@ impl Database {
                 readable_id = COALESCE(?, readable_id),
                 harness = COALESCE(?, harness),
                 platform_id = COALESCE(NULLIF(?, ''), NULLIF(platform_id, '')),
+                parent_conversation_id = COALESCE(?, parent_conversation_id),
+                parent_message_idx = COALESCE(?, parent_message_idx),
+                fork_type = COALESCE(?, fork_type),
                 updated_at = ?,
                 version = version + 1
             WHERE id = ?",
@@ -1122,6 +1235,9 @@ impl Database {
         .bind(readable_id)
         .bind(harness)
         .bind(platform_id)
+        .bind(parent_conversation_id)
+        .bind(parent_message_idx)
+        .bind(fork_type)
         .bind(now)
         .bind(&id_str)
         .execute(&self.pool)
@@ -1319,8 +1435,8 @@ impl Database {
 
         sqlx::query(
             r"
-            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+            INSERT INTO conversations (id, source_id, external_id, readable_id, platform_id, title, created_at, updated_at, model, provider, workspace, tokens_in, tokens_out, cost_usd, metadata, harness, version, message_count, parent_conversation_id, parent_message_idx, fork_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
             ON CONFLICT(source_id, external_id) DO UPDATE SET
                 readable_id = COALESCE(excluded.readable_id, conversations.readable_id),
                 platform_id = COALESCE(NULLIF(excluded.platform_id, ''), NULLIF(conversations.platform_id, '')),
@@ -1334,6 +1450,9 @@ impl Database {
                 cost_usd = excluded.cost_usd,
                 metadata = excluded.metadata,
                 harness = COALESCE(excluded.harness, conversations.harness),
+                parent_conversation_id = COALESCE(excluded.parent_conversation_id, conversations.parent_conversation_id),
+                parent_message_idx = COALESCE(excluded.parent_message_idx, conversations.parent_message_idx),
+                fork_type = COALESCE(excluded.fork_type, conversations.fork_type),
                 version = conversations.version + 1
             ",
         )
@@ -1353,6 +1472,9 @@ impl Database {
         .bind(conv.cost_usd)
         .bind(conv.metadata.to_string())
         .bind(&conv.harness)
+        .bind(&conv.parent_conversation_id)
+        .bind(conv.parent_message_idx)
+        .bind(&conv.fork_type)
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -2199,6 +2321,9 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow) -> Conversation {
         harness: row.try_get("harness").ok().flatten(),
         version: row.try_get("version").unwrap_or(0),
         message_count: row.try_get("message_count").unwrap_or(0),
+        parent_conversation_id: row.try_get("parent_conversation_id").ok().flatten(),
+        parent_message_idx: row.try_get("parent_message_idx").ok().flatten(),
+        fork_type: row.try_get("fork_type").ok().flatten(),
     }
 }
 

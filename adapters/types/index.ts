@@ -41,6 +41,12 @@ export interface Conversation {
   version?: number;
   /** Denormalized message count (read-only hint; DB maintains authoritative count). */
   messageCount?: number;
+  /** Parent conversation external ID (for session tree tracking). */
+  parentExternalId?: string;
+  /** Message index in the parent where this conversation branched off. */
+  parentMessageIdx?: number;
+  /** Why this child was created: "fork", "thread", "resume". */
+  forkType?: 'fork' | 'thread' | 'resume';
 }
 
 /** A message within a conversation */

@@ -1,0 +1,23 @@
+{
+  "todos": [
+    {
+      "id": "00064e9d",
+      "content": "Classify and skip non-watchable sources in service sync loop (pathless/missing paths)",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "0db8ea57",
+      "content": "Add per-source audit cooldown so unchanged sources are not re-synced each audit tick",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "54418dc4",
+      "content": "Run fmt/tests and commit",
+      "status": "completed",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-04-01T19:38:40.176Z"
+}

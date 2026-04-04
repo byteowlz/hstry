@@ -89,6 +89,22 @@ pub async fn sync_source(
         // adapter rows for the same conversation map to one hstry conversation id.
         let mut batch_external_to_conv_id: HashMap<String, uuid::Uuid> = HashMap::new();
 
+        // Collect parent resolution info for second pass (before consuming the batch)
+        let parent_resolutions: Vec<_> = batch
+            .conversations
+            .iter()
+            .filter_map(|conv| {
+                let parent_ext = conv.parent_external_id.as_ref()?;
+                let child_ext = conv.external_id.as_ref()?;
+                Some((
+                    child_ext.clone(),
+                    parent_ext.clone(),
+                    conv.parent_message_idx,
+                    conv.fork_type.clone(),
+                ))
+            })
+            .collect();
+
         for conv in batch.conversations {
             let mut conv_id = uuid::Uuid::new_v4();
             let mut existing_conv: Option<hstry_core::models::Conversation> = None;
@@ -185,6 +201,9 @@ pub async fn sync_source(
                 harness: None,
                 version: 0,
                 message_count: 0,
+                parent_conversation_id: None, // Resolved in a second pass after all conversations are imported
+                parent_message_idx: conv.parent_message_idx,
+                fork_type: conv.fork_type.clone(),
             };
 
             if !seen_in_batch {
@@ -234,6 +253,43 @@ pub async fn sync_source(
             }
 
             tx.commit().await?;
+        }
+
+        // Second pass: resolve parent_external_id -> parent_conversation_id.
+        // The Pi adapter provides the parent's external ID (Pi session UUID),
+        // but hstry needs the internal conversation UUID. We resolve this
+        // after all conversations in the batch are imported.
+        for (child_ext_id, parent_ext_id, parent_msg_idx, fork_type) in &parent_resolutions {
+            // Look up both conversations by source + external_id
+            let parent_conv_id = db
+                .get_conversation_id(&source.id, parent_ext_id)
+                .await
+                .ok()
+                .flatten();
+            let child_conv_id = db
+                .get_conversation_id(&source.id, child_ext_id)
+                .await
+                .ok()
+                .flatten();
+
+            if let (Some(parent_id), Some(child_id)) = (parent_conv_id, child_conv_id) {
+                let _ = db
+                    .update_conversation_metadata_full(
+                        child_id,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(&parent_id.to_string()),
+                        *parent_msg_idx,
+                        fork_type.as_deref(),
+                    )
+                    .await;
+            }
         }
 
         let done = batch.done.unwrap_or(false);

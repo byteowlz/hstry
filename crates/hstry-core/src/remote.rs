@@ -400,6 +400,9 @@ pub async fn merge_databases(
                 harness: conv.harness,
                 version: 0,
                 message_count: 0,
+                parent_conversation_id: conv.parent_conversation_id,
+                parent_message_idx: conv.parent_message_idx,
+                fork_type: conv.fork_type,
             };
 
             affected_ids.push(conv_id);

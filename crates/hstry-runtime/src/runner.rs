@@ -181,6 +181,15 @@ pub struct ParsedConversation {
     /// Denormalized message count (read-only hint; DB maintains authoritative count).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_count: Option<u32>,
+    /// Parent conversation external ID (for session tree tracking).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_external_id: Option<String>,
+    /// Message index in the parent where this conversation branched off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_message_idx: Option<i32>,
+    /// Why this child was created: "fork", "thread", "resume".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_type: Option<String>,
 }
 
 /// Parsed batch response from TS adapter.

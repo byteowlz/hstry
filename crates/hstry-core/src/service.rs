@@ -294,6 +294,9 @@ pub fn conversation_from_proto(proto: proto::Conversation) -> Conversation {
         harness: proto.harness,
         version: i64::try_from(proto.version).unwrap_or(i64::MAX),
         message_count: i64::from(proto.message_count),
+        parent_conversation_id: proto.parent_conversation_id,
+        parent_message_idx: proto.parent_message_idx,
+        fork_type: proto.fork_type,
     }
 }
 
@@ -355,6 +358,9 @@ pub fn conversation_to_proto(conv: &Conversation) -> proto::Conversation {
         platform_id: conv.platform_id.clone(),
         version: u64::try_from(conv.version).unwrap_or(0),
         message_count: u32::try_from(conv.message_count).unwrap_or(0),
+        parent_conversation_id: conv.parent_conversation_id.clone(),
+        parent_message_idx: conv.parent_message_idx,
+        fork_type: conv.fork_type.clone(),
     }
 }
 

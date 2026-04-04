@@ -1496,6 +1496,9 @@ async fn cmd_import(
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: conv.parent_message_idx,
+            fork_type: conv.fork_type,
         };
 
         db.upsert_conversation(&hstry_conv).await?;

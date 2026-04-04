@@ -42,6 +42,9 @@ async fn remove_source_deletes_conversations_and_messages() -> Result<()> {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conversation).await?;
 
@@ -121,6 +124,9 @@ async fn search_returns_snippet_and_ids() -> Result<()> {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conversation).await?;
 

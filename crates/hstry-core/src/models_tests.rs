@@ -190,6 +190,9 @@ mod conversation_tests {
             harness: Some("pi".to_string()),
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");
@@ -224,6 +227,9 @@ mod conversation_tests {
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
 
         let json = serde_json::to_string(&conv).expect("serialize");

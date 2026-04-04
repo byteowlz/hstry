@@ -173,6 +173,9 @@ async fn upsert_conversation_creates_new() {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
 
     db.upsert_conversation(&conv).await.expect("upsert");
@@ -212,6 +215,9 @@ async fn upsert_conversation_updates_by_external_id() {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv_v1).await.expect("upsert v1");
 
@@ -235,6 +241,9 @@ async fn upsert_conversation_updates_by_external_id() {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv_v2).await.expect("upsert v2");
 
@@ -277,6 +286,9 @@ async fn upsert_conversation_preserves_workspace_when_new_value_empty() {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv_v1).await.expect("upsert v1");
 
@@ -300,6 +312,9 @@ async fn upsert_conversation_preserves_workspace_when_new_value_empty() {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv_v2).await.expect("upsert v2");
 
@@ -343,6 +358,9 @@ async fn list_conversations_with_filters() {
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -392,6 +410,9 @@ async fn count_conversations_accurate() {
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
     }
@@ -425,6 +446,9 @@ async fn setup_conversation(db: &Database) -> Conversation {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv).await.expect("upsert conv");
     conv
@@ -738,6 +762,9 @@ async fn search_with_source_filter() {
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
 
@@ -870,6 +897,9 @@ async fn update_conversation_metadata_partial_title() {
         harness: Some("pi".to_string()),
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv).await.expect("upsert");
 
@@ -926,6 +956,9 @@ async fn update_conversation_metadata_partial_harness() {
         harness: Some("pi".to_string()),
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     };
     db.upsert_conversation(&conv).await.expect("upsert");
 

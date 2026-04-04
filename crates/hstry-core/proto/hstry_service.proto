@@ -98,6 +98,9 @@ message Conversation {
   optional string platform_id = 15; // Platform/orchestrator session ID (e.g., "octo-xxx")
   uint64 version = 16;            // Monotonic version counter, bumped on every mutation
   uint32 message_count = 17;      // Number of messages in this conversation
+  optional string parent_conversation_id = 18; // Parent conversation UUID (session tree)
+  optional int32 parent_message_idx = 19;      // Message idx in parent where fork branched
+  optional string fork_type = 20;              // "fork", "thread", "resume"
 }
 
 message Message {
@@ -156,6 +159,9 @@ message UpdateConversationRequest {
   optional string readable_id = 8;
   optional string harness = 9;
   optional string platform_id = 10;
+  optional string parent_conversation_id = 11;
+  optional int32 parent_message_idx = 12;
+  optional string fork_type = 13;
 }
 
 message UpdateConversationResponse {

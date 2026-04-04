@@ -232,7 +232,7 @@ impl WriteService for ServerState {
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
 
         self.db
-            .update_conversation_metadata(
+            .update_conversation_metadata_full(
                 conv_id,
                 request.title.as_deref(),
                 request.workspace.as_deref(),
@@ -242,6 +242,9 @@ impl WriteService for ServerState {
                 request.readable_id.as_deref(),
                 request.harness.as_deref(),
                 request.platform_id.as_deref(),
+                request.parent_conversation_id.as_deref(),
+                request.parent_message_idx,
+                request.fork_type.as_deref(),
             )
             .await
             .map_err(|e| tonic::Status::internal(format!("Failed to update conversation: {e}")))?;

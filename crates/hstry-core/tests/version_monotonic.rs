@@ -34,6 +34,9 @@ fn test_conversation() -> Conversation {
         harness: None,
         version: 0,
         message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
     }
 }
 

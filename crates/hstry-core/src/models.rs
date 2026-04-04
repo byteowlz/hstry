@@ -46,6 +46,16 @@ pub struct Conversation {
     /// Denormalized message count, maintained atomically with version.
     #[serde(default)]
     pub message_count: i64,
+    /// Parent conversation UUID for session tree tracking (forks, thread dispatch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_conversation_id: Option<String>,
+    /// Message index in the parent where this conversation branched off.
+    /// NULL means "forked from end" or relationship is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_message_idx: Option<i32>,
+    /// Why this child was created: "fork", "thread", "resume", or NULL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_type: Option<String>,
 }
 
 /// A message within a conversation.

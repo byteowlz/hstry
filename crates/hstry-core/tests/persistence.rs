@@ -92,6 +92,9 @@ async fn conversation_persists_across_reopen() {
             harness: Some("pi".to_string()),
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
         let id = conv.id;
@@ -160,6 +163,9 @@ async fn messages_persist_across_reopen() {
             harness: None,
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert conv");
 
@@ -267,6 +273,9 @@ async fn full_scenario_persists_across_multiple_reopens() {
             harness: Some("pi".to_string()),
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert conv");
 
@@ -472,6 +481,9 @@ async fn partial_update_persists_across_reopen() {
             harness: Some("old-harness".to_string()),
             version: 0,
             message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
         };
         db.upsert_conversation(&conv).await.expect("upsert");
         let id = conv.id;

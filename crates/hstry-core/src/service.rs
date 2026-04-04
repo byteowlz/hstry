@@ -74,6 +74,11 @@ pub fn search_request_to_opts(request: &proto::SearchRequest) -> SearchOptions {
         } else {
             Some(request.harness.clone())
         },
+        tag: if request.tag.is_empty() {
+            None
+        } else {
+            Some(request.tag.clone())
+        },
     }
 }
 
@@ -90,6 +95,7 @@ fn search_request_from_opts(query: &str, opts: &SearchOptions) -> proto::SearchR
         role: opts.role.clone().unwrap_or_default(),
         model: opts.model.clone().unwrap_or_default(),
         harness: opts.harness.clone().unwrap_or_default(),
+        tag: opts.tag.clone().unwrap_or_default(),
     }
 }
 

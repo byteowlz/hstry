@@ -135,6 +135,8 @@ struct SearchQuery {
     model: Option<String>,
     /// Filter by agent harness
     harness: Option<String>,
+    /// Filter by conversation tag
+    tag: Option<String>,
 }
 
 async fn search(
@@ -164,6 +166,7 @@ async fn search(
     let role = params.role.clone();
     let model = params.model.clone();
     let harness = params.harness.clone();
+    let tag = params.tag.clone();
     let opts = SearchOptions {
         source_id: source.clone(),
         workspace: workspace.clone(),
@@ -175,6 +178,7 @@ async fn search(
         role: role.clone(),
         model: model.clone(),
         harness: harness.clone(),
+        tag: tag.clone(),
     };
 
     let results = match state.search_index.search(&params.query, &opts) {
@@ -194,6 +198,7 @@ async fn search(
                     role,
                     model,
                     harness,
+                    tag,
                 },
             )
             .await

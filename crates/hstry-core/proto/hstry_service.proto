@@ -24,6 +24,12 @@ service WriteService {
   // Delete a conversation and all its messages.
   rpc DeleteConversation(DeleteConversationRequest) returns (DeleteConversationResponse);
   
+  // Add a tag to a conversation.
+  rpc AddTag(AddTagRequest) returns (AddTagResponse);
+  
+  // Remove a tag from a conversation.
+  rpc RemoveTag(RemoveTagRequest) returns (RemoveTagResponse);
+  
   // Upload binary data (images, audio, etc.) to attachments table.
   // Returns attachment_id to use in MediaSource.AttachmentRef.
   rpc UploadAttachment(UploadAttachmentRequest) returns (UploadAttachmentResponse);
@@ -55,6 +61,7 @@ message SearchRequest {
   string role = 9;                 // Filter by message role ("user", "assistant", etc.)
   string model = 10;               // Filter by conversation model
   string harness = 11;             // Filter by agent harness ("pi", "claude", etc.)
+  string tag = 12;                 // Filter by conversation tag
 }
 
 message SearchHit {
@@ -264,4 +271,26 @@ message ListConversationsRequest {
 
 message ListConversationsResponse {
   repeated ConversationSummary conversations = 1;
+}
+
+// ============================================================================
+// Tag Management Messages
+// ============================================================================
+
+message AddTagRequest {
+  string conversation_id = 1;     // hstry UUID
+  string tag = 2;
+}
+
+message AddTagResponse {
+  bool added = 1;                 // true if tag was newly added
+}
+
+message RemoveTagRequest {
+  string conversation_id = 1;
+  string tag = 2;
+}
+
+message RemoveTagResponse {
+  bool removed = 1;               // true if tag was removed
 }

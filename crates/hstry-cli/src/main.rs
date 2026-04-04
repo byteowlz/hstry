@@ -231,6 +231,10 @@ enum Command {
         #[arg(long)]
         harness_filter: Option<String>,
 
+        /// Filter by conversation tag
+        #[arg(long)]
+        tag: Option<String>,
+
         /// Show each session only once with occurrence count
         #[arg(short, long)]
         compact: bool,
@@ -843,6 +847,7 @@ async fn main() -> Result<()> {
             before,
             model,
             harness_filter,
+            tag,
             compact,
             input,
         } => {
@@ -877,6 +882,7 @@ async fn main() -> Result<()> {
                 before,
                 model,
                 harness_filter,
+                tag,
                 compact,
                 cli.json,
             )
@@ -1603,6 +1609,7 @@ async fn cmd_search_fast(
     before: Option<String>,
     model: Option<String>,
     harness_filter: Option<String>,
+    tag: Option<String>,
     compact: bool,
     json: bool,
 ) -> Result<()> {
@@ -1631,6 +1638,7 @@ async fn cmd_search_fast(
         role: db_role,
         model,
         harness: harness_filter,
+        tag,
     };
     let mut messages = Vec::new();
 

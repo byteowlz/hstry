@@ -1072,6 +1072,110 @@ impl Database {
     }
 
     // =========================================================================
+    // Tags
+    // =========================================================================
+
+    /// Add a tag to a conversation. Creates the tag if it doesn't exist.
+    /// Returns true if the tag was newly added (false if already present).
+    pub async fn add_conversation_tag(&self, conversation_id: Uuid, tag: &str) -> Result<bool> {
+        let tag = tag.trim().to_lowercase();
+        if tag.is_empty() {
+            return Ok(false);
+        }
+
+        // Ensure tag exists
+        sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)")
+            .bind(&tag)
+            .execute(&self.pool)
+            .await?;
+
+        // Get tag id
+        let row = sqlx::query("SELECT id FROM tags WHERE name = ?")
+            .bind(&tag)
+            .fetch_one(&self.pool)
+            .await?;
+        let tag_id: i64 = row.get("id");
+
+        // Link tag to conversation
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO conversation_tags (conversation_id, tag_id) VALUES (?, ?)",
+        )
+        .bind(conversation_id.to_string())
+        .bind(tag_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Remove a tag from a conversation.
+    pub async fn remove_conversation_tag(&self, conversation_id: Uuid, tag: &str) -> Result<bool> {
+        let tag = tag.trim().to_lowercase();
+        let result = sqlx::query(
+            r"DELETE FROM conversation_tags
+              WHERE conversation_id = ?
+              AND tag_id = (SELECT id FROM tags WHERE name = ?)",
+        )
+        .bind(conversation_id.to_string())
+        .bind(&tag)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Get all tags for a conversation.
+    pub async fn get_conversation_tags(&self, conversation_id: Uuid) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            r"SELECT t.name FROM tags t
+              JOIN conversation_tags ct ON ct.tag_id = t.id
+              WHERE ct.conversation_id = ?
+              ORDER BY t.name",
+        )
+        .bind(conversation_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(|r| r.get("name")).collect())
+    }
+
+    /// List all tags in use (with conversation counts).
+    pub async fn list_tags(&self) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(
+            r"SELECT t.name, COUNT(ct.conversation_id) AS count
+              FROM tags t
+              LEFT JOIN conversation_tags ct ON ct.tag_id = t.id
+              GROUP BY t.id, t.name
+              HAVING count > 0
+              ORDER BY count DESC, t.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("name"), r.get("count")))
+            .collect())
+    }
+
+    /// Find conversations that have a specific tag.
+    pub async fn find_conversations_by_tag(&self, tag: &str) -> Result<Vec<Conversation>> {
+        let tag = tag.trim().to_lowercase();
+        let rows = sqlx::query(
+            r"SELECT c.* FROM conversations c
+              JOIN conversation_tags ct ON ct.conversation_id = c.id
+              JOIN tags t ON t.id = ct.tag_id
+              WHERE t.name = ?
+              ORDER BY COALESCE(c.updated_at, c.created_at) DESC",
+        )
+        .bind(&tag)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(conversation_from_row).collect())
+    }
+
+    // =========================================================================
     // Session Tree Queries
     // =========================================================================
 
@@ -1892,6 +1996,9 @@ impl Database {
         if opts.harness.is_some() {
             sql.push_str(" AND c.harness = ?");
         }
+        if opts.tag.is_some() {
+            sql.push_str(" AND c.id IN (SELECT ct.conversation_id FROM conversation_tags ct JOIN tags t ON t.id = ct.tag_id WHERE t.name = ?)");
+        }
 
         sql.push_str(" ORDER BY score ASC");
 
@@ -1925,6 +2032,9 @@ impl Database {
         }
         if let Some(ref harness) = opts.harness {
             query_builder = query_builder.bind(harness);
+        }
+        if let Some(ref tag) = opts.tag {
+            query_builder = query_builder.bind(tag.trim().to_lowercase());
         }
 
         let rows = query_builder.fetch_all(&self.pool).await?;
@@ -2272,6 +2382,8 @@ pub struct SearchOptions {
     pub model: Option<String>,
     /// Filter by agent harness (e.g. "pi", "claude").
     pub harness: Option<String>,
+    /// Filter by conversation tag.
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

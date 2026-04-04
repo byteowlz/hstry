@@ -318,6 +318,50 @@ impl WriteService for ServerState {
             hstry_core::service::proto::UploadAttachmentResponse { attachment_id },
         ))
     }
+
+    async fn add_tag(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::AddTagRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::AddTagResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        let conv_id = uuid::Uuid::parse_str(&request.conversation_id)
+            .map_err(|_| tonic::Status::invalid_argument("Invalid conversation_id"))?;
+
+        let added = self
+            .db
+            .add_conversation_tag(conv_id, &request.tag)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to add tag: {e}")))?;
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::AddTagResponse { added },
+        ))
+    }
+
+    async fn remove_tag(
+        &self,
+        request: tonic::Request<hstry_core::service::proto::RemoveTagRequest>,
+    ) -> std::result::Result<
+        tonic::Response<hstry_core::service::proto::RemoveTagResponse>,
+        tonic::Status,
+    > {
+        let request = request.into_inner();
+        let conv_id = uuid::Uuid::parse_str(&request.conversation_id)
+            .map_err(|_| tonic::Status::invalid_argument("Invalid conversation_id"))?;
+
+        let removed = self
+            .db
+            .remove_conversation_tag(conv_id, &request.tag)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Failed to remove tag: {e}")))?;
+
+        Ok(tonic::Response::new(
+            hstry_core::service::proto::RemoveTagResponse { removed },
+        ))
+    }
 }
 
 #[tonic::async_trait]

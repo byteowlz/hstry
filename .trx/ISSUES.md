@@ -60,12 +60,6 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
-### [trx-5fqx] Standardize search JSON output for cross-tool integration (P2, feature)
-For unified search across hstry/mmry/trx, search results need a common envelope format: { source, source_id, id, title, snippet, score, created_at, tags, metadata }. Ensure hstry search --json output matches this schema so agntz can merge results from all three tools.
-
-### [trx-j4z6] Expose conversation tags in search and CLI (P2, feature)
-The schema already has tags and conversation_tags tables (migration 001) but they are never populated or queryable through the API. Add: tag management (add/remove tags on conversations), tag filter on search and list_conversations, CLI commands for tagging. Tags are the cross-tool connector for unified search across hstry/mmry/trx.
-
 ### [trx-z42c.8] Observability: per-source metrics, queue depth, and structured sync logs (P2, task)
 Expose sync timings, changed/unchanged counters, error/backoff state, index queue lag/depth, and skipped-source reasons.
 
@@ -116,6 +110,8 @@ Notes: added TUI deps, wired hstry_core::Config loading, and show database path 
 
 ## Closed
 
+- [trx-5fqx] Standardize search JSON output for cross-tool integration (closed 2026-04-04)
+- [trx-j4z6] Expose conversation tags in search and CLI (closed 2026-04-04)
 - [trx-hbfm] Add model and harness filters to search() (closed 2026-04-04)
 - [trx-bwvy] Add role filter to search() (closed 2026-04-04)
 - [trx-tj2t] Add date range filters (after/before) to search() (closed 2026-04-04)

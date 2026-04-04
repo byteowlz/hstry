@@ -11,6 +11,9 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
+### [trx-702h] Add parent_conversation_id column for session tree tracking (P1, feature)
+hstry has no first-class parent/child relationship between conversations. Pi tracks parentSession in JSONL headers and the adapter puts it into the metadata JSON blob, but there is no parent_conversation_id column on the conversations table. This means you cannot query 'show all child sessions of X', 'show the full session tree', or navigate fork lineage. Needed for: Oqto thread dispatch (worker sessions link to orchestrator), session tree rendering in sidebar, unified search across session trees. Implementation: add parent_conversation_id TEXT column (nullable, self-referencing FK), migration 012, index on parent_conversation_id, update Pi adapter to populate it from header.parentSession, add list_children(conversation_id) and get_ancestors(conversation_id) to Database.
+
 ### [trx-z42c.9] Regression suite for incremental sync correctness and missed-event recovery (P1, task)
 Add tests for watermark advancement, event miss recovery via safety audit, fingerprint invalidation, and idempotent outbox indexing.
 
@@ -60,6 +63,18 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
+### [trx-5fqx] Standardize search JSON output for cross-tool integration (P2, feature)
+For unified search across hstry/mmry/trx, search results need a common envelope format: { source, source_id, id, title, snippet, score, created_at, tags, metadata }. Ensure hstry search --json output matches this schema so agntz can merge results from all three tools.
+
+### [trx-j4z6] Expose conversation tags in search and CLI (P2, feature)
+The schema already has tags and conversation_tags tables (migration 001) but they are never populated or queryable through the API. Add: tag management (add/remove tags on conversations), tag filter on search and list_conversations, CLI commands for tagging. Tags are the cross-tool connector for unified search across hstry/mmry/trx.
+
+### [trx-bwvy] Add role filter to search() (P2, feature)
+Cannot restrict search to 'only user messages' or 'only assistant messages'. Add optional role field to SearchOptions, apply as WHERE m.role = ? clause. Useful for finding what users asked vs what agents answered.
+
+### [trx-tj2t] Add date range filters (after/before) to search() (P2, feature)
+list_conversations supports after/before filters but search() does not. You cannot say 'search for X from last 2 weeks'. Add after/before fields to SearchOptions and apply as WHERE clauses on m.created_at or c.created_at in both FTS and Tantivy search paths.
+
 ### [trx-z42c.8] Observability: per-source metrics, queue depth, and structured sync logs (P2, task)
 Expose sync timings, changed/unchanged counters, error/backoff state, index queue lag/depth, and skipped-source reasons.
 
@@ -91,6 +106,9 @@ Notes: added hstry CLI mmry extraction command that maps messages to mmry JSON m
 ### [trx-dy7w] Add ChatGPT export adapter (P2, feature)
 
 ### [trx-qtxm] Add Claude Code adapter (P2, feature)
+
+### [trx-hbfm] Add model and harness filters to search() (P3, feature)
+Cannot filter search by model (e.g. 'all Claude conversations') or harness (e.g. 'all Pi sessions'). Add optional model and harness fields to SearchOptions, apply as WHERE clauses joining through conversations table.
 
 ### [trx-ctd3] Docs: update example config and usage for remote fetch/sync (P3, task)
 

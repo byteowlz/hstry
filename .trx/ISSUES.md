@@ -2,6 +2,8 @@
 
 ## Open
 
+### [trx-ye07] Release 0.5.14: include migration 012 in embedded migration runner (P0, bug)
+
 ### [trx-8em1] hstry must not crash-loop on adapter version mismatch -- gracefully degrade or auto-update (P0, bug)
 When hstry binary is updated (e.g. 0.5.5 -> 0.5.7) but adapters are not, hstry exits immediately with:
 'Adapter version mismatch (expected hstry 0.5.7, found 0.5.5). Run hstry adapters update.'

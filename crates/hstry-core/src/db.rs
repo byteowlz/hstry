@@ -196,6 +196,10 @@ impl Database {
                 "011_add_version_and_message_count.sql",
                 include_str!("../migrations/011_add_version_and_message_count.sql"),
             ),
+            (
+                "012_add_conversation_tree.sql",
+                include_str!("../migrations/012_add_conversation_tree.sql"),
+            ),
         ];
 
         for (filename, sql) in migrations {

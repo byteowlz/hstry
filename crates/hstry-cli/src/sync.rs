@@ -9,7 +9,10 @@ use hstry_runtime::{
 };
 use std::collections::HashMap;
 
-const DEFAULT_BATCH_SIZE: usize = 25;
+/// Number of conversations to buffer per streaming batch. Larger batches
+/// trade memory for fewer transaction commits and let the bulk-insert path
+/// pack more rows per multi-row INSERT statement.
+const DEFAULT_BATCH_SIZE: usize = 200;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SyncStats {
@@ -18,10 +21,27 @@ pub struct SyncStats {
     pub messages: usize,
 }
 
+/// Optional progress callback invoked once per committed batch.
+///
+/// Arguments are the running total of conversations and messages written so
+/// far. Callers wire this to whatever UI they prefer (indicatif bar, plain
+/// stdout, structured logs). Returning is fast and infallible by contract —
+/// the callback must not block on I/O.
+pub type ProgressCallback<'a> = &'a (dyn Fn(usize, usize) + Send + Sync);
+
 pub async fn sync_source(
     db: &Database,
     runner: &AdapterRunner,
     source: &Source,
+) -> Result<SyncStats> {
+    sync_source_with_progress(db, runner, source, None).await
+}
+
+pub async fn sync_source_with_progress(
+    db: &Database,
+    runner: &AdapterRunner,
+    source: &Source,
+    progress: Option<ProgressCallback<'_>>,
 ) -> Result<SyncStats> {
     let adapter_path = runner
         .find_adapter(&source.adapter)
@@ -252,19 +272,23 @@ pub async fn sync_source(
             }
         }
 
-        // Write the entire batch inside a single transaction
+        // Write the entire batch inside a single transaction. Messages go
+        // through the multi-row bulk path so we hit ~60 rows per INSERT
+        // statement instead of one per message.
         if !batch_convs.is_empty() {
             let mut tx = db.begin().await?;
 
             for conv in &batch_convs {
                 db.upsert_conversation_in_tx(&mut tx, conv).await?;
             }
-            for msg in &batch_msgs {
-                db.insert_message_in_tx(&mut tx, msg).await?;
-                message_count += 1;
-            }
+            db.bulk_insert_messages_in_tx(&mut tx, &batch_msgs).await?;
+            message_count += batch_msgs.len();
 
             tx.commit().await?;
+
+            if let Some(cb) = progress {
+                cb(new_count, message_count);
+            }
         }
 
         // Second pass: resolve parent_external_id -> parent_conversation_id.

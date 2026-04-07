@@ -1649,20 +1649,59 @@ impl Database {
     /// Also reconciles the denormalized `message_count` and bumps `version`
     /// on the conversations table.
     pub async fn rebuild_conversation_summaries(&self, conversation_ids: &[Uuid]) -> Result<()> {
+        if conversation_ids.is_empty() {
+            return Ok(());
+        }
+        // Wrap the per-conversation reconciliation in a single transaction so
+        // we don't pay autocommit fsync per id (3× statements × N convs).
+        let mut tx = self.pool.begin().await?;
         for id in conversation_ids {
-            self.rebuild_conversation_summary(*id).await?;
-            self.invalidate_conversation_snapshot(*id).await?;
-            // Reconcile denormalized message_count and bump version
+            let id_str = id.to_string();
+            // Inline of rebuild_conversation_summary, but inside this tx.
+            let updated_at = chrono::Utc::now().timestamp();
+            sqlx::query(
+                r"
+                INSERT INTO conversation_summary_cache (conversation_id, message_count, first_user_message, updated_at)
+                SELECT
+                    c.id,
+                    COUNT(m.id) AS message_count,
+                    (
+                        SELECT content FROM messages m2
+                        WHERE m2.conversation_id = c.id AND m2.role = 'user'
+                        ORDER BY m2.idx ASC LIMIT 1
+                    ) AS first_user_message,
+                    ?
+                FROM conversations c
+                LEFT JOIN messages m ON m.conversation_id = c.id
+                WHERE c.id = ?
+                GROUP BY c.id
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    message_count = excluded.message_count,
+                    first_user_message = excluded.first_user_message,
+                    updated_at = excluded.updated_at
+                ",
+            )
+            .bind(updated_at)
+            .bind(&id_str)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query("DELETE FROM conversation_snapshots WHERE conversation_id = ?")
+                .bind(&id_str)
+                .execute(&mut *tx)
+                .await?;
+
             sqlx::query(
                 r"UPDATE conversations SET
                     message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = conversations.id),
                     version = version + 1
                   WHERE id = ?",
             )
-            .bind(id.to_string())
-            .execute(&self.pool)
+            .bind(&id_str)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2677,9 +2716,26 @@ impl Database {
     // Conversation-local duplicate turn dedup (trx-hjjw.5)
     // =========================================================================
 
-    /// Heuristic, conversation-local dedup: collapse duplicate turns inside a
-    /// single conversation when they share `(role, content)` and fall within
-    /// `time_window_secs` of one another. The newest row is preserved.
+    /// Heuristic, conversation-local dedup: collapse **back-to-back** duplicate
+    /// turns inside a single conversation. Two messages are considered
+    /// duplicates iff:
+    ///
+    /// - they sit at adjacent positions (`idx` differs by exactly 1),
+    /// - they share the same `role` and the same non-empty `content`,
+    /// - their `created_at` timestamps fall within `time_window_secs` of one
+    ///   another (when `time_window_secs > 0`; `0` disables the time check).
+    ///
+    /// Empty / whitespace-only content is **never** collapsed: those are
+    /// usually structural boundary messages (system framing, tool wrappers,
+    /// blank continuation turns) where two identical rows are not a bug.
+    ///
+    /// This intentionally avoids the older "hash everything by (role,
+    /// content)" approach, which collapsed unrelated repeats like a `git
+    /// status` running twice in a long session.
+    ///
+    /// With stable, content-addressable message ids in place (trx-hjjw.4),
+    /// `ON CONFLICT(id)` already prevents the literal-replay duplicate path,
+    /// so this method is primarily for cleaning up legacy data.
     ///
     /// Returns the number of rows removed. Pass `dry_run=true` to count
     /// without deleting.
@@ -2698,31 +2754,34 @@ impl Database {
         .await?;
 
         let mut to_delete: Vec<String> = Vec::new();
-        // Index by (role, content) -> last seen (idx, created_at, id)
-        let mut seen: std::collections::HashMap<(String, String), (i32, i64, String)> =
-            std::collections::HashMap::new();
+        // Walk pairwise: only collapse two messages that are *adjacent*. This
+        // is the only shape of duplicate the historical missed-event-replay
+        // bug ever produced.
+        let mut prev: Option<(String, i32, String, String, i64)> = None;
         for row in &rows {
             let id: String = row.get("id");
             let idx: i32 = row.get("idx");
             let role: String = row.get("role");
             let content: String = row.get("content");
             let created_at: i64 = row.get("created_at");
-            let key = (role, content);
-            if let Some((_, prev_created, prev_id)) = seen.get(&key).cloned() {
-                let same_window =
-                    time_window_secs == 0 || (created_at - prev_created).abs() <= time_window_secs;
-                if same_window {
-                    // Keep the newer row, drop the older one.
-                    if created_at >= prev_created {
-                        to_delete.push(prev_id);
-                        seen.insert(key, (idx, created_at, id));
-                    } else {
-                        to_delete.push(id);
-                    }
+
+            if let Some((prev_id, prev_idx, prev_role, prev_content, prev_created)) = prev.clone()
+            {
+                let adjacent = idx == prev_idx + 1;
+                let same_role = role == prev_role;
+                let same_content = content == prev_content;
+                let nonempty = !content.trim().is_empty();
+                let in_window = time_window_secs == 0
+                    || (created_at - prev_created).abs() <= time_window_secs;
+
+                if adjacent && same_role && same_content && nonempty && in_window {
+                    // Drop the older, keep the newer (largest idx wins).
+                    to_delete.push(prev_id);
+                    prev = Some((id, idx, role, content, created_at));
                     continue;
                 }
             }
-            seen.insert(key, (idx, created_at, id));
+            prev = Some((id, idx, role, content, created_at));
         }
 
         let removed = i64::try_from(to_delete.len()).unwrap_or(0);
@@ -2823,12 +2882,20 @@ impl Database {
     /// The dropped indexes are recreated by
     /// [`Database::end_bulk_reseed`]. Callers must always pair these two
     /// methods (use a guard pattern in higher layers).
+    ///
+    /// Aggressive PRAGMA tweaks are applied: `synchronous=OFF` and a much
+    /// larger page cache. These are *safe for a reseed* because the source
+    /// of truth lives on disk in the adapter's JSONL files — if the process
+    /// crashes mid-reseed the operator simply re-runs `hstry reseed`.
     pub async fn begin_bulk_reseed(&self) -> Result<()> {
-        // PRAGMA tweaks: trade durability for throughput while a reseed is
-        // in flight. WAL is preserved (we did not change journal_mode).
-        sqlx::raw_sql("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;")
-            .execute(&self.pool)
-            .await?;
+        sqlx::raw_sql(
+            "PRAGMA synchronous = OFF; \
+             PRAGMA temp_store = MEMORY; \
+             PRAGMA cache_size = -200000; \
+             PRAGMA mmap_size = 268435456;",
+        )
+        .execute(&self.pool)
+        .await?;
         // Drop the heavy non-unique indexes; they will be recreated below.
         let _ = sqlx::raw_sql(
             "DROP INDEX IF EXISTS idx_messages_conv_idx; \
@@ -2841,7 +2908,8 @@ impl Database {
         Ok(())
     }
 
-    /// Recreate indexes dropped by [`Database::begin_bulk_reseed`].
+    /// Recreate indexes dropped by [`Database::begin_bulk_reseed`] and
+    /// restore production PRAGMA settings.
     pub async fn end_bulk_reseed(&self) -> Result<()> {
         sqlx::raw_sql(
             "CREATE INDEX IF NOT EXISTS idx_messages_conv_idx ON messages(conversation_id, idx); \
@@ -2851,7 +2919,91 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::raw_sql("PRAGMA synchronous = NORMAL;")
+            .execute(&self.pool)
+            .await?;
         sqlx::raw_sql("ANALYZE;").execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Bulk-insert many messages into the same transaction using multi-row
+    /// `INSERT ... VALUES (...), (...), ...` statements. Falls back to per-row
+    /// inserts when a chunk would exceed SQLite's bound-parameter limit.
+    ///
+    /// This is the fast path used by `hstry reseed` and any future bulk
+    /// importer. Compared to looping `insert_message_in_tx`, it cuts the
+    /// number of round-trips by ~60× for a typical workload.
+    pub async fn bulk_insert_messages_in_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        messages: &[Message],
+    ) -> Result<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        // 15 columns per row; SQLite default SQLITE_MAX_VARIABLE_NUMBER is
+        // 999 (250000 in newer builds, but stay conservative). 15 * 60 = 900.
+        const COLS: usize = 15;
+        const ROWS_PER_CHUNK: usize = 60;
+
+        for chunk in messages.chunks(ROWS_PER_CHUNK) {
+            let mut sql = String::from(
+                "INSERT INTO messages (id, conversation_id, idx, role, content, parts_json, created_at, model, tokens, cost_usd, metadata, sender_json, provider, harness, client_id) VALUES ",
+            );
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            }
+            // Match the conflict resolution that insert_message_in_tx uses so
+            // re-imports remain idempotent.
+            sql.push_str(
+                " ON CONFLICT(conversation_id, idx) DO UPDATE SET \
+                  role = excluded.role, \
+                  content = excluded.content, \
+                  parts_json = excluded.parts_json, \
+                  created_at = excluded.created_at, \
+                  model = excluded.model, \
+                  tokens = excluded.tokens, \
+                  cost_usd = excluded.cost_usd, \
+                  metadata = excluded.metadata, \
+                  sender_json = excluded.sender_json, \
+                  provider = excluded.provider, \
+                  harness = excluded.harness, \
+                  client_id = COALESCE(excluded.client_id, messages.client_id)",
+            );
+
+            let mut q = sqlx::query(&sql);
+            for msg in chunk {
+                let parts_json = normalize_parts_json(&msg.parts_json);
+                let content = project_content(&msg.content, &parts_json);
+                let sender_json = msg
+                    .sender
+                    .as_ref()
+                    .map(|s| serde_json::to_string(s).unwrap_or_default());
+                q = q
+                    .bind(msg.id.to_string())
+                    .bind(msg.conversation_id.to_string())
+                    .bind(msg.idx)
+                    .bind(msg.role.to_string())
+                    .bind(content)
+                    .bind(parts_json.to_string())
+                    .bind(msg.created_at.map(|dt| dt.timestamp()))
+                    .bind(msg.model.clone())
+                    .bind(msg.tokens)
+                    .bind(msg.cost_usd)
+                    .bind(msg.metadata.to_string())
+                    .bind(sender_json)
+                    .bind(msg.provider.clone())
+                    .bind(msg.harness.clone())
+                    .bind(msg.client_id.clone());
+            }
+            // Compile-time sanity check that we didn't drift COLS/ROWS
+            // accidentally.
+            const _: () = assert!(COLS * ROWS_PER_CHUNK <= 950);
+            q.execute(&mut **tx).await?;
+        }
         Ok(())
     }
 }

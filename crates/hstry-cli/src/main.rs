@@ -432,19 +432,24 @@ enum Command {
         command: Option<ConfigCommand>,
     },
 
-    /// Rebuild a source from scratch (purge → import → dedup → index).
+    /// Rebuild a source from scratch (purge → import → [dedup] → index).
     ///
     /// Use this when a source's database state has drifted from its on-disk
     /// JSONL files (duplicate replays, partial imports, schema regressions).
     /// The default uses bulk-reseed mode for throughput; pass `--no-bulk` to
     /// keep indexes online.
+    ///
+    /// Dedup is *off* by default for reseed: with stable, content-addressable
+    /// message ids in place (trx-hjjw.4), re-imports are naturally idempotent
+    /// via ON CONFLICT and the conversation-local dedup heuristic is not
+    /// needed. Pass `--dedup` to opt in for legacy cleanups.
     Reseed {
         /// Source ID to reseed (required — reseed never touches everything).
         #[arg(long)]
         source: String,
-        /// Skip the dedup step.
+        /// Run conversation-local dedup after import (legacy cleanup).
         #[arg(long)]
-        no_dedup: bool,
+        dedup: bool,
         /// Skip the post-import index rebuild.
         #[arg(long)]
         no_index: bool,
@@ -1142,7 +1147,7 @@ async fn main() -> Result<()> {
         Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
         Command::Reseed {
             source,
-            no_dedup,
+            dedup,
             no_index,
             no_bulk,
             dry_run,
@@ -1159,7 +1164,7 @@ async fn main() -> Result<()> {
                 &runner,
                 &config,
                 &source,
-                !no_dedup,
+                dedup,
                 !no_index,
                 !no_bulk,
                 dry_run,
@@ -5118,13 +5123,13 @@ async fn cmd_reseed(
         return Ok(());
     }
 
-    if bulk_mode {
-        db.begin_bulk_reseed().await?;
-    }
-
     // Pre-purge counts inform the result.
     let (pre_convs, pre_msgs) = db.count_source_data(source_id).await?;
 
+    // IMPORTANT: purge BEFORE begin_bulk_reseed(). begin_bulk_reseed drops
+    // idx_messages_conv_idx to speed up inserts, but that also makes the
+    // cascading DELETEs below table-scan. Deleting first keeps the index
+    // online for the purge and only drops it for the re-import.
     let purge = db.purge_source(source_id, drop_source).await?;
     if !json {
         println!(
@@ -5133,29 +5138,81 @@ async fn cmd_reseed(
         );
     }
 
-    // Re-create the source if it was dropped, or fall back to the original.
-    if drop_source {
-        db.upsert_source(&source).await?;
+    // Re-create the source if it was dropped. Otherwise, we still need a
+    // fresh copy with last_sync_at=None and cursor cleared — leaving them set
+    // makes the adapter filter on "only rows since last time" and skip every
+    // session in the source, which is the exact bug we are trying to recover
+    // from (trx-hjjw rationale).
+    let mut reimport_source = source.clone();
+    reimport_source.last_sync_at = None;
+    if let serde_json::Value::Object(mut map) = reimport_source.config {
+        map.remove("cursor");
+        map.remove("file_fingerprint");
+        map.remove("watermark_at_ms");
+        reimport_source.config = serde_json::Value::Object(map);
+    }
+    db.upsert_source(&reimport_source).await?;
+
+    if bulk_mode {
+        db.begin_bulk_reseed().await?;
     }
 
     // Re-import via the standard sync path. We deliberately reuse sync_source
     // (rather than cmd_import) because it understands cursor / batched
-    // streaming for the Pi adapter.
-    let stats = sync::sync_source(db, runner, &source).await?;
-    if !json {
-        println!(
-            "  Imported {} conversations / {} messages",
-            stats.conversations, stats.messages
+    // streaming for the Pi adapter. A progress spinner shows running totals
+    // so the operator has immediate feedback on a multi-minute reseed.
+    use indicatif::{ProgressBar, ProgressStyle};
+    let pb: Option<ProgressBar> = if json {
+        None
+    } else {
+        let bar = ProgressBar::new_spinner();
+        bar.set_style(
+            ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
         );
+        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        bar.set_message("Importing...");
+        Some(bar)
+    };
+
+    let stats = if let Some(bar) = pb.as_ref() {
+        let cb_box: Box<dyn Fn(usize, usize) + Send + Sync> =
+            Box::new(move |convs: usize, msgs: usize| {
+                bar.set_message(format!(
+                    "Importing... {convs} conversations / {msgs} messages"
+                ));
+            });
+        let cb_ref: sync::ProgressCallback<'_> = cb_box.as_ref();
+        sync::sync_source_with_progress(db, runner, &reimport_source, Some(cb_ref)).await?
+    } else {
+        sync::sync_source_with_progress(db, runner, &reimport_source, None).await?
+    };
+    if let Some(bar) = pb {
+        bar.finish_with_message(format!(
+            "Imported {} conversations / {} messages",
+            stats.conversations, stats.messages
+        ));
     }
 
     let mut deduped = 0i64;
     if do_dedup {
+        let pb = if json {
+            None
+        } else {
+            let bar = indicatif::ProgressBar::new_spinner();
+            bar.set_style(
+                indicatif::ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+                    .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+            );
+            bar.enable_steady_tick(std::time::Duration::from_millis(120));
+            bar.set_message("Deduplicating turns...");
+            Some(bar)
+        };
         deduped = db
             .dedup_messages_for_source(Some(source_id), 5, false)
             .await?;
-        if !json {
-            println!("  Dedup removed {deduped} duplicate turns");
+        if let Some(bar) = pb {
+            bar.finish_with_message(format!("Dedup removed {deduped} duplicate turns"));
         }
     }
 
@@ -5165,17 +5222,32 @@ async fn cmd_reseed(
 
     let mut indexed = 0usize;
     if do_index {
+        let pb = if json {
+            None
+        } else {
+            let bar = indicatif::ProgressBar::new_spinner();
+            bar.set_style(
+                indicatif::ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+                    .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+            );
+            bar.enable_steady_tick(std::time::Duration::from_millis(120));
+            bar.set_message("Indexing search...");
+            Some(bar)
+        };
         let index_path = config.search_index_path();
         let batch = config.search.index_batch_size;
         loop {
             let n = hstry_core::search_tantivy::index_new_messages(db, &index_path, batch).await?;
             indexed += n;
+            if let Some(ref bar) = pb {
+                bar.set_message(format!("Indexing search... {indexed} messages"));
+            }
             if n < batch {
                 break;
             }
         }
-        if !json {
-            println!("  Indexed {indexed} messages");
+        if let Some(bar) = pb {
+            bar.finish_with_message(format!("Indexed {indexed} messages"));
         }
     }
 

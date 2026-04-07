@@ -37,6 +37,7 @@ notify = "8.0"
 walkdir = "2.5"
 nix.workspace = true
 console = "0.16"
+indicatif = "0.17"
 textwrap = "0.16"
 tempfile.workspace = true
 

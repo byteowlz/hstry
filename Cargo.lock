@@ -493,6 +493,19 @@ dependencies = [
 
 [[package]]
 name = "console"
+version = "0.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "unicode-width",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "console"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
@@ -1306,7 +1319,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hstry-api"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1324,18 +1337,19 @@ dependencies = [
 
 [[package]]
 name = "hstry-cli"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "clap_complete",
- "console",
+ "console 0.16.3",
  "dateparser",
  "dirs",
  "futures",
  "hstry-core",
  "hstry-runtime",
+ "indicatif",
  "nix 0.31.2",
  "notify",
  "reqwest",
@@ -1357,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-core"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1385,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-mcp"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -1398,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-runtime"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "hstry-core",
@@ -1413,7 +1427,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-tui"
-version = "0.5.14"
+version = "0.5.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1712,6 +1726,19 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.17.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
+dependencies = [
+ "console 0.15.11",
+ "number_prefix",
+ "portable-atomic",
+ "unicode-width",
+ "web-time",
 ]
 
 [[package]]
@@ -2259,6 +2286,12 @@ checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "number_prefix"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "once_cell"

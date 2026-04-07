@@ -1239,14 +1239,7 @@ impl App {
                     {
                         hits
                     } else {
-                        let index_path = config.search_index_path();
-                        hstry_core::search_tantivy::search_with_fallback(
-                            db,
-                            &index_path,
-                            &query,
-                            &opts,
-                        )
-                        .await?
+                        db.search(&query, opts.clone()).await?
                     };
                     results.extend(local);
                 }

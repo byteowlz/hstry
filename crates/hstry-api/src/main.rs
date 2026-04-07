@@ -12,7 +12,6 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use hstry_core::db::{SearchMode, SearchOptions};
-use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::{Config, Database};
 
 fn main() {
@@ -34,13 +33,10 @@ async fn try_main() -> Result<()> {
     let config = Config::ensure_at(&config_path)?;
 
     let db = Database::open(&config.database).await?;
-    let index_path = config.search_index_path();
-    let search_index = SearchIndex::open(&index_path)?;
 
     let state = AppState {
         config: Arc::new(config),
         db: Arc::new(db),
-        search_index: Arc::new(search_index),
     };
 
     let cors = CorsLayer::new()
@@ -88,7 +84,6 @@ struct CommonOpts {
 struct AppState {
     config: Arc<Config>,
     db: Arc<Database>,
-    search_index: Arc<SearchIndex>,
 }
 
 #[derive(Serialize)]
@@ -167,43 +162,27 @@ async fn search(
     let model = params.model.clone();
     let harness = params.harness.clone();
     let tag = params.tag.clone();
-    let opts = SearchOptions {
-        source_id: source.clone(),
-        workspace: workspace.clone(),
-        limit: params.limit,
-        offset: params.offset,
-        mode,
-        after,
-        before,
-        role: role.clone(),
-        model: model.clone(),
-        harness: harness.clone(),
-        tag: tag.clone(),
-    };
 
-    let results = match state.search_index.search(&params.query, &opts) {
-        Ok(results) => results,
-        Err(_) => state
-            .db
-            .search(
-                &params.query,
-                SearchOptions {
-                    source_id: source,
-                    workspace,
-                    limit: params.limit,
-                    offset: params.offset,
-                    mode,
-                    after,
-                    before,
-                    role,
-                    model,
-                    harness,
-                    tag,
-                },
-            )
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
-    };
+    let results = state
+        .db
+        .search(
+            &params.query,
+            SearchOptions {
+                source_id: source,
+                workspace,
+                limit: params.limit,
+                offset: params.offset,
+                mode,
+                after,
+                before,
+                role,
+                model,
+                harness,
+                tag,
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(results))
 }

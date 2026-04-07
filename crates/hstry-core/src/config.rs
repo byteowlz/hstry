@@ -480,7 +480,7 @@ impl Config {
         }
 
         let base_dir = self.database.parent().unwrap_or_else(|| Path::new("."));
-        base_dir.join("index").join("tantivy")
+        base_dir.join("index").join("search")
     }
 }
 

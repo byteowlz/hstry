@@ -2176,6 +2176,23 @@ impl Database {
         Ok(hits)
     }
 
+    /// Rebuild both FTS5 search tables from `messages`.
+    pub async fn rebuild_search_fts(&self) -> Result<usize> {
+        self.ensure_fts_schema(false).await?;
+
+        sqlx::raw_sql("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+            .execute(&self.pool)
+            .await?;
+        sqlx::raw_sql("INSERT INTO messages_code_fts(messages_code_fts) VALUES('rebuild')")
+            .execute(&self.pool)
+            .await?;
+
+        let (messages_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(usize::try_from(messages_count.max(0)).unwrap_or(usize::MAX))
+    }
+
     /// Optimized FTS schema initialization that checks integrity only when needed.
     async fn ensure_fts_schema_optimized(&self) -> Result<()> {
         let force_integrity_check = std::env::var("HSTRY_FTS_INTEGRITY_CHECK")
@@ -2765,14 +2782,13 @@ impl Database {
             let content: String = row.get("content");
             let created_at: i64 = row.get("created_at");
 
-            if let Some((prev_id, prev_idx, prev_role, prev_content, prev_created)) = prev.clone()
-            {
+            if let Some((prev_id, prev_idx, prev_role, prev_content, prev_created)) = prev.clone() {
                 let adjacent = idx == prev_idx + 1;
                 let same_role = role == prev_role;
                 let same_content = content == prev_content;
                 let nonempty = !content.trim().is_empty();
-                let in_window = time_window_secs == 0
-                    || (created_at - prev_created).abs() <= time_window_secs;
+                let in_window =
+                    time_window_secs == 0 || (created_at - prev_created).abs() <= time_window_secs;
 
                 if adjacent && same_role && same_content && nonempty && in_window {
                     // Drop the older, keep the newer (largest idx wins).

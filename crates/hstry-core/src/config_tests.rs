@@ -127,7 +127,7 @@ mod search_index_path_tests {
         config.search.index_path = None;
 
         let index_path = config.search_index_path();
-        assert!(index_path.to_string_lossy().contains("tantivy"));
+        assert!(index_path.to_string_lossy().contains("search"));
         assert!(index_path.to_string_lossy().contains("index"));
     }
 }

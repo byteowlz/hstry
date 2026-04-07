@@ -20,16 +20,15 @@ use walkdir::WalkDir;
 use crate::ServiceCommand;
 use crate::adapter_manifest;
 use crate::sync;
-use hstry_core::config::{QosClass, ServiceTransport};
+use hstry_core::config::ServiceTransport;
 use hstry_core::models::Source;
-use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::service::{
     ReadService, ReadServiceServer, SearchService, SearchServiceServer, WriteService,
     WriteServiceServer, conversation_from_proto, conversation_summary_to_proto,
     conversation_to_proto, hit_to_proto, message_event_to_proto, message_from_proto,
     message_to_proto, search_request_to_opts,
 };
-use hstry_core::{Config, Database, search_tantivy};
+use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, Runtime};
 
 const DETECT_THRESHOLD: f32 = 0.5;
@@ -37,7 +36,6 @@ const DETECT_THRESHOLD: f32 = 0.5;
 #[derive(Clone)]
 struct ServerState {
     db: Arc<Database>,
-    index: Arc<SearchIndex>,
 }
 
 #[tonic::async_trait]
@@ -53,14 +51,11 @@ impl SearchService for ServerState {
         let opts = search_request_to_opts(&request);
         let query = request.query.clone();
 
-        let hits = match self.index.search(&query, &opts) {
-            Ok(hits) => hits,
-            Err(_) => self
-                .db
-                .search(&query, opts)
-                .await
-                .map_err(|e| tonic::Status::internal(format!("Search failed: {e}")))?,
-        };
+        let hits = self
+            .db
+            .search(&query, opts)
+            .await
+            .map_err(|e| tonic::Status::internal(format!("Search failed: {e}")))?;
 
         let response = hstry_core::service::proto::SearchResponse {
             hits: hits.iter().map(hit_to_proto).collect(),
@@ -806,7 +801,6 @@ async fn run_service(config_path: &Path) -> Result<()> {
             start_search_server(
                 state.config.service.transport,
                 state.config.service.search_port,
-                state.search_index.clone(),
                 state.db.clone(),
             )
             .await?,
@@ -819,20 +813,6 @@ async fn run_service(config_path: &Path) -> Result<()> {
     // thread while it walks the directory tree to register inotify watches,
     // so this must happen after the gRPC server has been spawned.
     state.refresh_watches().await?;
-
-    // Optionally spawn the dedicated indexer worker (trx-z42c.6).
-    if state.config.storage.indexer_outbox.enabled {
-        let db = state.db.clone();
-        let index_path = state.config.search_index_path();
-        let batch = state.config.storage.indexer_outbox.batch_size.max(1);
-        let interval_ms = state.config.storage.indexer_outbox.poll_interval_ms.max(50);
-        let metrics = state.metrics.clone();
-        let qos = state.config.service.resources.qos;
-        let handle = tokio::spawn(async move {
-            run_indexer_worker(db, index_path, batch, interval_ms, metrics, qos).await;
-        });
-        state.indexer_worker = Some(handle);
-    }
 
     state.sync_all().await?;
 
@@ -884,104 +864,15 @@ async fn run_service(config_path: &Path) -> Result<()> {
     if let Some(handle) = server_handle {
         handle.abort();
     }
-    if let Some(handle) = state.indexer_worker.take() {
-        handle.abort();
-    }
-
     Ok(())
-}
-
-/// Background loop that drains the indexer outbox (trx-z42c.6). Each tick:
-///
-/// 1. Fetch up to `batch` jobs in FIFO order.
-/// 2. Re-index every distinct conversation referenced by the batch.
-/// 3. Ack the jobs on success, nack with the error message otherwise.
-///
-/// The worker is intentionally simple and at-least-once. The search index is
-/// idempotent (Tantivy upsert by message_id) so duplicate work is harmless.
-async fn run_indexer_worker(
-    db: Arc<Database>,
-    index_path: PathBuf,
-    batch: usize,
-    poll_ms: u64,
-    metrics: Arc<tokio::sync::Mutex<ServiceMetrics>>,
-    qos: QosClass,
-) {
-    let backoff = if matches!(qos, QosClass::Background) {
-        Duration::from_millis(poll_ms.saturating_mul(2))
-    } else {
-        Duration::from_millis(poll_ms)
-    };
-    loop {
-        #[allow(clippy::cast_possible_wrap)]
-        let limit = batch as i64;
-        let jobs = match db.fetch_indexer_jobs(limit).await {
-            Ok(jobs) => jobs,
-            Err(err) => {
-                tracing::warn!(
-                    target: "hstry::indexer_outbox",
-                    error = %err,
-                    "fetch_jobs_failed"
-                );
-                tokio::time::sleep(backoff).await;
-                continue;
-            }
-        };
-        if jobs.is_empty() {
-            tokio::time::sleep(backoff).await;
-            continue;
-        }
-
-        // Drain by re-indexing all new messages once per drain. The worker
-        // is intentionally cheap; index_new_messages already batches.
-        let result = search_tantivy::index_new_messages(&db, &index_path, batch).await;
-        match result {
-            Ok(n) => {
-                let ids: Vec<i64> = jobs.iter().map(|j| j.id).collect();
-                if let Err(err) = db.ack_indexer_jobs(&ids).await {
-                    tracing::warn!(
-                        target: "hstry::indexer_outbox",
-                        error = %err,
-                        "ack_failed"
-                    );
-                }
-                let mut m = metrics.lock().await;
-                m.indexer_jobs_drained += jobs.len() as u64;
-                tracing::debug!(
-                    target: "hstry::indexer_outbox",
-                    indexed = n,
-                    drained = jobs.len(),
-                    "drain_ok"
-                );
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                for job in &jobs {
-                    let _ = db.nack_indexer_job(job.id, &msg).await;
-                }
-                let mut m = metrics.lock().await;
-                m.indexer_jobs_failed += jobs.len() as u64;
-                tracing::warn!(
-                    target: "hstry::indexer_outbox",
-                    error = %err,
-                    "drain_failed"
-                );
-                tokio::time::sleep(backoff).await;
-            }
-        }
-    }
 }
 
 async fn start_search_server(
     transport: ServiceTransport,
     port: Option<u16>,
-    search_index: Arc<SearchIndex>,
     db: Arc<Database>,
 ) -> Result<tokio::task::JoinHandle<()>> {
-    let server = ServerState {
-        db,
-        index: search_index,
-    };
+    let server = ServerState { db };
 
     match transport {
         ServiceTransport::Tcp => start_tcp_server(port, server).await,
@@ -1101,7 +992,6 @@ struct ServiceState {
     config: Config,
     config_mtime: Option<SystemTime>,
     db: Arc<Database>,
-    search_index: Arc<SearchIndex>,
     runner: AdapterRunner,
     enabled_adapters: HashSet<String>,
     auto_sync_by_id: HashMap<String, bool>,
@@ -1125,8 +1015,6 @@ struct ServiceState {
     sync_semaphore: Arc<tokio::sync::Semaphore>,
     /// In-process metrics for observability (trx-z42c.8).
     metrics: Arc<tokio::sync::Mutex<ServiceMetrics>>,
-    /// Background indexer worker handle (trx-z42c.6).
-    indexer_worker: Option<tokio::task::JoinHandle<()>>,
     /// Last time message_events compaction ran (trx-jtxf).
     last_events_compaction: Instant,
 }
@@ -1138,8 +1026,6 @@ struct ServiceMetrics {
     #[allow(dead_code)]
     syncs_skipped: u64,
     syncs_failed: u64,
-    indexer_jobs_drained: u64,
-    indexer_jobs_failed: u64,
     events_compacted_total: i64,
     per_source: HashMap<String, SourceMetrics>,
 }
@@ -1161,8 +1047,6 @@ impl ServiceState {
 
         let db = Arc::new(Database::open(&config.database).await?);
         crate::apply_storage_config(&db, &config);
-        let index_path = config.search_index_path();
-        let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
             anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
         })?;
@@ -1183,7 +1067,6 @@ impl ServiceState {
             config,
             config_mtime,
             db,
-            search_index,
             runner,
             enabled_adapters,
             auto_sync_by_id,
@@ -1197,7 +1080,6 @@ impl ServiceState {
             source_schedule: HashMap::new(),
             sync_semaphore,
             metrics: Arc::new(tokio::sync::Mutex::new(ServiceMetrics::default())),
-            indexer_worker: None,
             last_events_compaction: Instant::now() - Duration::from_secs(86_400),
         };
 
@@ -1223,14 +1105,11 @@ impl ServiceState {
 
         let db = Arc::new(Database::open(&config.database).await?);
         crate::apply_storage_config(&db, &config);
-        let index_path = config.search_index_path();
-        let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
 
         self.config = config;
         self.config_mtime = mtime;
         self.db = db;
-        self.search_index = search_index;
         self.runner = runner;
         self.enabled_adapters = enabled_adapters(&self.config, &self.runner);
         self.auto_sync_by_id = auto_sync_map(&self.config);
@@ -1658,22 +1537,6 @@ impl ServiceState {
         Ok(())
     }
 
-    async fn index_new_messages(&self) -> Result<usize> {
-        let index_path = self.config.search_index_path();
-        let batch_size = self.config.search.index_batch_size;
-        let mut total_indexed = 0usize;
-        loop {
-            let indexed = search_tantivy::index_new_messages(&self.db, &index_path, batch_size)
-                .await
-                .context("Indexing new messages for search")?;
-            total_indexed += indexed;
-            if indexed < batch_size {
-                break;
-            }
-        }
-        Ok(total_indexed)
-    }
-
     async fn sync_one_source(
         &mut self,
         source: &Source,
@@ -1866,12 +1729,6 @@ impl ServiceState {
             stats.record(outcome);
         }
 
-        if stats.sources_synced > 0 {
-            let total_indexed = self.index_new_messages().await?;
-            if total_indexed > 0 {
-                println!("Indexed {total_indexed} messages for search.");
-            }
-        }
         Ok(stats)
     }
 
@@ -1912,13 +1769,6 @@ impl ServiceState {
 
             let outcome = self.sync_one_source(source, now, SyncReason::Event).await?;
             stats.record(outcome);
-        }
-
-        if stats.sources_synced > 0 {
-            let total_indexed = self.index_new_messages().await?;
-            if total_indexed > 0 {
-                println!("Indexed {total_indexed} messages for search.");
-            }
         }
 
         Ok(stats)

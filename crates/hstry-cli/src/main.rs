@@ -865,15 +865,14 @@ enum MmryMemoryTypeArg {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging - suppress noisy Tantivy internals
+    // Initialize logging
     let level = match cli.verbose {
         0 => "info",
         1 => "debug",
         _ => "trace",
     };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new(format!("{level},tantivy=warn,tantivy_common=warn"))
-    });
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -1162,7 +1161,6 @@ async fn main() -> Result<()> {
             cmd_reseed(
                 &db,
                 &runner,
-                &config,
                 &source,
                 dedup,
                 !no_index,
@@ -1180,7 +1178,7 @@ async fn main() -> Result<()> {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
-            cmd_verify(&db, &runner, &config, source, repair, cli.json).await
+            cmd_verify(&db, &runner, source, repair, cli.json).await
         }
     }
 }
@@ -1776,8 +1774,7 @@ async fn cmd_search_fast(
         } else {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, config);
-            let index_path = config.search_index_path();
-            hstry_core::search_tantivy::search_with_fallback(&db, &index_path, query, &opts).await?
+            db.search(query, opts.clone()).await?
         };
         messages.extend(local);
     }
@@ -4301,27 +4298,21 @@ async fn cmd_resume(
             .collect();
 
         if matches.is_empty() {
-            // Fall back to full-text search via tantivy
-            let index_path = config.search_index_path();
-            if index_path.exists() {
-                let search_opts = hstry_core::db::SearchOptions {
-                    source_id: source_filter.clone(),
-                    workspace: workspace_filter.clone(),
-                    limit: Some(limit),
-                    ..Default::default()
-                };
-                let hits = hstry_core::search_tantivy::search(&index_path, query, &search_opts)?;
-                if hits.is_empty() {
-                    anyhow::bail!("No conversations found matching '{query}'");
-                }
-                // Use the top hit's conversation
-                let top_hit = &hits[0];
-                db.get_conversation(top_hit.conversation_id)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("Conversation not found in database"))?
-            } else {
+            let search_opts = hstry_core::db::SearchOptions {
+                source_id: source_filter.clone(),
+                workspace: workspace_filter.clone(),
+                limit: Some(limit),
+                ..Default::default()
+            };
+            let hits = db.search(query, search_opts).await?;
+            if hits.is_empty() {
                 anyhow::bail!("No conversations found matching '{query}'");
             }
+            // Use the top hit's conversation
+            let top_hit = &hits[0];
+            db.get_conversation(top_hit.conversation_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Conversation not found in database"))?
         } else if matches.len() == 1 {
             matches.remove(0).conversation
         } else {
@@ -4802,22 +4793,12 @@ fn launch_agent(command_str: &str, workspace: &str, json_output: bool) -> Result
     Ok(())
 }
 
-async fn cmd_index(config: &Config, db: &Database, rebuild: bool, json: bool) -> Result<()> {
-    let index_path = config.search_index_path();
-    if rebuild {
-        hstry_core::search_tantivy::reset_index(db, &index_path).await?;
-    }
-
-    let mut total = 0usize;
-    let batch_size = config.search.index_batch_size;
-    loop {
-        let indexed =
-            hstry_core::search_tantivy::index_new_messages(db, &index_path, batch_size).await?;
-        total += indexed;
-        if indexed < batch_size {
-            break;
-        }
-    }
+async fn cmd_index(_config: &Config, db: &Database, rebuild: bool, json: bool) -> Result<()> {
+    let total = if rebuild {
+        db.rebuild_search_fts().await?
+    } else {
+        0
+    };
 
     if json {
         return emit_json(JsonResponse {
@@ -4825,16 +4806,16 @@ async fn cmd_index(config: &Config, db: &Database, rebuild: bool, json: bool) ->
             result: Some(serde_json::json!({
                 "indexed": total,
                 "rebuild": rebuild,
-                "index_path": index_path,
+                "backend": "sqlite-fts5",
             })),
             error: None,
         });
     }
 
     if rebuild {
-        println!("Rebuilt search index ({total} messages).");
+        println!("Rebuilt SQLite FTS search index ({total} messages).");
     } else {
-        println!("Indexed {total} messages.");
+        println!("Search uses SQLite FTS5 and stays up to date via triggers.");
     }
 
     Ok(())
@@ -5063,7 +5044,6 @@ struct ReseedResult {
 async fn cmd_reseed(
     db: &Database,
     runner: &AdapterRunner,
-    config: &Config,
     source_id: &str,
     do_dedup: bool,
     do_index: bool,
@@ -5231,21 +5211,10 @@ async fn cmd_reseed(
                     .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
             );
             bar.enable_steady_tick(std::time::Duration::from_millis(120));
-            bar.set_message("Indexing search...");
+            bar.set_message("Rebuilding SQLite FTS search index...");
             Some(bar)
         };
-        let index_path = config.search_index_path();
-        let batch = config.search.index_batch_size;
-        loop {
-            let n = hstry_core::search_tantivy::index_new_messages(db, &index_path, batch).await?;
-            indexed += n;
-            if let Some(ref bar) = pb {
-                bar.set_message(format!("Indexing search... {indexed} messages"));
-            }
-            if n < batch {
-                break;
-            }
-        }
+        indexed = db.rebuild_search_fts().await?;
         if let Some(bar) = pb {
             bar.finish_with_message(format!("Indexed {indexed} messages"));
         }
@@ -5294,7 +5263,6 @@ struct VerifyResult {
 async fn cmd_verify(
     db: &Database,
     runner: &AdapterRunner,
-    config: &Config,
     source_filter: Option<String>,
     repair: bool,
     json: bool,
@@ -5357,11 +5325,9 @@ async fn cmd_verify(
         let mut repaired = false;
         if drifted && repair {
             // Reseed the drifted source. Use the same defaults as `cmd_reseed`.
-            cmd_reseed(
-                db, runner, config, &source.id, true, true, true, false, false, true,
-            )
-            .await
-            .ok();
+            cmd_reseed(db, runner, &source.id, true, true, true, false, false, true)
+                .await
+                .ok();
             repaired = true;
             report.total_repaired += 1;
         }

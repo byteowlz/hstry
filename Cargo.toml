@@ -31,7 +31,6 @@ shellexpand = "3.1"
 dateparser = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4", "v5", "serde"] }
-tantivy = "0.25"
 tonic = "0.14"
 prost = "0.14"
 tonic-prost = "0.14"

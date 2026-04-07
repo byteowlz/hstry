@@ -12,7 +12,6 @@ pub mod parts;
 pub mod paths;
 pub mod remote;
 pub mod schema;
-pub mod search_tantivy;
 pub mod service;
 
 pub use config::Config;

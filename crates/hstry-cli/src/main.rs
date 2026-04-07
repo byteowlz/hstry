@@ -1398,7 +1398,6 @@ struct DetectionResult {
     confidence: f32,
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn cmd_import(
     db: &Database,
     runner: &AdapterRunner,
@@ -1705,7 +1704,6 @@ async fn cmd_import(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn cmd_search_fast(
     config: &Config,
     query: &str,
@@ -1877,8 +1875,8 @@ async fn cmd_search_fast(
     }
 
     // Apply the original limit after filtering
-    #[expect(clippy::cast_sign_loss)]
-    messages.truncate(limit as usize);
+    let truncate_to = usize::try_from(limit.max(0)).unwrap_or(usize::MAX);
+    messages.truncate(truncate_to);
 
     if json {
         return emit_json(JsonResponse {
@@ -3686,10 +3684,12 @@ mod tests {
 
     #[test]
     fn read_input_reads_json_file() {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file");
-        writeln!(file, "{{\"id\":\"conv-1\"}}").expect("write");
-        let value: Option<ShowInput> = read_input(Some(file.path().to_path_buf())).expect("read");
-        let value = value.expect("value");
+        let mut file =
+            tempfile::NamedTempFile::new().unwrap_or_else(|err| panic!("temp file: {err}"));
+        writeln!(file, "{{\"id\":\"conv-1\"}}").unwrap_or_else(|err| panic!("write: {err}"));
+        let value: Option<ShowInput> =
+            read_input(Some(file.path().to_path_buf())).unwrap_or_else(|err| panic!("read: {err}"));
+        let value = value.unwrap_or_else(|| panic!("missing parsed value"));
         assert_eq!(value.id, "conv-1");
     }
 
@@ -3714,7 +3714,6 @@ mod tests {
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn cmd_export(
     db: &Database,
     runner: &AdapterRunner,
@@ -3976,29 +3975,25 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 
     // Handle relative dates that dateparser doesn't support
     let now = chrono::Utc::now();
+    let start_of_day =
+        |dt: chrono::DateTime<chrono::Utc>| -> Result<chrono::DateTime<chrono::Utc>> {
+            dt.date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|value| value.and_utc())
+                .ok_or_else(|| anyhow::anyhow!("Could not compute start-of-day timestamp"))
+        };
+
     if lower == "today" {
-        return Ok(now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc());
+        return start_of_day(now);
     }
     if lower == "yesterday" {
-        return Ok((now - chrono::Duration::days(1))
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc());
+        return start_of_day(now - chrono::Duration::days(1));
     }
     if lower == "last week" {
-        return Ok((now - chrono::Duration::weeks(1))
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc());
+        return start_of_day(now - chrono::Duration::weeks(1));
     }
     if lower == "last month" {
-        return Ok((now - chrono::Duration::days(30))
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc());
+        return start_of_day(now - chrono::Duration::days(30));
     }
 
     // "N days/weeks/months ago"
@@ -4027,7 +4022,6 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 }
 
 /// Run interactive fzf picker to select a conversation
-#[allow(clippy::too_many_arguments)]
 async fn run_fzf_picker(
     db: &Database,
     config: &Config,
@@ -4201,7 +4195,6 @@ async fn run_fzf_picker(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn cmd_resume(
     db: &Database,
     runner: &AdapterRunner,
@@ -4485,7 +4478,9 @@ async fn cmd_resume(
     let original_exists = original_file.as_ref().is_some_and(|p| p.exists());
 
     if is_same_agent && original_exists {
-        let session_path = original_file.as_ref().unwrap();
+        let Some(session_path) = original_file.as_ref() else {
+            anyhow::bail!("Missing original session file metadata");
+        };
         let workspace = conversation.workspace.as_deref().unwrap_or(".");
 
         if dry_run {
@@ -4660,7 +4655,10 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
 
     match matches.len() {
         0 => anyhow::bail!("No conversation found matching '{id_str}'"),
-        1 => Ok(matches.into_iter().next().unwrap()),
+        1 => matches
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No conversation found matching '{id_str}'")),
         n => anyhow::bail!(
             "Ambiguous ID '{id_str}': matched {n} conversations. Use a longer prefix."
         ),
@@ -4979,10 +4977,8 @@ async fn cmd_dedup(
     let mut messages_removed = 0usize;
     for conv_id in &to_remove {
         let count = db.count_messages_for_conversation(*conv_id).await?;
-        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        {
-            messages_removed += count as usize;
-        }
+        let count = usize::try_from(count.max(0)).unwrap_or(usize::MAX);
+        messages_removed = messages_removed.saturating_add(count);
     }
 
     if !dry_run && !to_remove.is_empty() {
@@ -5040,7 +5036,6 @@ struct ReseedResult {
     dry_run: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn cmd_reseed(
     db: &Database,
     runner: &AdapterRunner,
@@ -5319,8 +5314,9 @@ async fn cmd_verify(
         let on_disk_msgs: usize = parsed.iter().map(|c| c.messages.len()).sum();
 
         let (db_convs, db_msgs) = db.count_source_data(&source.id).await?;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let drifted = on_disk_convs as i64 != db_convs || on_disk_msgs as i64 != db_msgs;
+        let on_disk_convs_i64 = i64::try_from(on_disk_convs).unwrap_or(i64::MAX);
+        let on_disk_msgs_i64 = i64::try_from(on_disk_msgs).unwrap_or(i64::MAX);
+        let drifted = on_disk_convs_i64 != db_convs || on_disk_msgs_i64 != db_msgs;
 
         let mut repaired = false;
         if drifted && repair {
@@ -5916,13 +5912,9 @@ fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
-    #[expect(clippy::cast_precision_loss)]
     let bytes_f = bytes as f64;
-    #[expect(clippy::cast_precision_loss)]
     let kb_f = KB as f64;
-    #[expect(clippy::cast_precision_loss)]
     let mb_f = MB as f64;
-    #[expect(clippy::cast_precision_loss)]
     let gb_f = GB as f64;
 
     if bytes >= GB {
@@ -5999,7 +5991,6 @@ async fn cmd_mmry(db: &Database, command: MmryCommand, json: bool) -> Result<()>
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn cmd_mmry_extract(
     db: &Database,
     store: &str,

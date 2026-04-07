@@ -144,8 +144,9 @@ mod config_serialization_tests {
         config.js_runtime = "bun".to_string();
         config.workspaces = vec!["~/projects".to_string()];
 
-        let toml_str = toml::to_string(&config).expect("serialize");
-        let parsed: Config = toml::from_str(&toml_str).expect("deserialize");
+        let toml_str = toml::to_string(&config).unwrap_or_else(|err| panic!("serialize: {err}"));
+        let parsed: Config =
+            toml::from_str(&toml_str).unwrap_or_else(|err| panic!("deserialize: {err}"));
 
         assert_eq!(parsed.database, config.database);
         assert_eq!(parsed.js_runtime, config.js_runtime);
@@ -223,8 +224,9 @@ mod remote_config_tests {
             enabled: true,
         };
 
-        let json = serde_json::to_string(&remote).expect("serialize");
-        let parsed: RemoteConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&remote).unwrap_or_else(|err| panic!("serialize: {err}"));
+        let parsed: RemoteConfig =
+            serde_json::from_str(&json).unwrap_or_else(|err| panic!("deserialize: {err}"));
 
         assert_eq!(parsed.name, remote.name);
         assert_eq!(parsed.host, remote.host);

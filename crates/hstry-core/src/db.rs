@@ -2483,10 +2483,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.message_events += res.rows_affected() as i64;
-            }
+            stats.message_events += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
 
             let sql = format!(
                 "DELETE FROM conversation_snapshots WHERE conversation_id IN ({placeholders})"
@@ -2496,10 +2493,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.snapshots += res.rows_affected() as i64;
-            }
+            stats.snapshots += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
 
             let sql = format!(
                 "DELETE FROM conversation_summary_cache WHERE conversation_id IN ({placeholders})"
@@ -2509,10 +2503,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.summaries += res.rows_affected() as i64;
-            }
+            stats.summaries += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
 
             let sql =
                 format!("DELETE FROM indexer_outbox WHERE conversation_id IN ({placeholders})");
@@ -2521,10 +2512,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.indexer_outbox += res.rows_affected() as i64;
-            }
+            stats.indexer_outbox += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
 
             let sql = format!("DELETE FROM messages WHERE conversation_id IN ({placeholders})");
             let mut q = sqlx::query(&sql);
@@ -2532,10 +2520,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.messages += res.rows_affected() as i64;
-            }
+            stats.messages += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
 
             let sql = format!("DELETE FROM conversations WHERE id IN ({placeholders})");
             let mut q = sqlx::query(&sql);
@@ -2543,10 +2528,7 @@ impl Database {
                 q = q.bind(id);
             }
             let res = q.execute(&mut *tx).await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                stats.conversations += res.rows_affected() as i64;
-            }
+            stats.conversations += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
         }
 
         if also_drop_source {
@@ -2587,10 +2569,7 @@ impl Database {
             .bind(cutoff)
             .execute(&self.pool)
             .await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                total += res.rows_affected() as i64;
-            }
+            total += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
         }
 
         if max_per_conversation > 0 {
@@ -2616,10 +2595,7 @@ impl Database {
             .bind(i64::from(max_per_conversation))
             .execute(&self.pool)
             .await?;
-            #[allow(clippy::cast_possible_wrap)]
-            {
-                total += res.rows_affected() as i64;
-            }
+            total += i64::try_from(res.rows_affected()).unwrap_or(i64::MAX);
         }
 
         Ok(total)

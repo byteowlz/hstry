@@ -1888,11 +1888,11 @@ mod tests {
     use super::*;
 
     fn with_temp_env<F: FnOnce()>(f: F) {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let temp_dir = tempfile::tempdir().unwrap_or_else(|err| panic!("tempdir: {err}"));
         let state_home = temp_dir.path().join("state");
         let config_home = temp_dir.path().join("config");
-        std::fs::create_dir_all(&state_home).expect("state dir");
-        std::fs::create_dir_all(&config_home).expect("config dir");
+        std::fs::create_dir_all(&state_home).unwrap_or_else(|err| panic!("state dir: {err}"));
+        std::fs::create_dir_all(&config_home).unwrap_or_else(|err| panic!("config dir: {err}"));
 
         temp_env::with_vars(
             [
@@ -1913,11 +1913,15 @@ mod tests {
     fn status_reports_stopped_when_no_pid_file() {
         with_temp_env(|| {
             let config_path = Config::default_config_path();
-            let mut config = Config::ensure_at(&config_path).expect("config");
+            let mut config =
+                Config::ensure_at(&config_path).unwrap_or_else(|err| panic!("config: {err}"));
             config.service.enabled = true;
-            config.save_to_path(&config_path).expect("save");
+            config
+                .save_to_path(&config_path)
+                .unwrap_or_else(|err| panic!("save: {err}"));
 
-            let status = get_service_status(&config_path).expect("status");
+            let status =
+                get_service_status(&config_path).unwrap_or_else(|err| panic!("status: {err}"));
             assert!(status.enabled);
             assert!(!status.running);
             assert!(status.pid.is_none());
@@ -1928,15 +1932,21 @@ mod tests {
     fn status_reports_running_when_pid_alive() {
         with_temp_env(|| {
             let config_path = Config::default_config_path();
-            let mut config = Config::ensure_at(&config_path).expect("config");
+            let mut config =
+                Config::ensure_at(&config_path).unwrap_or_else(|err| panic!("config: {err}"));
             config.service.enabled = true;
-            config.save_to_path(&config_path).expect("save");
+            config
+                .save_to_path(&config_path)
+                .unwrap_or_else(|err| panic!("save: {err}"));
 
             let pid = std::process::id();
-            std::fs::create_dir_all(service_state_dir()).expect("state dir");
-            std::fs::write(pid_file_path(), pid.to_string()).expect("pid");
+            std::fs::create_dir_all(service_state_dir())
+                .unwrap_or_else(|err| panic!("state dir: {err}"));
+            std::fs::write(pid_file_path(), pid.to_string())
+                .unwrap_or_else(|err| panic!("pid: {err}"));
 
-            let status = get_service_status(&config_path).expect("status");
+            let status =
+                get_service_status(&config_path).unwrap_or_else(|err| panic!("status: {err}"));
             assert!(status.enabled);
             assert!(status.running);
             assert_eq!(status.pid, Some(pid));

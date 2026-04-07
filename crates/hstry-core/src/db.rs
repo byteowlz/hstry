@@ -11,11 +11,39 @@ use sqlx::{Row, SqlitePool};
 use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
+
+/// Per-source purge counts returned by [`Database::purge_source`].
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct PurgeStats {
+    pub conversations: i64,
+    pub messages: i64,
+    pub message_events: i64,
+    pub snapshots: i64,
+    pub summaries: i64,
+    pub indexer_outbox: i64,
+}
+
+/// A pending indexer job drained from the outbox.
+#[derive(Debug, Clone)]
+pub struct IndexerOutboxJob {
+    pub id: i64,
+    pub conversation_id: Uuid,
+    pub message_id: Option<Uuid>,
+    pub op: String,
+    pub enqueued_at: i64,
+    pub attempts: i32,
+}
 
 /// Database handle for hstry.
 pub struct Database {
     pool: SqlitePool,
+    /// Whether to append to `message_events` on every insert. See
+    /// `StorageConfig::message_events::enabled` (trx-aa3m).
+    message_events_enabled: AtomicBool,
+    /// Whether to enqueue indexer jobs on message upsert (trx-z42c.5).
+    indexer_outbox_enabled: AtomicBool,
 }
 
 /// Normalize a source path for consistent comparison.
@@ -42,9 +70,27 @@ impl Database {
             .connect_with(options)
             .await?;
 
-        let db = Self { pool };
+        let db = Self {
+            pool,
+            // Default off to preserve the trx-aa3m contract: non-event consumers
+            // pay no overhead unless the operator opts in.
+            message_events_enabled: AtomicBool::new(false),
+            indexer_outbox_enabled: AtomicBool::new(false),
+        };
         db.init().await?;
         Ok(db)
+    }
+
+    /// Toggle the `message_events` append-only log at runtime (trx-aa3m).
+    pub fn set_message_events_enabled(&self, enabled: bool) {
+        self.message_events_enabled
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    /// Toggle indexer-outbox enqueueing at runtime (trx-z42c.5).
+    pub fn set_indexer_outbox_enabled(&self, enabled: bool) {
+        self.indexer_outbox_enabled
+            .store(enabled, Ordering::Relaxed);
     }
 
     /// Initialize schema and run migrations.
@@ -199,6 +245,10 @@ impl Database {
             (
                 "012_add_conversation_tree.sql",
                 include_str!("../migrations/012_add_conversation_tree.sql"),
+            ),
+            (
+                "013_indexer_outbox_and_events_retention.sql",
+                include_str!("../migrations/013_indexer_outbox_and_events_retention.sql"),
             ),
         ];
 
@@ -1447,7 +1497,13 @@ impl Database {
             .await?;
         }
 
-        self.insert_message_event(msg).await?;
+        if self.message_events_enabled.load(Ordering::Relaxed) {
+            self.insert_message_event(msg).await?;
+        }
+        if self.indexer_outbox_enabled.load(Ordering::Relaxed) {
+            self.enqueue_indexer_job(msg.conversation_id, Some(msg.id), "upsert")
+                .await?;
+        }
         self.invalidate_conversation_snapshot(msg.conversation_id)
             .await?;
         if is_update {
@@ -2317,6 +2373,485 @@ impl Database {
         sqlx::raw_sql(&rebuild).execute(&mut *conn).await?;
 
         tracing::info!("Rebuilt FTS table {name}");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Source-scoped purge primitives (trx-hjjw.2)
+    // =========================================================================
+
+    /// Remove every conversation, message, event, snapshot, summary, and
+    /// outbox row associated with `source_id` in a single transaction.
+    ///
+    /// The `sources` row itself is preserved so the operator can re-import
+    /// without having to re-register the source. Pass `also_drop_source=true`
+    /// to delete the source row as well.
+    ///
+    /// This is the building block for `hstry reseed --source pi` and any
+    /// future "safe rebuild" UX.
+    pub async fn purge_source(
+        &self,
+        source_id: &str,
+        also_drop_source: bool,
+    ) -> Result<PurgeStats> {
+        let mut tx = self.pool.begin().await?;
+
+        // Pull the affected conversation ids first so we can scope deletes
+        // through indices instead of doing N+1 cascades through every table.
+        let rows = sqlx::query("SELECT id FROM conversations WHERE source_id = ?")
+            .bind(source_id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let conv_ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("id")).collect();
+
+        let mut stats = PurgeStats::default();
+        if conv_ids.is_empty() {
+            if also_drop_source {
+                let res = sqlx::query("DELETE FROM sources WHERE id = ?")
+                    .bind(source_id)
+                    .execute(&mut *tx)
+                    .await?;
+                let _ = res;
+            }
+            tx.commit().await?;
+            return Ok(stats);
+        }
+
+        for chunk in conv_ids.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+            let sql =
+                format!("DELETE FROM message_events WHERE conversation_id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.message_events += res.rows_affected() as i64;
+            }
+
+            let sql = format!(
+                "DELETE FROM conversation_snapshots WHERE conversation_id IN ({placeholders})"
+            );
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.snapshots += res.rows_affected() as i64;
+            }
+
+            let sql = format!(
+                "DELETE FROM conversation_summary_cache WHERE conversation_id IN ({placeholders})"
+            );
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.summaries += res.rows_affected() as i64;
+            }
+
+            let sql =
+                format!("DELETE FROM indexer_outbox WHERE conversation_id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.indexer_outbox += res.rows_affected() as i64;
+            }
+
+            let sql = format!("DELETE FROM messages WHERE conversation_id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.messages += res.rows_affected() as i64;
+            }
+
+            let sql = format!("DELETE FROM conversations WHERE id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            let res = q.execute(&mut *tx).await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                stats.conversations += res.rows_affected() as i64;
+            }
+        }
+
+        if also_drop_source {
+            sqlx::query("DELETE FROM sources WHERE id = ?")
+                .bind(source_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(stats)
+    }
+
+    // =========================================================================
+    // message_events retention / compaction (trx-jtxf)
+    // =========================================================================
+
+    /// Compact the `message_events` table by:
+    ///
+    /// 1. Deleting rows older than `max_age_days` (when > 0).
+    /// 2. Keeping only the most recent `max_per_conversation` rows per
+    ///    conversation (when > 0).
+    ///
+    /// Returns the total number of rows removed. The implementation is
+    /// idempotent and safe to call repeatedly from a service loop.
+    pub async fn compact_message_events(
+        &self,
+        max_age_days: u32,
+        max_per_conversation: u32,
+    ) -> Result<i64> {
+        let mut total: i64 = 0;
+
+        if max_age_days > 0 {
+            let cutoff = chrono::Utc::now().timestamp() - i64::from(max_age_days) * 86_400;
+            let res = sqlx::query(
+                "DELETE FROM message_events WHERE created_at IS NOT NULL AND created_at < ?",
+            )
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                total += res.rows_affected() as i64;
+            }
+        }
+
+        if max_per_conversation > 0 {
+            // For each conversation that exceeds the cap, delete all but the
+            // newest max_per_conversation rows. Use a single CTE to keep this
+            // server-side; this is O(rows over cap), not O(all rows).
+            let res = sqlx::query(
+                r"
+                DELETE FROM message_events
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY conversation_id
+                                   ORDER BY COALESCE(created_at, 0) DESC, idx DESC
+                               ) AS rn
+                        FROM message_events
+                    )
+                    WHERE rn > ?
+                )
+                ",
+            )
+            .bind(i64::from(max_per_conversation))
+            .execute(&self.pool)
+            .await?;
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                total += res.rows_affected() as i64;
+            }
+        }
+
+        Ok(total)
+    }
+
+    /// Count the number of `message_events` rows. Useful for diagnostics and
+    /// `hstry stats` style commands.
+    pub async fn count_message_events(&self) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM message_events")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
+    // =========================================================================
+    // Indexer outbox (trx-z42c.5/.6)
+    // =========================================================================
+
+    /// Enqueue a job for the dedicated indexer worker. The op is one of
+    /// `"upsert"`, `"delete"`, `"rebuild"`. Duplicate enqueues for the same
+    /// (conversation, message) are allowed; the worker is responsible for
+    /// idempotent application.
+    pub async fn enqueue_indexer_job(
+        &self,
+        conversation_id: Uuid,
+        message_id: Option<Uuid>,
+        op: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO indexer_outbox (conversation_id, message_id, op, enqueued_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(conversation_id.to_string())
+        .bind(message_id.map(|id| id.to_string()))
+        .bind(op)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drain up to `limit` jobs from the outbox in FIFO order. Jobs are
+    /// returned but **not** removed; call [`Database::ack_indexer_jobs`] after
+    /// successful application to delete them, or [`Database::nack_indexer_job`]
+    /// to record a failure and bump the attempt counter.
+    pub async fn fetch_indexer_jobs(&self, limit: i64) -> Result<Vec<IndexerOutboxJob>> {
+        let rows = sqlx::query(
+            "SELECT id, conversation_id, message_id, op, enqueued_at, attempts \
+             FROM indexer_outbox ORDER BY id ASC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let conv: String = row.get("conversation_id");
+            let msg: Option<String> = row.get("message_id");
+            out.push(IndexerOutboxJob {
+                id: row.get::<i64, _>("id"),
+                conversation_id: Uuid::parse_str(&conv).unwrap_or_default(),
+                message_id: msg.and_then(|s| Uuid::parse_str(&s).ok()),
+                op: row.get("op"),
+                enqueued_at: row.get("enqueued_at"),
+                attempts: row.get("attempts"),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Acknowledge (delete) a batch of jobs once their effects have been
+    /// committed to the search index.
+    pub async fn ack_indexer_jobs(&self, ids: &[i64]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for chunk in ids.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM indexer_outbox WHERE id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(*id);
+            }
+            q.execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Record a failed application attempt for one outbox job.
+    pub async fn nack_indexer_job(&self, id: i64, error: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE indexer_outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+        )
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Current depth of the indexer outbox queue (trx-z42c.8 observability).
+    pub async fn indexer_outbox_depth(&self) -> Result<i64> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM indexer_outbox")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.0)
+    }
+
+    // =========================================================================
+    // Conversation-local duplicate turn dedup (trx-hjjw.5)
+    // =========================================================================
+
+    /// Heuristic, conversation-local dedup: collapse duplicate turns inside a
+    /// single conversation when they share `(role, content)` and fall within
+    /// `time_window_secs` of one another. The newest row is preserved.
+    ///
+    /// Returns the number of rows removed. Pass `dry_run=true` to count
+    /// without deleting.
+    pub async fn dedup_conversation_messages(
+        &self,
+        conversation_id: Uuid,
+        time_window_secs: i64,
+        dry_run: bool,
+    ) -> Result<i64> {
+        let rows = sqlx::query(
+            "SELECT id, idx, role, content, COALESCE(created_at, 0) AS created_at \
+             FROM messages WHERE conversation_id = ? ORDER BY idx ASC",
+        )
+        .bind(conversation_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut to_delete: Vec<String> = Vec::new();
+        // Index by (role, content) -> last seen (idx, created_at, id)
+        let mut seen: std::collections::HashMap<(String, String), (i32, i64, String)> =
+            std::collections::HashMap::new();
+        for row in &rows {
+            let id: String = row.get("id");
+            let idx: i32 = row.get("idx");
+            let role: String = row.get("role");
+            let content: String = row.get("content");
+            let created_at: i64 = row.get("created_at");
+            let key = (role, content);
+            if let Some((_, prev_created, prev_id)) = seen.get(&key).cloned() {
+                let same_window =
+                    time_window_secs == 0 || (created_at - prev_created).abs() <= time_window_secs;
+                if same_window {
+                    // Keep the newer row, drop the older one.
+                    if created_at >= prev_created {
+                        to_delete.push(prev_id);
+                        seen.insert(key, (idx, created_at, id));
+                    } else {
+                        to_delete.push(id);
+                    }
+                    continue;
+                }
+            }
+            seen.insert(key, (idx, created_at, id));
+        }
+
+        let removed = i64::try_from(to_delete.len()).unwrap_or(0);
+        if dry_run || to_delete.is_empty() {
+            return Ok(removed);
+        }
+
+        let mut tx = self.pool.begin().await?;
+        for chunk in to_delete.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM messages WHERE id IN ({placeholders})");
+            let mut q = sqlx::query(&sql);
+            for id in chunk {
+                q = q.bind(id);
+            }
+            q.execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+
+        // Reconcile counts and rebuild summaries since we mutated rows
+        // outside of insert_message paths.
+        self.rebuild_conversation_summaries(&[conversation_id])
+            .await?;
+        Ok(removed)
+    }
+
+    /// Run [`Database::dedup_conversation_messages`] across every conversation
+    /// in `source_id` (or every conversation when `source_id` is `None`).
+    pub async fn dedup_messages_for_source(
+        &self,
+        source_id: Option<&str>,
+        time_window_secs: i64,
+        dry_run: bool,
+    ) -> Result<i64> {
+        let rows = if let Some(sid) = source_id {
+            sqlx::query("SELECT id FROM conversations WHERE source_id = ?")
+                .bind(sid)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query("SELECT id FROM conversations")
+                .fetch_all(&self.pool)
+                .await?
+        };
+
+        let mut total: i64 = 0;
+        for row in rows {
+            let id_str: String = row.get("id");
+            if let Ok(id) = Uuid::parse_str(&id_str) {
+                total += self
+                    .dedup_conversation_messages(id, time_window_secs, dry_run)
+                    .await?;
+            }
+        }
+        Ok(total)
+    }
+
+    // =========================================================================
+    // Per-source watermarks / checkpoints (trx-z42c.3)
+    // =========================================================================
+
+    /// Read the high-watermark for a source. Watermarks are stored in the
+    /// existing `sources.config` JSON blob under the `watermark_at_ms` key,
+    /// avoiding a new table for what is essentially a single integer.
+    pub async fn get_source_watermark(&self, source_id: &str) -> Result<Option<i64>> {
+        let Some(source) = self.get_source(source_id).await? else {
+            return Ok(None);
+        };
+        Ok(source
+            .config
+            .get("watermark_at_ms")
+            .and_then(serde_json::Value::as_i64))
+    }
+
+    /// Persist the new high-watermark for a source.
+    pub async fn set_source_watermark(&self, source_id: &str, watermark_at_ms: i64) -> Result<()> {
+        let Some(mut source) = self.get_source(source_id).await? else {
+            return Ok(());
+        };
+        let mut config = match source.config {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::default(),
+        };
+        config.insert(
+            "watermark_at_ms".to_string(),
+            serde_json::Value::from(watermark_at_ms),
+        );
+        source.config = serde_json::Value::Object(config);
+        self.upsert_source(&source).await?;
+        Ok(())
+    }
+
+    // =========================================================================
+    // Bulk reseed mode (trx-hjjw.6)
+    // =========================================================================
+
+    /// Disable expensive secondary indexes for the duration of a bulk reseed.
+    /// The dropped indexes are recreated by
+    /// [`Database::end_bulk_reseed`]. Callers must always pair these two
+    /// methods (use a guard pattern in higher layers).
+    pub async fn begin_bulk_reseed(&self) -> Result<()> {
+        // PRAGMA tweaks: trade durability for throughput while a reseed is
+        // in flight. WAL is preserved (we did not change journal_mode).
+        sqlx::raw_sql("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY;")
+            .execute(&self.pool)
+            .await?;
+        // Drop the heavy non-unique indexes; they will be recreated below.
+        let _ = sqlx::raw_sql(
+            "DROP INDEX IF EXISTS idx_messages_conv_idx; \
+             DROP INDEX IF EXISTS idx_msg_events_conv_idx; \
+             DROP INDEX IF EXISTS idx_msg_events_created_at; \
+             DROP INDEX IF EXISTS idx_msg_events_conv_created_at;",
+        )
+        .execute(&self.pool)
+        .await;
+        Ok(())
+    }
+
+    /// Recreate indexes dropped by [`Database::begin_bulk_reseed`].
+    pub async fn end_bulk_reseed(&self) -> Result<()> {
+        sqlx::raw_sql(
+            "CREATE INDEX IF NOT EXISTS idx_messages_conv_idx ON messages(conversation_id, idx); \
+             CREATE INDEX IF NOT EXISTS idx_msg_events_conv_idx ON message_events(conversation_id, idx); \
+             CREATE INDEX IF NOT EXISTS idx_msg_events_created_at ON message_events(created_at); \
+             CREATE INDEX IF NOT EXISTS idx_msg_events_conv_created_at ON message_events(conversation_id, created_at DESC);",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::raw_sql("ANALYZE;").execute(&self.pool).await?;
         Ok(())
     }
 }

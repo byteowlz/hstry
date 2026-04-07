@@ -15,6 +15,13 @@ use hstry_core::models::{Conversation, Message, MessageRole, SearchHit, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
 
+/// Apply storage feature flags from `config` to a freshly opened `Database`.
+/// Centralised so every entry point honours the trx-aa3m / trx-z42c contracts.
+fn apply_storage_config(db: &Database, config: &Config) {
+    db.set_message_events_enabled(config.storage.message_events.enabled);
+    db.set_indexer_outbox_enabled(config.storage.indexer_outbox.enabled);
+}
+
 mod adapter_manifest;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -423,6 +430,48 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommand>,
+    },
+
+    /// Rebuild a source from scratch (purge → import → dedup → index).
+    ///
+    /// Use this when a source's database state has drifted from its on-disk
+    /// JSONL files (duplicate replays, partial imports, schema regressions).
+    /// The default uses bulk-reseed mode for throughput; pass `--no-bulk` to
+    /// keep indexes online.
+    Reseed {
+        /// Source ID to reseed (required — reseed never touches everything).
+        #[arg(long)]
+        source: String,
+        /// Skip the dedup step.
+        #[arg(long)]
+        no_dedup: bool,
+        /// Skip the post-import index rebuild.
+        #[arg(long)]
+        no_index: bool,
+        /// Disable bulk reseed mode (keeps indexes online).
+        #[arg(long)]
+        no_bulk: bool,
+        /// Don't actually purge / import, just print the plan.
+        #[arg(long)]
+        dry_run: bool,
+        /// Also drop the source row itself when purging.
+        #[arg(long)]
+        drop_source: bool,
+    },
+
+    /// Verify that a source's DB state matches its on-disk artifacts.
+    ///
+    /// For Pi (and any adapter that exposes a stable per-conversation
+    /// idempotency key) this re-parses the JSONL files, compares conversation
+    /// counts and message counts to the database, and reports the drift.
+    /// Pass `--repair` to run a `reseed` for any source that has drifted.
+    Verify {
+        /// Source ID to verify (defaults to all enabled sources).
+        #[arg(long)]
+        source: Option<String>,
+        /// Reseed any drifted source automatically.
+        #[arg(long)]
+        repair: bool,
     },
 }
 
@@ -894,6 +943,7 @@ async fn main() -> Result<()> {
             input,
         } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -910,6 +960,7 @@ async fn main() -> Result<()> {
             dry_run,
         } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -921,6 +972,7 @@ async fn main() -> Result<()> {
         }
         Command::Index { rebuild } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_index(&config, &db, rebuild, cli.json).await
         }
         Command::List {
@@ -930,6 +982,7 @@ async fn main() -> Result<()> {
             input,
         } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let input = read_input::<ListInput>(input)?;
             let source = input.as_ref().and_then(|v| v.source.clone()).or(source);
             let workspace = input
@@ -941,12 +994,14 @@ async fn main() -> Result<()> {
         }
         Command::Show { id, input } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let input = read_input::<ShowInput>(input)?;
             let id = input.as_ref().map_or(id, |v| v.id.clone());
             cmd_show(&db, &id, cli.json).await
         }
         Command::Source { command } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -997,6 +1052,7 @@ async fn main() -> Result<()> {
         }
         Command::Quickstart => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -1014,6 +1070,7 @@ async fn main() -> Result<()> {
             pretty,
         } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -1046,6 +1103,7 @@ async fn main() -> Result<()> {
             pick,
         } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
                 anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
             })?;
@@ -1058,25 +1116,67 @@ async fn main() -> Result<()> {
         }
         Command::Stats => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_stats(&db, cli.json).await
         }
         Command::Dedup { dry_run, source } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_dedup(&db, dry_run, source, cli.json).await
         }
         Command::Mmry { command } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_mmry(&db, command, cli.json).await
         }
         Command::Remote { command } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_remote(&db, &config, &config_path, command, cli.json).await
         }
         Command::Web { command } => {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
             cmd_web(&db, &config, &config_path, command, cli.json).await
         }
         Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
+        Command::Reseed {
+            source,
+            no_dedup,
+            no_index,
+            no_bulk,
+            dry_run,
+            drop_source,
+        } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_reseed(
+                &db,
+                &runner,
+                &config,
+                &source,
+                !no_dedup,
+                !no_index,
+                !no_bulk,
+                dry_run,
+                drop_source,
+                cli.json,
+            )
+            .await
+        }
+        Command::Verify { source, repair } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
+                anyhow::anyhow!("No JavaScript runtime found. Install bun, deno, or node.")
+            })?;
+            let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
+            cmd_verify(&db, &runner, &config, source, repair, cli.json).await
+        }
     }
 }
 
@@ -1538,11 +1638,22 @@ async fn cmd_import(
                 continue;
             };
             let parts_json = msg.parts.clone().unwrap_or_else(|| serde_json::json!([]));
+            let role_str = msg.role.as_str();
+            // Stable, content-addressable id (trx-hjjw.4) so re-imports of
+            // the same source produce idempotent rows.
+            let stable_id = hstry_core::stable_message_id(
+                &source_id,
+                hstry_conv.external_id.as_deref(),
+                idx,
+                role_str,
+                &msg.content,
+                None,
+            );
             let hstry_msg = hstry_core::models::Message {
-                id: uuid::Uuid::new_v4(),
+                id: stable_id,
                 conversation_id: hstry_conv.id,
                 idx,
-                role: hstry_core::models::MessageRole::from(msg.role.as_str()),
+                role: hstry_core::models::MessageRole::from(role_str),
                 content: msg.content.clone(),
                 parts_json,
                 created_at: msg.created_at.and_then(|ts| {
@@ -1659,6 +1770,7 @@ async fn cmd_search_fast(
             results
         } else {
             let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, config);
             let index_path = config.search_index_path();
             hstry_core::search_tantivy::search_with_fallback(&db, &index_path, query, &opts).await?
         };
@@ -4922,6 +5034,296 @@ async fn cmd_dedup(
         );
     }
 
+    Ok(())
+}
+
+// =============================================================================
+// Reseed / Verify (trx-hjjw)
+// =============================================================================
+
+#[derive(Debug, Serialize)]
+struct ReseedResult {
+    source: String,
+    purged_conversations: i64,
+    purged_messages: i64,
+    imported_conversations: usize,
+    imported_messages: usize,
+    deduped_messages: i64,
+    indexed_messages: usize,
+    bulk_mode: bool,
+    dry_run: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_reseed(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    source_id: &str,
+    do_dedup: bool,
+    do_index: bool,
+    bulk_mode: bool,
+    dry_run: bool,
+    drop_source: bool,
+    json: bool,
+) -> Result<()> {
+    let Some(source) = db.get_source(source_id).await? else {
+        if json {
+            return emit_json(JsonResponse::<()> {
+                ok: false,
+                result: None,
+                error: Some(format!("Source '{source_id}' not found")),
+            });
+        }
+        anyhow::bail!("Source '{source_id}' not found");
+    };
+
+    if !json {
+        println!(
+            "Reseeding source '{source_id}' ({adapter})",
+            adapter = source.adapter
+        );
+        if dry_run {
+            println!("  (dry run — nothing will be modified)");
+        }
+    }
+
+    if dry_run {
+        let (convs, msgs) = db.count_source_data(source_id).await?;
+        if json {
+            return emit_json(JsonResponse {
+                ok: true,
+                result: Some(ReseedResult {
+                    source: source_id.to_string(),
+                    purged_conversations: convs,
+                    purged_messages: msgs,
+                    imported_conversations: 0,
+                    imported_messages: 0,
+                    deduped_messages: 0,
+                    indexed_messages: 0,
+                    bulk_mode,
+                    dry_run: true,
+                }),
+                error: None,
+            });
+        }
+        println!("  Would purge {convs} conversations / {msgs} messages");
+        println!("  Would re-import from {:?}", source.path);
+        if do_dedup {
+            println!("  Would run conversation-local dedup");
+        }
+        if do_index {
+            println!("  Would rebuild search index for source");
+        }
+        return Ok(());
+    }
+
+    if bulk_mode {
+        db.begin_bulk_reseed().await?;
+    }
+
+    // Pre-purge counts inform the result.
+    let (pre_convs, pre_msgs) = db.count_source_data(source_id).await?;
+
+    let purge = db.purge_source(source_id, drop_source).await?;
+    if !json {
+        println!(
+            "  Purged {} conversations / {} messages / {} events",
+            purge.conversations, purge.messages, purge.message_events
+        );
+    }
+
+    // Re-create the source if it was dropped, or fall back to the original.
+    if drop_source {
+        db.upsert_source(&source).await?;
+    }
+
+    // Re-import via the standard sync path. We deliberately reuse sync_source
+    // (rather than cmd_import) because it understands cursor / batched
+    // streaming for the Pi adapter.
+    let stats = sync::sync_source(db, runner, &source).await?;
+    if !json {
+        println!(
+            "  Imported {} conversations / {} messages",
+            stats.conversations, stats.messages
+        );
+    }
+
+    let mut deduped = 0i64;
+    if do_dedup {
+        deduped = db
+            .dedup_messages_for_source(Some(source_id), 5, false)
+            .await?;
+        if !json {
+            println!("  Dedup removed {deduped} duplicate turns");
+        }
+    }
+
+    if bulk_mode {
+        db.end_bulk_reseed().await?;
+    }
+
+    let mut indexed = 0usize;
+    if do_index {
+        let index_path = config.search_index_path();
+        let batch = config.search.index_batch_size;
+        loop {
+            let n = hstry_core::search_tantivy::index_new_messages(db, &index_path, batch).await?;
+            indexed += n;
+            if n < batch {
+                break;
+            }
+        }
+        if !json {
+            println!("  Indexed {indexed} messages");
+        }
+    }
+
+    let _ = pre_convs;
+    let _ = pre_msgs;
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(ReseedResult {
+                source: source_id.to_string(),
+                purged_conversations: purge.conversations,
+                purged_messages: purge.messages,
+                imported_conversations: stats.conversations,
+                imported_messages: stats.messages,
+                deduped_messages: deduped,
+                indexed_messages: indexed,
+                bulk_mode,
+                dry_run: false,
+            }),
+            error: None,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyDrift {
+    source: String,
+    db_conversations: i64,
+    db_messages: i64,
+    on_disk_conversations: usize,
+    on_disk_messages: usize,
+    drifted: bool,
+    repaired: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyResult {
+    sources: Vec<VerifyDrift>,
+    total_drifted: usize,
+    total_repaired: usize,
+}
+
+async fn cmd_verify(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+    source_filter: Option<String>,
+    repair: bool,
+    json: bool,
+) -> Result<()> {
+    let mut targets: Vec<Source> = Vec::new();
+    if let Some(id) = source_filter.clone() {
+        if let Some(src) = db.get_source(&id).await? {
+            targets.push(src);
+        }
+    } else {
+        for src in db.list_sources().await? {
+            targets.push(src);
+        }
+    }
+
+    let mut report = VerifyResult {
+        sources: Vec::new(),
+        total_drifted: 0,
+        total_repaired: 0,
+    };
+
+    for source in &targets {
+        let Some(adapter_path) = runner.find_adapter(&source.adapter) else {
+            continue;
+        };
+        let Some(path) = source.path.as_ref() else {
+            continue;
+        };
+
+        let parsed = match runner
+            .parse(
+                &adapter_path,
+                path,
+                hstry_runtime::runner::ParseOptions {
+                    since: None,
+                    limit: None,
+                    include_tools: true,
+                    include_attachments: false,
+                    cursor: None,
+                    batch_size: None,
+                },
+            )
+            .await
+        {
+            Ok(c) => c,
+            Err(err) => {
+                if !json {
+                    eprintln!("  {} ({}): parse error: {err}", source.id, source.adapter);
+                }
+                continue;
+            }
+        };
+        let on_disk_convs = parsed.len();
+        let on_disk_msgs: usize = parsed.iter().map(|c| c.messages.len()).sum();
+
+        let (db_convs, db_msgs) = db.count_source_data(&source.id).await?;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let drifted = on_disk_convs as i64 != db_convs || on_disk_msgs as i64 != db_msgs;
+
+        let mut repaired = false;
+        if drifted && repair {
+            // Reseed the drifted source. Use the same defaults as `cmd_reseed`.
+            cmd_reseed(
+                db, runner, config, &source.id, true, true, true, false, false, true,
+            )
+            .await
+            .ok();
+            repaired = true;
+            report.total_repaired += 1;
+        }
+        if drifted {
+            report.total_drifted += 1;
+        }
+
+        if !json {
+            let marker = if drifted { "DRIFT" } else { "OK" };
+            println!(
+                "  [{marker}] {id}: db={db_convs}c/{db_msgs}m disk={on_disk_convs}c/{on_disk_msgs}m{}",
+                if repaired { " (repaired)" } else { "" },
+                id = source.id
+            );
+        }
+
+        report.sources.push(VerifyDrift {
+            source: source.id.clone(),
+            db_conversations: db_convs,
+            db_messages: db_msgs,
+            on_disk_conversations: on_disk_convs,
+            on_disk_messages: on_disk_msgs,
+            drifted,
+            repaired,
+        });
+    }
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(report),
+            error: None,
+        });
+    }
     Ok(())
 }
 

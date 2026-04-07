@@ -56,6 +56,79 @@ pub struct Config {
 
     /// Resume configuration for opening sessions in coding agents.
     pub resume: ResumeConfig,
+
+    /// Storage knobs (message_events log, indexer outbox, etc.).
+    #[serde(default)]
+    pub storage: StorageConfig,
+}
+
+/// Storage-level knobs that control optional bookkeeping tables.
+///
+/// `message_events` is an append-only event log that mirrors every message
+/// upsert. It is required by event-stream consumers (e.g. real-time UI clients)
+/// but represents pure overhead for batch / search-only workloads. The default
+/// favours the latter: events are *off*, and any existing rows are subject to
+/// retention compaction during scheduled syncs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    /// Configuration for the `message_events` log table.
+    pub message_events: MessageEventsConfig,
+    /// Configuration for the indexer outbox + worker.
+    pub indexer_outbox: IndexerOutboxConfig,
+}
+
+/// Toggles the `message_events` append-only log on a per-deployment basis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MessageEventsConfig {
+    /// Append a row to `message_events` for every message upsert.
+    /// Default: `false` — non-event consumers pay no overhead (trx-aa3m).
+    pub enabled: bool,
+    /// Maximum age of a `message_events` row before it becomes eligible for
+    /// retention compaction. `0` disables age-based pruning.
+    pub max_age_days: u32,
+    /// Maximum number of `message_events` rows to retain per conversation.
+    /// `0` disables per-conversation pruning.
+    pub max_per_conversation: u32,
+    /// Run retention compaction at most this often (seconds). The compactor is
+    /// invoked from the service sync loop and respects this floor.
+    pub compaction_interval_secs: u64,
+}
+
+impl Default for MessageEventsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_age_days: 30,
+            max_per_conversation: 5_000,
+            compaction_interval_secs: 3_600,
+        }
+    }
+}
+
+/// Configuration for the durable indexer outbox.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IndexerOutboxConfig {
+    /// Enqueue indexer jobs on every message upsert. When disabled, the
+    /// service falls back to the legacy "index everything that has no row
+    /// in the search index" sweep.
+    pub enabled: bool,
+    /// How many outbox jobs the dedicated worker drains per tick.
+    pub batch_size: usize,
+    /// Sleep between worker ticks (milliseconds).
+    pub poll_interval_ms: u64,
+}
+
+impl Default for IndexerOutboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            batch_size: 256,
+            poll_interval_ms: 750,
+        }
+    }
 }
 
 /// Resume configuration for opening sessions in coding agents.
@@ -349,6 +422,7 @@ impl Default for Config {
             search: SearchConfig::default(),
             web: WebConfig::default(),
             resume: ResumeConfig::default(),
+            storage: StorageConfig::default(),
         }
     }
 }
@@ -570,6 +644,74 @@ pub struct ServiceConfig {
     /// Unix socket provides better security for multi-user systems.
     #[serde(default)]
     pub transport: ServiceTransport,
+
+    /// Per-source adaptive scheduling parameters (trx-z42c.1).
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+
+    /// Resource controls for the sync loop (trx-z42c.7).
+    #[serde(default)]
+    pub resources: ResourceConfig,
+}
+
+/// Per-source adaptive cadence configuration. The scheduler keeps a per-source
+/// `next_due_at` deadline. After every successful sync, the cadence is
+/// multiplied by `idle_backoff` (clamped to `max_interval_secs`) when no new
+/// data was returned, and reset to `min_interval_secs` otherwise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerConfig {
+    /// Lower bound on per-source cadence (seconds). Active sources fire at
+    /// this rate.
+    pub min_interval_secs: u64,
+    /// Upper bound on per-source cadence (seconds). Idle sources slowly back
+    /// off to this value.
+    pub max_interval_secs: u64,
+    /// Multiplier applied to the cadence when a sync produced zero new
+    /// conversations / messages.
+    pub idle_backoff: f32,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            min_interval_secs: 30,
+            max_interval_secs: 1_800,
+            idle_backoff: 1.5,
+        }
+    }
+}
+
+/// Resource controls applied to the sync loop. These bound concurrency and
+/// give the operator a kill switch for runaway CPU/IO usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ResourceConfig {
+    /// Maximum number of sources synced concurrently.
+    pub max_concurrent_syncs: usize,
+    /// Hard time budget for a single source sync (milliseconds). `0` disables.
+    pub per_source_time_budget_ms: u64,
+    /// Quality-of-service class for sync work: `interactive` runs at normal
+    /// priority, `background` yields to other work via larger sleeps.
+    pub qos: QosClass,
+}
+
+impl Default for ResourceConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_syncs: 4,
+            per_source_time_budget_ms: 60_000,
+            qos: QosClass::Background,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QosClass {
+    Interactive,
+    #[default]
+    Background,
 }
 
 impl Default for ServiceConfig {
@@ -580,6 +722,8 @@ impl Default for ServiceConfig {
             search_api: true,
             search_port: None,
             transport: ServiceTransport::Tcp,
+            scheduler: SchedulerConfig::default(),
+            resources: ResourceConfig::default(),
         }
     }
 }

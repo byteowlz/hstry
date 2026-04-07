@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 use crate::ServiceCommand;
 use crate::adapter_manifest;
 use crate::sync;
-use hstry_core::config::ServiceTransport;
+use hstry_core::config::{QosClass, ServiceTransport};
 use hstry_core::models::Source;
 use hstry_core::search_tantivy::SearchIndex;
 use hstry_core::service::{
@@ -820,6 +820,20 @@ async fn run_service(config_path: &Path) -> Result<()> {
     // so this must happen after the gRPC server has been spawned.
     state.refresh_watches().await?;
 
+    // Optionally spawn the dedicated indexer worker (trx-z42c.6).
+    if state.config.storage.indexer_outbox.enabled {
+        let db = state.db.clone();
+        let index_path = state.config.search_index_path();
+        let batch = state.config.storage.indexer_outbox.batch_size.max(1);
+        let interval_ms = state.config.storage.indexer_outbox.poll_interval_ms.max(50);
+        let metrics = state.metrics.clone();
+        let qos = state.config.service.resources.qos;
+        let handle = tokio::spawn(async move {
+            run_indexer_worker(db, index_path, batch, interval_ms, metrics, qos).await;
+        });
+        state.indexer_worker = Some(handle);
+    }
+
     state.sync_all().await?;
 
     let safety_poll_secs = state.config.service.poll_interval_secs.max(300);
@@ -870,8 +884,92 @@ async fn run_service(config_path: &Path) -> Result<()> {
     if let Some(handle) = server_handle {
         handle.abort();
     }
+    if let Some(handle) = state.indexer_worker.take() {
+        handle.abort();
+    }
 
     Ok(())
+}
+
+/// Background loop that drains the indexer outbox (trx-z42c.6). Each tick:
+///
+/// 1. Fetch up to `batch` jobs in FIFO order.
+/// 2. Re-index every distinct conversation referenced by the batch.
+/// 3. Ack the jobs on success, nack with the error message otherwise.
+///
+/// The worker is intentionally simple and at-least-once. The search index is
+/// idempotent (Tantivy upsert by message_id) so duplicate work is harmless.
+async fn run_indexer_worker(
+    db: Arc<Database>,
+    index_path: PathBuf,
+    batch: usize,
+    poll_ms: u64,
+    metrics: Arc<tokio::sync::Mutex<ServiceMetrics>>,
+    qos: QosClass,
+) {
+    let backoff = if matches!(qos, QosClass::Background) {
+        Duration::from_millis(poll_ms.saturating_mul(2))
+    } else {
+        Duration::from_millis(poll_ms)
+    };
+    loop {
+        #[allow(clippy::cast_possible_wrap)]
+        let limit = batch as i64;
+        let jobs = match db.fetch_indexer_jobs(limit).await {
+            Ok(jobs) => jobs,
+            Err(err) => {
+                tracing::warn!(
+                    target: "hstry::indexer_outbox",
+                    error = %err,
+                    "fetch_jobs_failed"
+                );
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+        };
+        if jobs.is_empty() {
+            tokio::time::sleep(backoff).await;
+            continue;
+        }
+
+        // Drain by re-indexing all new messages once per drain. The worker
+        // is intentionally cheap; index_new_messages already batches.
+        let result = search_tantivy::index_new_messages(&db, &index_path, batch).await;
+        match result {
+            Ok(n) => {
+                let ids: Vec<i64> = jobs.iter().map(|j| j.id).collect();
+                if let Err(err) = db.ack_indexer_jobs(&ids).await {
+                    tracing::warn!(
+                        target: "hstry::indexer_outbox",
+                        error = %err,
+                        "ack_failed"
+                    );
+                }
+                let mut m = metrics.lock().await;
+                m.indexer_jobs_drained += jobs.len() as u64;
+                tracing::debug!(
+                    target: "hstry::indexer_outbox",
+                    indexed = n,
+                    drained = jobs.len(),
+                    "drain_ok"
+                );
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                for job in &jobs {
+                    let _ = db.nack_indexer_job(job.id, &msg).await;
+                }
+                let mut m = metrics.lock().await;
+                m.indexer_jobs_failed += jobs.len() as u64;
+                tracing::warn!(
+                    target: "hstry::indexer_outbox",
+                    error = %err,
+                    "drain_failed"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
 }
 
 async fn start_search_server(
@@ -1020,6 +1118,40 @@ struct ServiceState {
     /// Suppress chatty event-driven resyncs when a source repeatedly yields no changes.
     /// Maps source_id -> do_not_sync_before.
     source_quiet_until: HashMap<String, Instant>,
+    /// Per-source adaptive scheduling state (trx-z42c.1).
+    /// Maps source_id -> (next_due_at, current_interval_secs).
+    source_schedule: HashMap<String, (Instant, u64)>,
+    /// Bounded concurrency for the sync loop (trx-z42c.7).
+    sync_semaphore: Arc<tokio::sync::Semaphore>,
+    /// In-process metrics for observability (trx-z42c.8).
+    metrics: Arc<tokio::sync::Mutex<ServiceMetrics>>,
+    /// Background indexer worker handle (trx-z42c.6).
+    indexer_worker: Option<tokio::task::JoinHandle<()>>,
+    /// Last time message_events compaction ran (trx-jtxf).
+    last_events_compaction: Instant,
+}
+
+/// Per-process counters surfaced through structured logs (trx-z42c.8).
+#[derive(Default, Debug)]
+struct ServiceMetrics {
+    syncs_total: u64,
+    #[allow(dead_code)]
+    syncs_skipped: u64,
+    syncs_failed: u64,
+    indexer_jobs_drained: u64,
+    indexer_jobs_failed: u64,
+    events_compacted_total: i64,
+    per_source: HashMap<String, SourceMetrics>,
+}
+
+#[derive(Default, Debug, Clone)]
+struct SourceMetrics {
+    syncs: u64,
+    failures: u64,
+    last_duration_ms: u64,
+    last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    cumulative_conversations: usize,
+    cumulative_messages: usize,
 }
 
 impl ServiceState {
@@ -1028,6 +1160,7 @@ impl ServiceState {
         let config_mtime = config_path.metadata().and_then(|m| m.modified()).ok();
 
         let db = Arc::new(Database::open(&config.database).await?);
+        crate::apply_storage_config(&db, &config);
         let index_path = config.search_index_path();
         let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
@@ -1041,6 +1174,9 @@ impl ServiceState {
 
         let (event_tx, event_rx) = mpsc::channel(64);
         let watcher = build_watcher(event_tx)?;
+
+        let max_concurrent = config.service.resources.max_concurrent_syncs.max(1);
+        let sync_semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
         let state = Self {
             config_path: config_path.to_path_buf(),
@@ -1058,6 +1194,11 @@ impl ServiceState {
             last_event_sync: Instant::now() - Duration::from_secs(300), // allow immediate first sync
             source_backoff: HashMap::new(),
             source_quiet_until: HashMap::new(),
+            source_schedule: HashMap::new(),
+            sync_semaphore,
+            metrics: Arc::new(tokio::sync::Mutex::new(ServiceMetrics::default())),
+            indexer_worker: None,
+            last_events_compaction: Instant::now() - Duration::from_secs(86_400),
         };
 
         // NOTE: refresh_watches() is called separately by the caller after
@@ -1081,6 +1222,7 @@ impl ServiceState {
         adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
 
         let db = Arc::new(Database::open(&config.database).await?);
+        crate::apply_storage_config(&db, &config);
         let index_path = config.search_index_path();
         let search_index = Arc::new(SearchIndex::open(&index_path)?);
         let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
@@ -1174,10 +1316,60 @@ impl ServiceState {
         self.maybe_discover_workspaces().await?;
         let stats = self.sync_existing_sources().await?;
         self.sync_remotes_if_due().await?;
-        println!(
-            "sync_cycle reason=audit sources_synced={} sources_skipped_unchanged={}",
-            stats.sources_synced, stats.sources_skipped_unchanged
+        self.maybe_compact_message_events().await?;
+        let outbox_depth = self.db.indexer_outbox_depth().await.unwrap_or(0);
+        let metrics = self.metrics.lock().await;
+        tracing::info!(
+            target: "hstry::sync",
+            reason = "audit",
+            sources_synced = stats.sources_synced,
+            sources_skipped_unchanged = stats.sources_skipped_unchanged,
+            outbox_depth = outbox_depth,
+            syncs_total = metrics.syncs_total,
+            syncs_failed = metrics.syncs_failed,
+            "sync_cycle"
         );
+        println!(
+            "sync_cycle reason=audit sources_synced={} sources_skipped_unchanged={} outbox_depth={}",
+            stats.sources_synced, stats.sources_skipped_unchanged, outbox_depth
+        );
+        Ok(())
+    }
+
+    /// Run the message_events compaction at most once per
+    /// `compaction_interval_secs` (trx-jtxf).
+    async fn maybe_compact_message_events(&mut self) -> Result<()> {
+        if !self.config.storage.message_events.enabled
+            && self.db.count_message_events().await.unwrap_or(0) == 0
+        {
+            return Ok(());
+        }
+        let interval_secs = self
+            .config
+            .storage
+            .message_events
+            .compaction_interval_secs
+            .max(60);
+        if self.last_events_compaction.elapsed() < Duration::from_secs(interval_secs) {
+            return Ok(());
+        }
+        self.last_events_compaction = Instant::now();
+        let removed = self
+            .db
+            .compact_message_events(
+                self.config.storage.message_events.max_age_days,
+                self.config.storage.message_events.max_per_conversation,
+            )
+            .await?;
+        if removed > 0 {
+            let mut metrics = self.metrics.lock().await;
+            metrics.events_compacted_total += removed;
+            tracing::info!(
+                target: "hstry::storage",
+                rows_removed = removed,
+                "compacted_message_events"
+            );
+        }
         Ok(())
     }
 
@@ -1505,9 +1697,12 @@ impl ServiceState {
             return Ok(SourceSyncOutcome::Skipped);
         }
 
+        // Per-source adaptive scheduling (trx-z42c.1): replaces the legacy
+        // hardcoded 30-minute audit floor. Idle sources back off to
+        // `max_interval_secs`; active sources fire at `min_interval_secs`.
         if matches!(reason, SyncReason::Audit)
-            && let Some(last_sync_at) = source.last_sync_at
-            && (chrono::Utc::now() - last_sync_at).num_seconds() < 1_800
+            && let Some((next_due, _)) = self.source_schedule.get(&source.id)
+            && now < *next_due
         {
             return Ok(SourceSyncOutcome::Skipped);
         }
@@ -1538,14 +1733,76 @@ impl ServiceState {
             return Ok(SourceSyncOutcome::SkippedUnchanged);
         }
 
+        // Acquire concurrency permit (trx-z42c.7).
+        let _permit = self.sync_semaphore.clone().acquire_owned().await.ok();
+
+        let started = Instant::now();
+        // Optional per-source time budget (trx-z42c.7). 0 disables.
+        let budget_ms = self.config.service.resources.per_source_time_budget_ms;
+        tracing::info!(
+            target: "hstry::sync",
+            source = %source.id,
+            adapter = %source.adapter,
+            reason = ?match reason { SyncReason::Audit => "audit", SyncReason::Event => "event" },
+            "sync_source_start"
+        );
         println!(
             "Syncing {id} ({adapter})...",
             id = source.id,
             adapter = source.adapter
         );
-        match sync::sync_source(&self.db, &self.runner, source).await {
+        let sync_fut = sync::sync_source(&self.db, &self.runner, source);
+        let outcome_result = if budget_ms > 0 {
+            match tokio::time::timeout(Duration::from_millis(budget_ms), sync_fut).await {
+                Ok(res) => res,
+                Err(_) => Err(anyhow::anyhow!("sync exceeded {budget_ms}ms time budget")),
+            }
+        } else {
+            sync_fut.await
+        };
+        match outcome_result {
             Ok(result) => {
                 self.source_backoff.remove(&source.id);
+                // Adaptive cadence: tighten on activity, back off on idle.
+                let scheduler = &self.config.service.scheduler;
+                let prev_interval = self
+                    .source_schedule
+                    .get(&source.id)
+                    .map(|(_, i)| *i)
+                    .unwrap_or(scheduler.min_interval_secs);
+                let next_interval = if result.conversations == 0 && result.messages == 0 {
+                    let scaled = (prev_interval as f32 * scheduler.idle_backoff) as u64;
+                    scaled.clamp(scheduler.min_interval_secs, scheduler.max_interval_secs)
+                } else {
+                    scheduler.min_interval_secs
+                };
+                self.source_schedule.insert(
+                    source.id.clone(),
+                    (
+                        Instant::now() + Duration::from_secs(next_interval),
+                        next_interval,
+                    ),
+                );
+                {
+                    let mut metrics = self.metrics.lock().await;
+                    metrics.syncs_total += 1;
+                    let entry = metrics.per_source.entry(source.id.clone()).or_default();
+                    entry.syncs += 1;
+                    entry.last_duration_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(0);
+                    entry.last_synced_at = Some(chrono::Utc::now());
+                    entry.cumulative_conversations += result.conversations;
+                    entry.cumulative_messages += result.messages;
+                }
+                tracing::info!(
+                    target: "hstry::sync",
+                    source = %source.id,
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    new_conversations = result.conversations,
+                    new_messages = result.messages,
+                    next_interval_secs = next_interval,
+                    "sync_source_done"
+                );
                 if matches!(reason, SyncReason::Event) {
                     if result.conversations == 0 && result.messages == 0 {
                         self.source_quiet_until
@@ -1569,6 +1826,18 @@ impl ServiceState {
                 Ok(SourceSyncOutcome::Synced)
             }
             Err(err) => {
+                {
+                    let mut metrics = self.metrics.lock().await;
+                    metrics.syncs_failed += 1;
+                    let entry = metrics.per_source.entry(source.id.clone()).or_default();
+                    entry.failures += 1;
+                }
+                tracing::warn!(
+                    target: "hstry::sync",
+                    source = %source.id,
+                    error = %err,
+                    "sync_source_error"
+                );
                 eprintln!("  Error: {err}");
                 let (prev_failures, _) = self
                     .source_backoff

@@ -610,6 +610,8 @@ async fn count_messages_accurate() {
 async fn message_events_include_inserted_messages() {
     let db_path = temp_db_path();
     let db = Database::open(&db_path).await.expect("open db");
+    // trx-aa3m: message_events default off; opt in for this test.
+    db.set_message_events_enabled(true);
     let conv = setup_conversation(&db).await;
 
     let msg = Message {

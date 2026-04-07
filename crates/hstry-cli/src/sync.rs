@@ -217,11 +217,23 @@ pub async fn sync_source(
                     continue;
                 };
                 let parts_json = msg.parts.clone().unwrap_or_else(|| serde_json::json!([]));
+                let role_str = msg.role.as_str();
+                // Stable, content-addressable message id (trx-hjjw.4): replays
+                // of the same JSONL produce the same row id, so the existing
+                // ON CONFLICT clauses naturally dedupe.
+                let stable_id = hstry_core::stable_message_id(
+                    &source.id,
+                    hstry_conv.external_id.as_deref(),
+                    idx,
+                    role_str,
+                    &msg.content,
+                    None,
+                );
                 let hstry_msg = hstry_core::models::Message {
-                    id: uuid::Uuid::new_v4(),
+                    id: stable_id,
                     conversation_id: hstry_conv.id,
                     idx,
-                    role: hstry_core::models::MessageRole::from(msg.role.as_str()),
+                    role: hstry_core::models::MessageRole::from(role_str),
                     content: msg.content.clone(),
                     parts_json,
                     created_at: msg.created_at.and_then(|ts| {

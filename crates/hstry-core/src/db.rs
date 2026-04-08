@@ -293,10 +293,6 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
-
     async fn ensure_conversations_readable_id_column(&self) -> Result<()> {
         let rows = sqlx::query("PRAGMA table_info(conversations)")
             .fetch_all(&self.pool)
@@ -322,9 +318,6 @@ impl Database {
 
         for row in rows {
             let id = Uuid::parse_str(row.get::<&str, _>("id")).unwrap_or_default();
-            let source_id: String = row.get("source_id");
-            let external_id: Option<String> = row.get("external_id");
-            let title: Option<String> = row.get("title");
             let metadata = row
                 .get::<Option<String>, _>("metadata")
                 .and_then(|s| serde_json::from_str(&s).ok())

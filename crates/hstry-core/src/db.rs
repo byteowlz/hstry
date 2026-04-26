@@ -2356,12 +2356,15 @@ impl Database {
                 .await?;
         }
 
-        // Rebuild index if table is empty but messages exist
+        // Rebuild index if table is empty but messages exist.
+        // Use a LIMIT 1 probe instead of COUNT(*): COUNT on large FTS5 tables
+        // forces a full scan and can add multi-second startup latency.
         if messages_count > 0 {
-            let row_count: (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {name}"))
-                .fetch_one(&self.pool)
-                .await?;
-            if row_count.0 == 0 {
+            let has_rows: Option<i64> =
+                sqlx::query_scalar(&format!("SELECT 1 FROM {name} LIMIT 1"))
+                    .fetch_optional(&self.pool)
+                    .await?;
+            if has_rows.is_none() {
                 let rebuild = format!("INSERT INTO {name}({name}) VALUES('rebuild')");
                 sqlx::raw_sql(&rebuild).execute(&self.pool).await?;
             }

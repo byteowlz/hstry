@@ -384,6 +384,10 @@ just update-adapters # Copy latest adapters to ~/.config/hstry/adapters
 
 Contributions are welcome! Please see [docs/RELEASE.md](docs/RELEASE.md) for information about the release process.
 
+## Release Notes
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list of changes.
+
 ## Release Process
 
 The release process is fully automated via GitHub Actions:

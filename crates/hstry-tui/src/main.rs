@@ -1,6 +1,6 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -747,6 +747,7 @@ impl SearchScope {
 #[derive(Debug, Clone, Default)]
 struct FilterState {
     source: Option<String>,
+    source_adapter: Option<String>,
     workspace: Option<String>,
     date_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
 }
@@ -859,7 +860,10 @@ impl LeftPaneView {
 #[derive(Debug, Clone)]
 enum NavItem {
     All,
-    Source(String, String), // (id, adapter name)
+    Source {
+        adapter: String,
+        source_ids: Vec<String>,
+    },
     Workspace(String),
     // Date grouping items
     DateYear(i32),          // Year (e.g., 2025)
@@ -871,7 +875,7 @@ impl NavItem {
     fn label(&self) -> String {
         match self {
             NavItem::All => "All Conversations".to_string(),
-            NavItem::Source(_, adapter) => adapter.clone(),
+            NavItem::Source { adapter, .. } => adapter.clone(),
             NavItem::Workspace(ws) => format!("@ {ws}"),
             NavItem::DateYear(year) => year.to_string(),
             NavItem::DateMonth(year, month) => {
@@ -888,6 +892,31 @@ impl NavItem {
             NavItem::DateDay(year, month, day) => format!("{month:02}/{day:02}/{year}"),
         }
     }
+}
+
+fn build_source_nav_items(sources: &[Source]) -> Vec<NavItem> {
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+    for source in sources {
+        grouped
+            .entry(source.adapter.clone())
+            .or_default()
+            .push(source.id.clone());
+    }
+
+    let mut adapters: Vec<String> = grouped.keys().cloned().collect();
+    adapters.sort();
+
+    let mut nav_items = vec![NavItem::All];
+    for adapter in adapters {
+        let mut ids = grouped.remove(&adapter).unwrap_or_default();
+        ids.sort();
+        nav_items.push(NavItem::Source {
+            adapter,
+            source_ids: ids,
+        });
+    }
+
+    nav_items
 }
 
 // =============================================================================
@@ -939,10 +968,7 @@ impl App {
         conversations: Vec<Conversation>,
     ) -> Self {
         // Build navigation items for Sources view (default)
-        let mut nav_items = vec![NavItem::All];
-        for source in &sources {
-            nav_items.push(NavItem::Source(source.id.clone(), source.adapter.clone()));
-        }
+        let nav_items = build_source_nav_items(&sources);
 
         let filtered_conversations = conversations.clone();
 
@@ -999,6 +1025,12 @@ impl App {
     }
 
     fn apply_filters(&mut self) {
+        let source_adapter_by_id: HashMap<String, String> = self
+            .sources
+            .iter()
+            .map(|s| (s.id.clone(), s.adapter.clone()))
+            .collect();
+
         self.filtered_conversations = self
             .all_conversations
             .iter()
@@ -1007,6 +1039,12 @@ impl App {
                     && &c.source_id != source_id
                 {
                     return false;
+                }
+                if let Some(ref source_adapter) = self.filter.source_adapter {
+                    let conv_adapter = source_adapter_by_id.get(&c.source_id);
+                    if conv_adapter != Some(source_adapter) {
+                        return false;
+                    }
                 }
                 if let Some(ref workspace) = self.filter.workspace
                     && c.workspace.as_ref() != Some(workspace)
@@ -1076,11 +1114,7 @@ impl App {
 
         match self.left_pane_view {
             LeftPaneView::Sources => {
-                self.nav_items.push(NavItem::All);
-                for source in &self.sources {
-                    self.nav_items
-                        .push(NavItem::Source(source.id.clone(), source.adapter.clone()));
-                }
+                self.nav_items = build_source_nav_items(&self.sources);
             }
             LeftPaneView::Workspaces => {
                 self.nav_items.push(NavItem::All);
@@ -1452,12 +1486,22 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
         KeyAction::Char('d') => {
             // Delete conversations when in middle pane, or source when in left pane with source selected
             if app.focus == FocusPane::Left {
-                if let Some(NavItem::Source(id, name)) = app.nav_items.get(app.nav_selection.index)
+                if let Some(NavItem::Source {
+                    adapter,
+                    source_ids,
+                }) = app.nav_items.get(app.nav_selection.index)
                 {
-                    app.mode = AppMode::DeleteSource {
-                        source_id: id.clone(),
-                        source_name: name.clone(),
-                    };
+                    if source_ids.len() == 1 {
+                        app.mode = AppMode::DeleteSource {
+                            source_id: source_ids[0].clone(),
+                            source_name: adapter.clone(),
+                        };
+                    } else {
+                        app.status_message = format!(
+                            "Adapter '{adapter}' has {} sources; delete from `hstry source`",
+                            source_ids.len()
+                        );
+                    }
                 }
             } else {
                 let count = if app.conv_selection.has_selections() {
@@ -1533,16 +1577,19 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                     match nav_item {
                         NavItem::All => {
                             app.filter.source = None;
+                            app.filter.source_adapter = None;
                             app.filter.workspace = None;
                             app.filter.date_range = None;
                         }
-                        NavItem::Source(id, _) => {
-                            app.filter.source = Some(id.clone());
+                        NavItem::Source { adapter, .. } => {
+                            app.filter.source = None;
+                            app.filter.source_adapter = Some(adapter.clone());
                             app.filter.workspace = None;
                             app.filter.date_range = None;
                         }
                         NavItem::Workspace(ws) => {
                             app.filter.source = None;
+                            app.filter.source_adapter = None;
                             app.filter.workspace = Some(ws.clone());
                             app.filter.date_range = None;
                         }
@@ -1566,6 +1613,7 @@ fn handle_normal_mode(app: &mut App, action: KeyAction, rt: &tokio::runtime::Run
                                 .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
                             app.filter.date_range = start.zip(end);
                             app.filter.source = None;
+                            app.filter.source_adapter = None;
                             app.filter.workspace = None;
                         }
                     }
@@ -1844,6 +1892,7 @@ fn handle_delete_source_mode(app: &mut App, action: KeyAction, rt: &tokio::runti
                     app.status_message = format!("Deleted source '{source_id}'");
                     app.nav_selection.index = 0;
                     app.filter.source = None;
+                    app.filter.source_adapter = None;
                 }
                 Err(e) => {
                     app.status_message = format!("Error deleting source: {e}");
@@ -1922,8 +1971,15 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, item)| {
             let is_selected = i == app.nav_selection.index;
             let is_active = match item {
-                NavItem::All => app.filter.source.is_none() && app.filter.workspace.is_none(),
-                NavItem::Source(id, _) => app.filter.source.as_ref() == Some(id),
+                NavItem::All => {
+                    app.filter.source.is_none()
+                        && app.filter.source_adapter.is_none()
+                        && app.filter.workspace.is_none()
+                        && app.filter.date_range.is_none()
+                }
+                NavItem::Source { adapter, .. } => {
+                    app.filter.source_adapter.as_ref() == Some(adapter)
+                }
                 NavItem::Workspace(ws) => app.filter.workspace.as_ref() == Some(ws),
                 NavItem::DateYear(_) | NavItem::DateMonth(_, _) | NavItem::DateDay(_, _, _) => {
                     false
@@ -1942,7 +1998,7 @@ fn draw_left_pane(f: &mut Frame, app: &App, area: Rect) {
 
             let prefix = match item {
                 NavItem::All => " * ",
-                NavItem::Source(_, _) | NavItem::Workspace(_) => "   ",
+                NavItem::Source { .. } | NavItem::Workspace(_) => "   ",
                 NavItem::DateYear(year) => {
                     let key = format!("year:{year}");
                     if app.expanded_dates.contains(&key) {

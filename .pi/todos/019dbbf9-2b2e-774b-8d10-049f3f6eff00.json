@@ -1,0 +1,23 @@
+{
+  "todos": [
+    {
+      "id": "435a81c5",
+      "content": "Find TUI left-pane data source for adapter entries",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "96c8494b",
+      "content": "Implement one-entry-per-adapter grouping in TUI",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "41f696c5",
+      "content": "Run fmt/tests and report",
+      "status": "completed",
+      "priority": "medium"
+    }
+  ],
+  "updated_at": "2026-04-24T13:21:05.153Z"
+}

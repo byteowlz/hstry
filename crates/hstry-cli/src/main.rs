@@ -1514,7 +1514,18 @@ async fn cmd_import(
     let Some(adapter_path) = runner.find_adapter(&adapter_name) else {
         anyhow::bail!("Adapter '{adapter_name}' not found");
     };
-    let source_id = source_id.unwrap_or_else(|| format!("import-{adapter_name}"));
+
+    let normalized_source_path = expanded.to_string_lossy().trim_end_matches('/').to_string();
+    let source_id = if let Some(source_id) = source_id {
+        source_id
+    } else if let Some(existing) = db
+        .get_source_by_adapter_path(&adapter_name, &normalized_source_path)
+        .await?
+    {
+        existing.id
+    } else {
+        adapter_name.clone()
+    };
 
     // Parse conversations
     let parse_opts = hstry_runtime::runner::ParseOptions {
@@ -1580,7 +1591,7 @@ async fn cmd_import(
     let source = hstry_core::models::Source {
         id: source_id.clone(),
         adapter: adapter_name.clone(),
-        path: Some(expanded.to_string_lossy().to_string()),
+        path: Some(normalized_source_path),
         last_sync_at: None,
         config: serde_json::json!({}),
     };
@@ -2018,6 +2029,100 @@ impl std::fmt::Display for SearchRoleArg {
     }
 }
 
+fn conversation_identity_key(conv: &Conversation) -> String {
+    let harness = conv.harness.as_deref().unwrap_or_default();
+    if let Some(external_id) = conv.external_id.as_deref().filter(|v| !v.is_empty()) {
+        return format!("{harness}|external|{external_id}");
+    }
+    if let Some(readable_id) = conv.readable_id.as_deref().filter(|v| !v.is_empty()) {
+        return format!("{harness}|readable|{readable_id}");
+    }
+    if let Some(platform_id) = conv.platform_id.as_deref().filter(|v| !v.is_empty()) {
+        return format!("{harness}|platform|{platform_id}");
+    }
+    format!("{harness}|id|{}", conv.id)
+}
+
+fn conversation_sort_ts(conv: &Conversation) -> i64 {
+    conv.updated_at.unwrap_or(conv.created_at).timestamp()
+}
+
+fn source_preference(source_id: &str, harness: Option<&str>) -> u8 {
+    if let Some(harness) = harness {
+        if source_id == harness {
+            return 0;
+        }
+        if source_id == format!("import-{harness}") {
+            return 2;
+        }
+    }
+
+    if source_id.starts_with("import-") {
+        2
+    } else {
+        1
+    }
+}
+
+fn should_replace_conversation(candidate: &Conversation, current: &Conversation) -> bool {
+    let candidate_pref = source_preference(&candidate.source_id, candidate.harness.as_deref());
+    let current_pref = source_preference(&current.source_id, current.harness.as_deref());
+
+    if candidate_pref != current_pref {
+        return candidate_pref < current_pref;
+    }
+
+    conversation_sort_ts(candidate) > conversation_sort_ts(current)
+}
+
+fn dedup_conversations(conversations: Vec<Conversation>) -> Vec<Conversation> {
+    let mut best_by_key: HashMap<String, Conversation> = HashMap::new();
+
+    for conv in conversations {
+        let key = conversation_identity_key(&conv);
+        match best_by_key.get(&key) {
+            Some(existing) if !should_replace_conversation(&conv, existing) => {}
+            _ => {
+                best_by_key.insert(key, conv);
+            }
+        }
+    }
+
+    let mut deduped: Vec<Conversation> = best_by_key.into_values().collect();
+    deduped.sort_by(|a, b| conversation_sort_ts(b).cmp(&conversation_sort_ts(a)));
+    deduped
+}
+
+fn dedup_conversation_previews(
+    previews: Vec<hstry_core::db::ConversationPreview>,
+) -> Vec<hstry_core::db::ConversationPreview> {
+    let mut best_by_key: HashMap<String, hstry_core::db::ConversationPreview> = HashMap::new();
+
+    for preview in previews {
+        let key = conversation_identity_key(&preview.conversation);
+        match best_by_key.get(&key) {
+            Some(existing)
+                if !should_replace_conversation(&preview.conversation, &existing.conversation) => {}
+            _ => {
+                best_by_key.insert(key, preview);
+            }
+        }
+    }
+
+    let mut deduped: Vec<hstry_core::db::ConversationPreview> = best_by_key.into_values().collect();
+    deduped.sort_by(|a, b| {
+        conversation_sort_ts(&b.conversation).cmp(&conversation_sort_ts(&a.conversation))
+    });
+    deduped
+}
+
+fn expanded_list_limit(limit: i64) -> i64 {
+    if limit <= 0 {
+        return limit;
+    }
+    (limit.saturating_mul(4)).min(2000)
+}
+
 async fn cmd_list(
     db: &Database,
     source: Option<String>,
@@ -2025,17 +2130,31 @@ async fn cmd_list(
     limit: i64,
     json: bool,
 ) -> Result<()> {
+    let dedup_across_sources = source.is_none();
     let workspace = workspace.map(|value| format!("%{value}%"));
     let opts = hstry_core::db::ListConversationsOptions {
         source_id: source,
         workspace,
         after: None,
         before: None,
-        limit: Some(limit),
+        limit: Some(if dedup_across_sources {
+            expanded_list_limit(limit)
+        } else {
+            limit
+        }),
     };
 
     if json {
-        let conversations = db.list_conversations(opts).await?;
+        let conversations = if dedup_across_sources {
+            let mut deduped = dedup_conversations(db.list_conversations(opts).await?);
+            if limit > 0 {
+                deduped.truncate(limit as usize);
+            }
+            deduped
+        } else {
+            db.list_conversations(opts).await?
+        };
+
         return emit_json(JsonResponse {
             ok: true,
             result: Some(conversations),
@@ -2043,7 +2162,16 @@ async fn cmd_list(
         });
     }
 
-    let previews = db.list_conversation_previews(opts).await?;
+    let previews = if dedup_across_sources {
+        let mut deduped = dedup_conversation_previews(db.list_conversation_previews(opts).await?);
+        if limit > 0 {
+            deduped.truncate(limit as usize);
+        }
+        deduped
+    } else {
+        db.list_conversation_previews(opts).await?
+    };
+
     let display = previews
         .into_iter()
         .map(|preview| {

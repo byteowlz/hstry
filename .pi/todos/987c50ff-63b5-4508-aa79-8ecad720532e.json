@@ -1,0 +1,17 @@
+{
+  "todos": [
+    {
+      "id": "45c7a1ba",
+      "content": "Eliminate remaining clippy warnings in hstry-core",
+      "status": "completed",
+      "priority": "high"
+    },
+    {
+      "id": "ce902585",
+      "content": "Re-run full clippy and confirm zero warnings",
+      "status": "completed",
+      "priority": "high"
+    }
+  ],
+  "updated_at": "2026-04-08T08:13:04.160Z"
+}

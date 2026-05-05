@@ -188,29 +188,6 @@ fn pad_line(content: &str, width: usize) -> String {
     format!("{}{}{}", content, " ".repeat(padding), style("│").dim())
 }
 
-fn truncate_middle(value: &str, max_len: usize) -> String {
-    let length = value.chars().count();
-    if length <= max_len {
-        return value.to_string();
-    }
-    if max_len <= 3 {
-        return "...".to_string();
-    }
-
-    let head_len = max_len / 2 - 1;
-    let tail_len = max_len - head_len - 3;
-    let head: String = value.chars().take(head_len).collect();
-    let tail: String = value
-        .chars()
-        .rev()
-        .take(tail_len)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!("{head}...{tail}")
-}
-
 fn pad_visible(value: &str, width: usize) -> String {
     let visible_len = console::measure_text_width(value);
     if visible_len >= width {
@@ -229,6 +206,27 @@ fn truncate_end(value: &str, max_len: usize) -> String {
     }
     let head: String = value.chars().take(max_len - 3).collect();
     format!("{head}...")
+}
+
+/// Keep the tail; prefix with "..." when truncated. Useful for paths where
+/// the meaningful project name is at the end.
+fn truncate_start(value: &str, max_len: usize) -> String {
+    let length = value.chars().count();
+    if length <= max_len {
+        return value.to_string();
+    }
+    if max_len <= 3 {
+        return "...".to_string();
+    }
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(max_len - 3)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("...{tail}")
 }
 
 /// Print search results in a compact format.
@@ -459,7 +457,7 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         } else {
             clean_title
         };
-        let workdir_display = truncate_middle(&workdir_raw, workdir_max);
+        let workdir_display = truncate_start(&workdir_raw, workdir_max);
 
         let title_cell = pad_visible(&title_display, title_max);
         let workdir_cell = pad_visible(&workdir_display, workdir_max);

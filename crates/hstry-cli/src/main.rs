@@ -51,6 +51,8 @@ struct ListInput {
     source: Option<String>,
     workspace: Option<String>,
     limit: Option<i64>,
+    after: Option<String>,
+    before: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -271,6 +273,14 @@ enum Command {
         /// Maximum results
         #[arg(short, long, default_value = "50")]
         limit: i64,
+
+        /// Only include conversations created after this date (ISO 8601 or relative: "2d", "1w", "2025-01-15")
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Only include conversations created before this date (ISO 8601 or relative)
+        #[arg(long)]
+        before: Option<String>,
 
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
@@ -983,6 +993,8 @@ async fn main() -> Result<()> {
             source,
             workspace,
             limit,
+            after,
+            before,
             input,
         } => {
             let db = Database::open(&config.database).await?;
@@ -994,7 +1006,11 @@ async fn main() -> Result<()> {
                 .and_then(|v| v.workspace.clone())
                 .or(workspace);
             let limit = input.as_ref().and_then(|v| v.limit).unwrap_or(limit);
-            cmd_list(&db, source, workspace, limit, cli.json).await
+            let after = input.as_ref().and_then(|v| v.after.clone()).or(after);
+            let before = input.as_ref().and_then(|v| v.before.clone()).or(before);
+            let after_dt = after.as_deref().map(parse_date_filter).transpose()?;
+            let before_dt = before.as_deref().map(parse_date_filter).transpose()?;
+            cmd_list(&db, source, workspace, limit, after_dt, before_dt, cli.json).await
         }
         Command::Show { id, input } => {
             let db = Database::open(&config.database).await?;
@@ -2075,24 +2091,6 @@ fn should_replace_conversation(candidate: &Conversation, current: &Conversation)
     conversation_sort_ts(candidate) > conversation_sort_ts(current)
 }
 
-fn dedup_conversations(conversations: Vec<Conversation>) -> Vec<Conversation> {
-    let mut best_by_key: HashMap<String, Conversation> = HashMap::new();
-
-    for conv in conversations {
-        let key = conversation_identity_key(&conv);
-        match best_by_key.get(&key) {
-            Some(existing) if !should_replace_conversation(&conv, existing) => {}
-            _ => {
-                best_by_key.insert(key, conv);
-            }
-        }
-    }
-
-    let mut deduped: Vec<Conversation> = best_by_key.into_values().collect();
-    deduped.sort_by(|a, b| conversation_sort_ts(b).cmp(&conversation_sort_ts(a)));
-    deduped
-}
-
 fn dedup_conversation_previews(
     previews: Vec<hstry_core::db::ConversationPreview>,
 ) -> Vec<hstry_core::db::ConversationPreview> {
@@ -2128,6 +2126,8 @@ async fn cmd_list(
     source: Option<String>,
     workspace: Option<String>,
     limit: i64,
+    after: Option<chrono::DateTime<chrono::Utc>>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
     json: bool,
 ) -> Result<()> {
     let dedup_across_sources = source.is_none();
@@ -2135,8 +2135,8 @@ async fn cmd_list(
     let opts = hstry_core::db::ListConversationsOptions {
         source_id: source,
         workspace,
-        after: None,
-        before: None,
+        after,
+        before,
         limit: Some(if dedup_across_sources {
             expanded_list_limit(limit)
         } else {
@@ -2145,19 +2145,20 @@ async fn cmd_list(
     };
 
     if json {
-        let conversations = if dedup_across_sources {
-            let mut deduped = dedup_conversations(db.list_conversations(opts).await?);
+        let previews = if dedup_across_sources {
+            let mut deduped =
+                dedup_conversation_previews(db.list_conversation_previews(opts).await?);
             if limit > 0 {
                 deduped.truncate(limit as usize);
             }
             deduped
         } else {
-            db.list_conversations(opts).await?
+            db.list_conversation_previews(opts).await?
         };
 
         return emit_json(JsonResponse {
             ok: true,
-            result: Some(conversations),
+            result: Some(previews),
             error: None,
         });
     }

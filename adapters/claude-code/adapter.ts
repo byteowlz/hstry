@@ -23,12 +23,14 @@ import {
   toolResultPart,
   textOnlyParts,
 } from '../types/index.ts';
+import { findFirstRealUserMessage, formatFrumTitle } from '../types/first-message.ts';
 
 const DEFAULT_CLAUDE_PATH = join(homedir(), '.claude', 'projects');
 
 interface JsonlEntry {
   type?: string;
   summary?: string;
+  aiTitle?: string;
   leafUuid?: string;
   uuid?: string;
   timestamp?: string | number;
@@ -37,6 +39,25 @@ interface JsonlEntry {
   project_path?: string;
   cwd?: string;
   version?: string;
+  isCompactSummary?: boolean;
+  isVisibleInTranscriptOnly?: boolean;
+  isSidechain?: boolean;
+  isMeta?: boolean;
+  compactMetadata?: {
+    trigger?: string;
+    preTokens?: number;
+    postTokens?: number;
+    durationMs?: number;
+  };
+  subtype?: string;
+}
+
+interface CompactionRecord {
+  at?: number;
+  trigger?: string;
+  preTokens?: number;
+  postTokens?: number;
+  summary?: string;
 }
 
 interface ClaudeMessage {
@@ -96,6 +117,8 @@ const adapter: Adapter = {
       const messages = extractMessages(entries);
       if (messages.length === 0) continue;
 
+      const compactions = extractCompactions(entries);
+
       const timestamps = messages
         .map(msg => msg.createdAt)
         .filter((ts): ts is number => typeof ts === 'number');
@@ -111,7 +134,15 @@ const adapter: Adapter = {
         }
       }
 
-      const summary = entries.find(e => e.type === 'summary' && e.summary)?.summary;
+      const summary =
+        entries.find(e => e.type === 'summary' && e.summary)?.summary ??
+        entries.find(e => e.type === 'ai-title' && e.aiTitle)?.aiTitle;
+      const titleFallback = summary
+        ? undefined
+        : (() => {
+            const frum = findFirstRealUserMessage(messages);
+            return frum ? formatFrumTitle(frum) : undefined;
+          })();
       const sessionId =
         entries.find(e => e.sessionId)?.sessionId ??
         entries.find(e => e.message && e.uuid)?.uuid ??
@@ -124,7 +155,7 @@ const adapter: Adapter = {
 
       conversations.push({
         externalId: sessionId,
-        title: summary || undefined,
+        title: summary || titleFallback,
         createdAt,
         updatedAt,
         workspace,
@@ -133,6 +164,7 @@ const adapter: Adapter = {
           file: filePath,
           version: entries.find(e => e.version)?.version,
           leafUuid: entries.find(e => e.leafUuid)?.leafUuid,
+          ...(compactions.length > 0 ? { compactions } : {}),
         },
       });
 
@@ -180,11 +212,44 @@ const adapter: Adapter = {
   },
 };
 
+function extractCompactions(entries: JsonlEntry[]): CompactionRecord[] {
+  const records: CompactionRecord[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.subtype !== 'compact_boundary' && !entry.compactMetadata) continue;
+
+    const at = parseTimestamp(entry.timestamp);
+    // The summary text lives on the next entry: a synthetic user message with
+    // isCompactSummary: true.
+    let summary: string | undefined;
+    for (let j = i + 1; j < entries.length && j < i + 5; j++) {
+      if (entries[j].isCompactSummary) {
+        summary = extractContent(entries[j].message?.content);
+        break;
+      }
+    }
+
+    records.push({
+      at,
+      trigger: entry.compactMetadata?.trigger,
+      preTokens: entry.compactMetadata?.preTokens,
+      postTokens: entry.compactMetadata?.postTokens,
+      summary,
+    });
+  }
+  return records;
+}
+
 function extractMessages(entries: JsonlEntry[]): Message[] {
   const messages: Message[] = [];
 
   for (const entry of entries) {
     if (entry.type === 'summary') continue;
+    // Compact summaries are synthetic user messages injected by Claude Code on
+    // auto-compaction; importing them duplicates the prior transcript as a
+    // single 100KB+ "user" message.
+    if (entry.isCompactSummary) continue;
+    if (entry.isVisibleInTranscriptOnly) continue;
 
     const msg = entry.message;
     if (!msg || !msg.role) continue;
@@ -371,11 +436,16 @@ async function findJsonlFiles(
   for (const entry of entries) {
     const entryPath = join(path, entry.name);
 
+    // Top-level .jsonl in the projects root would be unusual but treat as a session.
     if (entry.isFile() && extname(entry.name) === '.jsonl') {
       files.push(entryPath);
       continue;
     }
 
+    // One level down: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl
+    // Sibling <sessionId>/ directories hold tool-results and subagent
+    // transcripts referenced by the parent session — they are NOT standalone
+    // conversations and must not be walked into.
     if (entry.isDirectory()) {
       const nested = await readdir(entryPath, { withFileTypes: true }).catch(() => []);
       for (const child of nested) {
@@ -383,20 +453,8 @@ async function findJsonlFiles(
           files.push(join(entryPath, child.name));
         }
       }
-
-      if (!opts.shallowOnly) {
-        for (const child of nested) {
-          if (child.isDirectory()) {
-            const deepPath = join(entryPath, child.name);
-            const deepEntries = await readdir(deepPath, { withFileTypes: true }).catch(() => []);
-            for (const deepEntry of deepEntries) {
-              if (deepEntry.isFile() && extname(deepEntry.name) === '.jsonl') {
-                files.push(join(deepPath, deepEntry.name));
-              }
-            }
-          }
-        }
-      }
+      // shallowOnly is unused now; kept for API compatibility.
+      void opts;
     }
   }
 

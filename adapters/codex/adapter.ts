@@ -21,6 +21,7 @@ import {
   toolCallPart,
   toolResultPart,
 } from '../types/index.ts';
+import { isSystemContext } from '../types/first-message.ts';
 
 const DEFAULT_CODEX_HOME = join(homedir(), '.codex');
 const DEFAULT_PATHS = [
@@ -204,7 +205,7 @@ async function parseRolloutFile(
           const content = extractContent(payload.content);
           if (!content) break;
 
-          if (!firstUserMessage && payload.role === 'user') {
+          if (!firstUserMessage && payload.role === 'user' && !isSystemContext(content)) {
             firstUserMessage = content;
           }
 

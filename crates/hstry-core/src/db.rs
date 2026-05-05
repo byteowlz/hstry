@@ -606,7 +606,7 @@ impl Database {
         let mut sql = String::from("SELECT * FROM conversations WHERE 1=1");
 
         if opts.source_id.is_some() {
-            sql.push_str(" AND source_id = ?");
+            sql.push_str(" AND (source_id = ? OR source_id LIKE ?)");
         }
         if let Some(ref workspace) = opts.workspace {
             if is_like_pattern(workspace) {
@@ -631,7 +631,7 @@ impl Database {
         let mut query = sqlx::query(&sql);
 
         if let Some(ref source_id) = opts.source_id {
-            query = query.bind(source_id);
+            query = query.bind(source_id).bind(format!("{source_id}-%"));
         }
         if let Some(ref workspace) = opts.workspace {
             query = query.bind(workspace);
@@ -662,7 +662,7 @@ impl Database {
         );
 
         if opts.source_id.is_some() {
-            sql.push_str(" AND c.source_id = ?");
+            sql.push_str(" AND (c.source_id = ? OR c.source_id LIKE ?)");
         }
         if let Some(ref workspace) = opts.workspace {
             if is_like_pattern(workspace) {
@@ -687,7 +687,7 @@ impl Database {
         let mut query = sqlx::query(&sql);
 
         if let Some(ref source_id) = opts.source_id {
-            query = query.bind(source_id);
+            query = query.bind(source_id).bind(format!("{source_id}-%"));
         }
         if let Some(ref workspace) = opts.workspace {
             query = query.bind(workspace);
@@ -727,7 +727,7 @@ impl Database {
         );
 
         if opts.source_id.is_some() {
-            sql.push_str(" AND c.source_id = ?");
+            sql.push_str(" AND (c.source_id = ? OR c.source_id LIKE ?)");
         }
         if let Some(ref workspace) = opts.workspace {
             if is_like_pattern(workspace) {
@@ -752,7 +752,7 @@ impl Database {
         let mut query = sqlx::query(&sql);
 
         if let Some(ref source_id) = opts.source_id {
-            query = query.bind(source_id);
+            query = query.bind(source_id).bind(format!("{source_id}-%"));
         }
         if let Some(ref workspace) = opts.workspace {
             query = query.bind(workspace);
@@ -2068,7 +2068,7 @@ impl Database {
         );
 
         if opts.source_id.is_some() {
-            sql.push_str(" AND c.source_id = ?");
+            sql.push_str(" AND (c.source_id = ? OR c.source_id LIKE ?)");
         }
         if opts.workspace.is_some() {
             sql.push_str(" AND c.workspace = ?");
@@ -2105,7 +2105,7 @@ impl Database {
         query_builder = query_builder.bind(query);
 
         if let Some(ref source_id) = opts.source_id {
-            query_builder = query_builder.bind(source_id);
+            query_builder = query_builder.bind(source_id).bind(format!("{source_id}-%"));
         }
         if let Some(ref workspace) = opts.workspace {
             query_builder = query_builder.bind(workspace);
@@ -2997,9 +2997,11 @@ impl Database {
 }
 
 /// Conversation preview with first user message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationPreview {
+    #[serde(flatten)]
     pub conversation: Conversation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
 }
 

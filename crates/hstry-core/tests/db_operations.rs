@@ -383,6 +383,123 @@ async fn list_conversations_with_filters() {
 }
 
 #[tokio::test]
+async fn list_conversations_serializes_timestamps() {
+    // Regression for trx-70as: list output must include non-empty ISO timestamps.
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+    setup_source(&db).await;
+
+    let now = Utc::now();
+    let conv = Conversation {
+        id: Uuid::new_v4(),
+        source_id: "test-source".to_string(),
+        external_id: Some("ext-ts".to_string()),
+        readable_id: None,
+        platform_id: None,
+        title: Some("ts test".to_string()),
+        created_at: now,
+        updated_at: Some(now),
+        model: None,
+        provider: None,
+        workspace: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost_usd: None,
+        metadata: serde_json::json!({}),
+        harness: None,
+        version: 0,
+        message_count: 0,
+        parent_conversation_id: None,
+        parent_message_idx: None,
+        fork_type: None,
+    };
+    db.upsert_conversation(&conv).await.expect("upsert");
+
+    let convs = db
+        .list_conversations(ListConversationsOptions::default())
+        .await
+        .expect("list");
+    assert_eq!(convs.len(), 1);
+
+    let json = serde_json::to_value(&convs[0]).expect("serialize");
+    let created = json
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let updated = json
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert!(
+        !created.is_empty(),
+        "created_at must serialize as non-empty"
+    );
+    assert!(
+        !updated.is_empty(),
+        "updated_at must serialize as non-empty"
+    );
+}
+
+#[tokio::test]
+async fn list_conversations_source_prefix_match() {
+    // Regression for trx-px1h: --source claude-code must match claude-code-<hash>.
+    let db_path = temp_db_path();
+    let db = Database::open(&db_path).await.expect("open db");
+
+    for source_id in ["claude-code-aaa111", "claude-code-bbb222", "pi"] {
+        let source = Source {
+            id: source_id.to_string(),
+            adapter: source_id.split('-').next().unwrap().to_string(),
+            path: None,
+            last_sync_at: None,
+            config: serde_json::json!({}),
+        };
+        db.upsert_source(&source).await.expect("upsert source");
+
+        let conv = Conversation {
+            id: Uuid::new_v4(),
+            source_id: source_id.to_string(),
+            external_id: Some(format!("ext-{source_id}")),
+            readable_id: None,
+            platform_id: None,
+            title: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            metadata: serde_json::json!({}),
+            harness: None,
+            version: 0,
+            message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
+        };
+        db.upsert_conversation(&conv).await.expect("upsert");
+    }
+
+    // Prefix match: "claude-code" should pick up both hashed sources.
+    let opts = ListConversationsOptions {
+        source_id: Some("claude-code".to_string()),
+        ..Default::default()
+    };
+    let convs = db.list_conversations(opts).await.expect("list");
+    assert_eq!(convs.len(), 2);
+
+    // Exact match still works.
+    let opts = ListConversationsOptions {
+        source_id: Some("pi".to_string()),
+        ..Default::default()
+    };
+    let convs = db.list_conversations(opts).await.expect("list");
+    assert_eq!(convs.len(), 1);
+}
+
+#[tokio::test]
 async fn count_conversations_accurate() {
     let db_path = temp_db_path();
     let db = Database::open(&db_path).await.expect("open db");

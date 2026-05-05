@@ -111,6 +111,11 @@ format = "codex"
 command = "codex resume {session_id}"
 session_dir = "~/.codex/sessions"
 
+[resume.agents.hermes]
+format = "hermes"
+command = "hermes --session {session_id}"
+session_dir = "~/.hermes/sessions"
+
 [resume.agents.opencode]
 format = "opencode"
 command = "opencode"
@@ -133,6 +138,7 @@ session_dir = "~/.local/share/goose/sessions"
 # |-------------|----------------------------------------|---------------------------------|
 # | claude-code | ~/.claude/projects                     | Claude Code CLI sessions        |
 # | codex       | ~/.codex/sessions                      | OpenAI Codex CLI sessions       |
+# | hermes      | ~/.hermes/sessions                     | Hermes Agent sessions           |
 # | opencode    | ~/.local/share/opencode                | OpenCode sessions               |
 # | pi          | ~/.pi/agent/sessions                   | Pi coding agent sessions        |
 # | aider       | ~/projects, ~/work, ~/src              | .aider.chat.history.md files    |
@@ -155,6 +161,12 @@ auto_sync = true
 id = "codex"
 adapter = "codex"
 path = "~/.codex/sessions"
+auto_sync = true
+
+[[sources]]
+id = "hermes"
+adapter = "hermes"
+path = "~/.hermes/sessions"
 auto_sync = true
 
 [[sources]]

@@ -185,6 +185,14 @@ impl Default for ResumeConfig {
             },
         );
         agents.insert(
+            "hermes".to_string(),
+            AgentResumeConfig {
+                format: "hermes".to_string(),
+                command: "hermes --session {session_id}".to_string(),
+                session_dir: "~/.hermes/sessions".to_string(),
+            },
+        );
+        agents.insert(
             "opencode".to_string(),
             AgentResumeConfig {
                 format: "opencode".to_string(),

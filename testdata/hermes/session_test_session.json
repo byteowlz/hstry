@@ -1,0 +1,48 @@
+{
+  "session_id": "test_session",
+  "model": "test-model",
+  "base_url": "http://localhost:8000/v1",
+  "platform": "cli",
+  "session_start": "2023-11-14T12:00:00.000000",
+  "last_updated": "2023-11-14T12:00:30.000000",
+  "system_prompt": "You are a helpful test agent.",
+  "message_count": 4,
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello hermes",
+      "reasoning": null,
+      "timestamp": "2023-11-14T12:00:01.000000",
+      "tool_calls": null
+    },
+    {
+      "role": "assistant",
+      "content": "Hi! What can I help with?",
+      "reasoning": "User greeted me; respond briefly.",
+      "timestamp": "2023-11-14T12:00:02.000000",
+      "tool_calls": null
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "timestamp": "2023-11-14T12:00:10.000000",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "ls",
+            "arguments": "{\"path\":\".\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "file.txt\n",
+      "tool_call_id": "call_1",
+      "tool_name": "ls",
+      "timestamp": "2023-11-14T12:00:11.000000"
+    }
+  ]
+}

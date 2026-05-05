@@ -104,6 +104,7 @@ export type ExportFormat =
   | 'chatgpt'
   | 'gemini'
   | 'aider'
+  | 'hermes'
   | 'pi';
 
 /** Options for exporting conversations */

@@ -11,6 +11,51 @@ With systemd Restart=always, this creates a crash-loop (1100+ restarts observed 
 ...
 
 
+### [trx-70as] hstry list JSON output: timestamps are missing/empty (P1, bug)
+## Problem
+When running `hstry list -l 50 --json`, the timestamp fields (`created_at`) appear to be empty or missing in the JSON output, making it impossible to sort/filter by date programmatically.
+
+## Observed Today
+The JSON output shows:
+...
+
+
+### [trx-857e] Unified first-real-user-message extraction for all adapters (P1, epic)
+## Problem
+Every adapter (pi, codex, claude-code, opencode, etc.) has its own way of determining the conversation title and first user message. None of them properly handle:
+1. Skipping AGENTS.md / system prompts to find actual user intent
+2. Extracting a meaningful "task description" for agents
+
+...
+
+
+### [trx-czh4] Add agent-optimized JSON output format for list/search commands (P1, feature)
+## Problem
+Agents need a structured, machine-readable way to quickly learn about previous tasks. The current JSON output from `hstry list` is human-friendly but not optimized for agent consumption.
+
+## Observed Today
+When trying to get a quick overview of recent work:
+...
+
+
+### [trx-6cj8] Claude Code adapter: All conversations show as 'Untitled' (P1, bug)
+## Problem
+When syncing Claude Code sessions, all conversations appear as "Untitled" in hstry list output. This makes it impossible for agents to quickly scan what previous work was done.
+
+## Observed Today
+- Over 180 conversations in the last 200 items from source `claude-code-b7366396`
+...
+
+
+### [trx-rfxp] Codex adapter: AGENTS.md setup prompts become conversation titles (P1, bug)
+## Problem
+When syncing Codex sessions, the adapter uses the first user message as part of the title via `buildTitle()` in `adapters/codex/adapter.ts`. This causes noisy titles like:
+
+```
+"New project - 2026-05-04 - # AGENTS.md instructions for /Users/tommyfalkowski/Documents/New proj"
+...
+
+
 ### [trx-z42c] SOTA sync architecture: event-driven incremental ingestion + outbox indexing (P1, epic)
 Replace frequent full sync loops with an event-driven incremental pipeline to eliminate idle CPU spikes and improve scalability.
 
@@ -38,6 +83,51 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 ### [trx-rs72] Remote history sync over SSH (hstry) (P1, epic)
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
+
+### [trx-273f] Add Hermes Agent adapter for hstry (P2, feature)
+## Overview
+Add support for syncing Hermes Agent (https://github.com/nousresearch/hermes-agent) conversations into hstry.
+
+## Hermes Agent Overview
+- Self-improving AI agent with 133k+ stars
+...
+
+
+### [trx-px1h] Source ID includes hash suffix - makes filtering confusing (P2, bug)
+## Problem
+The `source_id` field in hstry list output includes a hash suffix that makes filtering confusing and difficult.
+
+## Observed Today
+```
+...
+
+
+### [trx-8av2] Extract and store task outcomes/actions from conversations (P2, feature)
+## Problem
+When an agent is looking for context about "what did the user work on", just knowing the first message/title is often not enough. The agent needs to know WHAT WAS ACCOMPLISHED in each session.
+
+## Observed Today
+Trying to understand recent work required reading through multiple conversation summaries. Even when titles were available, they only showed the initial request, not what was actually done.
+...
+
+
+### [trx-f12y] Improve hstry list TUI: show full workspace path on hover/expand (P2, task)
+## Problem
+In the terminal TUI output for `hstry list`, the workspace column is truncated to ~25-30 characters, making it hard to see which project/directory the conversation was in.
+
+## Observed Today
+The list output showed truncated paths like:
+...
+
+
+### [trx-gva0] Add date filtering to hstry list command (P2, feature)
+## Problem
+When trying to understand "what I did the last couple of days", there's no easy way to filter `hstry list` by date range. The `hstry search` command has `--after` and `--before` options, but `list` doesn't.
+
+## Observed Today
+Tried:
+...
+
 
 ### [trx-smd7] Add tests for parallel sync correctness (P2, task)
 

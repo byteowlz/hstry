@@ -39,6 +39,15 @@ Expose ReadService.GetMessageEvents for incremental history reads and add conver
 
 ### [trx-en2q] Canonical part-based chat schema for Octo + hstry (P1, epic)
 
+### [trx-526a] Claude Code adapter: detect and merge resume/continuation fragments (P2, bug)
+When a Claude Code session is resumed (or interrupted and re-attempted) it produces a new .jsonl file with a new sessionId in the same project directory. The hstry-side claude-code adapter currently treats each .jsonl as a standalone Conversation, so users see duplicated/fragmented entries (e.g. three 'look at trx' conversations with 3, 2, 4 messages each).
+
+There is no explicit cross-file link in the JSONL (no parentSessionId / resumedFrom). Need a heuristic merge:
+- Same encoded-cwd directory (workspace)
+- Same first user message (after stripping system context)
+...
+
+
 ### [trx-8av2] Extract and store task outcomes/actions from conversations (P2, feature)
 ## Status (2026-05-05)
 

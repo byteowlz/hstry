@@ -165,6 +165,25 @@ release: build-release
     @echo "Binary sizes:"
     @find target/release -maxdepth 1 -type f -perm +111 ! -name "*.d" -exec ls -lh {} \; 2>/dev/null || true
 
+# Bump the workspace version locally (level = patch | minor | major)
+bump level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LEVEL="{{level}}"
+    CURRENT=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+    IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+    case "$LEVEL" in
+        major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+        minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+        patch) PATCH=$((PATCH + 1)) ;;
+        *) echo "Error: level must be patch, minor, or major"; exit 1 ;;
+    esac
+    NEW="$MAJOR.$MINOR.$PATCH"
+    sed -i "s/^version = .*/version = \"$NEW\"/" Cargo.toml
+    cargo update --workspace --offline >/dev/null 2>&1 || true
+    echo "Bumped version: $CURRENT -> $NEW"
+    echo "Review, then 'just release-bump $NEW' to commit, tag, and push."
+
 # Release: bump version, commit, tag, and push
 release-bump version:
     #!/usr/bin/env bash

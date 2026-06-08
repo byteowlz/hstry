@@ -3114,12 +3114,29 @@ fn sanitize_fts_query(query: &str) -> String {
         return String::new();
     }
 
-    if query.contains(':') || query.contains('"') {
-        let escaped = query.replace('"', "\"\"");
-        return format!("\"{escaped}\"");
+    // Quote each whitespace-separated token as an FTS5 string literal. The
+    // FTS5 query parser otherwise treats characters like `-`, `:`, `(`, `)`,
+    // and `*` as operators, so a plain search such as `hp-z8` is parsed as
+    // `hp NOT z8` / a column filter and fails with "no such column: z8".
+    // Quoting neutralizes those characters while preserving the default
+    // implicit-AND semantics between tokens. A trailing `*` is kept outside
+    // the quotes so prefix searches (`work*`) still work.
+    let mut terms = Vec::new();
+    for token in query.split_whitespace() {
+        let is_prefix = token.ends_with('*');
+        let stem = token.trim_end_matches('*');
+        if stem.is_empty() {
+            continue;
+        }
+        let escaped = stem.replace('"', "\"\"");
+        if is_prefix {
+            terms.push(format!("\"{escaped}\"*"));
+        } else {
+            terms.push(format!("\"{escaped}\""));
+        }
     }
 
-    query.to_string()
+    terms.join(" ")
 }
 
 fn is_like_pattern(value: &str) -> bool {
@@ -3283,3 +3300,34 @@ fn readable_id_from_metadata(metadata: &serde_json::Value) -> Option<String> {
 // Removed: generate_readable_id() -- hstry must not fabricate readable_ids.
 // The harness (Pi, opencode, etc.) owns readable_id generation. If the source
 // adapter doesn't provide one, hstry stores NULL.
+
+#[cfg(test)]
+mod fts_query_tests {
+    use super::sanitize_fts_query;
+
+    #[test]
+    fn quotes_tokens_to_neutralize_operators() {
+        // A bare hyphen previously caused FTS5 to parse `hp-z8` as a column
+        // filter ("no such column: z8").
+        assert_eq!(sanitize_fts_query("hp-z8"), "\"hp-z8\"");
+        assert_eq!(sanitize_fts_query("hp z8"), "\"hp\" \"z8\"");
+        assert_eq!(sanitize_fts_query("(weird:stuff)"), "\"(weird:stuff)\"");
+    }
+
+    #[test]
+    fn preserves_trailing_prefix_star() {
+        assert_eq!(sanitize_fts_query("work*"), "\"work\"*");
+        assert_eq!(sanitize_fts_query("hp-z*"), "\"hp-z\"*");
+    }
+
+    #[test]
+    fn escapes_embedded_quotes() {
+        assert_eq!(sanitize_fts_query("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn empty_and_star_only_collapse() {
+        assert_eq!(sanitize_fts_query("   "), "");
+        assert_eq!(sanitize_fts_query("*"), "");
+    }
+}

@@ -113,8 +113,17 @@ pub async fn try_service_search(
     };
 
     let request = search_request_from_opts(query, opts);
-    let Ok(response) = client.search(request).await else {
-        return Ok(None);
+    // Distinguish "couldn't reach the service" (return None so the caller can
+    // report it as unavailable) from "the service answered with an error"
+    // (surface the real cause instead of masking it as "service unavailable").
+    let response = match client.search(request).await {
+        Ok(response) => response,
+        Err(status) => {
+            return Err(crate::Error::Other(format!(
+                "search service error: {}",
+                status.message()
+            )));
+        }
     };
 
     let hits = response

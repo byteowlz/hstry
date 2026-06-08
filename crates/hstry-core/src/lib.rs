@@ -10,9 +10,11 @@ pub mod error;
 pub mod models;
 pub mod parts;
 pub mod paths;
+pub mod peek;
 pub mod remote;
 pub mod schema;
 pub mod service;
+pub mod source_registry;
 
 pub use config::Config;
 pub use db::Database;

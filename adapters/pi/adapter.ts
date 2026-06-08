@@ -32,6 +32,7 @@ import {
   toolCallPart,
   toolResultPart,
   textOnlyParts,
+  isUnderCanonicalRoot,
 } from '../types/index.ts';
 
 const DEFAULT_PI_PATH = join(homedir(), '.pi', 'agent', 'sessions');
@@ -171,6 +172,10 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // trx-gzfh defense in depth: pi only owns ~/.pi/agent/sessions.
+    if (!isUnderCanonicalRoot(path, DEFAULT_PI_PATH)) {
+      return null;
+    }
     const files = await findJsonlFiles(path, { shallowOnly: false });
     if (files.length === 0) return null;
 

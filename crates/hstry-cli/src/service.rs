@@ -1302,21 +1302,56 @@ impl ServiceState {
     }
 
     async fn ensure_config_sources(&self) -> Result<()> {
+        // trx-gzfh: validate config-driven sources against the
+        // invariant. A bad config row is a hard error; the service
+        // refuses to register it rather than silently creating a
+        // spurious source.
+        let canonical_roots = resolve_canonical_roots(&self.runner).await;
         for source in &self.config.sources {
             let existing = self.db.get_source(&source.id).await?;
+            let others: Vec<Source> = self
+                .db
+                .list_sources()
+                .await?
+                .into_iter()
+                .filter(|s| s.id != source.id)
+                .collect();
+
             let entry = match existing {
                 Some(mut entry) => {
-                    entry.adapter.clone_from(&source.adapter);
-                    entry.path = Some(source.path.clone());
+                    let adapter_changed = entry.adapter != source.adapter;
+                    let path_changed =
+                        entry.path.as_deref().map(str::trim).unwrap_or("") != source.path.trim();
+                    if adapter_changed || path_changed {
+                        let validated = hstry_core::source_registry::validate_new_source(
+                            &source.adapter,
+                            &source.path,
+                            source.id.clone(),
+                            entry.config.clone(),
+                            &canonical_roots,
+                            &others,
+                            |p| p.is_dir(),
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!("config source '{id}' rejected: {e}", id = source.id)
+                        })?;
+                        entry.adapter = validated.adapter;
+                        entry.path = validated.path;
+                    }
                     entry
                 }
-                None => Source {
-                    id: source.id.clone(),
-                    adapter: source.adapter.clone(),
-                    path: Some(source.path.clone()),
-                    last_sync_at: None,
-                    config: serde_json::Value::Object(serde_json::Map::default()),
-                },
+                None => hstry_core::source_registry::validate_new_source(
+                    &source.adapter,
+                    &source.path,
+                    source.id.clone(),
+                    serde_json::Value::Object(serde_json::Map::default()),
+                    &canonical_roots,
+                    &others,
+                    |p| p.is_dir(),
+                )
+                .map_err(|e| {
+                    anyhow::anyhow!("config source '{id}' rejected: {e}", id = source.id)
+                })?,
             };
             self.db.upsert_source(&entry).await?;
         }
@@ -1449,43 +1484,64 @@ impl ServiceState {
             return Ok(());
         }
 
-        // Check if this exact path already exists
-        if self
-            .db
-            .get_source_by_adapter_path(adapter_name, &path_str)
-            .await?
-            .is_some()
-        {
-            return Ok(());
-        }
-
-        // Check if this path is a child of an existing source for the same adapter
-        // This prevents creating sources for individual files when parent directory is already a source
-        let sources = self.db.list_sources().await?;
-        let normalized_path = std::path::Path::new(&path_str);
-        for existing in &sources {
-            if existing.adapter != adapter_name {
-                continue;
-            }
-            if let Some(existing_path) = &existing.path
-                && let Ok(existing) = std::path::Path::new(existing_path).canonicalize()
-                && let Ok(path_canon) = normalized_path.canonicalize()
-                && path_canon.starts_with(&existing)
-            {
-                return Ok(());
-            }
-        }
-
+        // trx-gzfh: route auto-discovery through the source-registration
+        // chokepoint. The validator silently no-ops for inputs that are
+        // already-registered or sub-paths of existing sources (the common
+        // case during a workspace walk). Other invariant violations are
+        // logged and skipped — discovery must never produce a spurious
+        // source row.
         let uuid = uuid::Uuid::new_v4().to_string();
         let short = uuid.split('-').next().unwrap_or(uuid.as_str());
         let source_id = format!("{adapter_name}-{short}");
 
-        let source = Source {
-            id: source_id.clone(),
-            adapter: adapter_name.to_string(),
-            path: Some(path_str),
-            last_sync_at: None,
-            config: serde_json::Value::Object(serde_json::Map::default()),
+        let canonical_roots = resolve_canonical_roots(&self.runner).await;
+        let existing_sources = self.db.list_sources().await?;
+
+        // Skip silently if path is already registered or covered by an
+        // existing source — discovery is supposed to be idempotent.
+        if existing_sources.iter().any(|s| {
+            let same_adapter = s.adapter == adapter_name;
+            let path_matches = s
+                .path
+                .as_deref()
+                .map(|p| {
+                    let normalized = p.trim_end_matches('/');
+                    let candidate = path_str.trim_end_matches('/');
+                    let candidate_p = std::path::Path::new(candidate);
+                    let existing_p = std::path::Path::new(normalized);
+                    candidate == normalized || candidate_p.starts_with(existing_p)
+                })
+                .unwrap_or(false);
+            same_adapter && path_matches
+        }) {
+            return Ok(());
+        }
+
+        let source = match hstry_core::source_registry::validate_new_source(
+            adapter_name,
+            &path_str,
+            source_id.clone(),
+            serde_json::Value::Object(serde_json::Map::default()),
+            &canonical_roots,
+            &existing_sources,
+            |p| p.is_dir(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                // Discovery is best-effort; refuse silently except on
+                // first hit so we don't flood logs during a workspace
+                // walk. Concrete categories that matter here:
+                //   - cross-harness territory: the file genuinely belongs
+                //     to a different adapter's source.
+                //   - sub-path of existing source: already handled above
+                //     but kept as a defense-in-depth net.
+                //   - not-a-directory: discovery handed us a file path,
+                //     which is fine to ignore.
+                tracing::debug!(
+                    "discovery skipped path '{path_str}' for adapter '{adapter_name}': {e}"
+                );
+                return Ok(());
+            }
         };
         self.db.upsert_source(&source).await?;
         println!("Discovered source: {source_id} ({adapter_name})");
@@ -1825,6 +1881,33 @@ async fn collect_watch_paths(
     }
 
     paths
+}
+
+/// Resolve canonical roots for every available adapter. Used by the
+/// source-registration chokepoint (trx-gzfh) during workspace discovery
+/// to enforce the cross-harness territory rule.
+async fn resolve_canonical_roots(
+    runner: &AdapterRunner,
+) -> hstry_core::source_registry::CanonicalRoots {
+    let mut roots: hstry_core::source_registry::CanonicalRoots = HashMap::new();
+    for adapter_name in runner.list_adapters() {
+        let Some(adapter_path) = runner.find_adapter(&adapter_name) else {
+            continue;
+        };
+        let Ok(info) = runner.get_info(&adapter_path).await else {
+            continue;
+        };
+        let expanded: Vec<PathBuf> = info
+            .default_paths
+            .iter()
+            .map(|p| {
+                let path = Config::expand_path(p);
+                PathBuf::from(path.to_string_lossy().trim_end_matches('/').to_string())
+            })
+            .collect();
+        roots.insert(adapter_name, expanded);
+    }
+    roots
 }
 
 fn enabled_adapters(config: &Config, runner: &AdapterRunner) -> HashSet<String> {

@@ -25,6 +25,7 @@ import {
   thinkingPart,
   toolCallPart,
   toolResultPart,
+  isUnderCanonicalRoot,
 } from '../types/index.ts';
 import { findFirstRealUserMessage, formatFrumTitle } from '../types/first-message.ts';
 
@@ -71,6 +72,10 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // trx-gzfh defense in depth: hermes owns ~/.hermes/sessions.
+    if (!isUnderCanonicalRoot(path, DEFAULT_HERMES_PATH)) {
+      return null;
+    }
     const files = await findSessionFiles(path);
     return files.length > 0 ? 0.9 : null;
   },

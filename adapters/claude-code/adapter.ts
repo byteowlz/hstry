@@ -22,6 +22,7 @@ import {
   toolCallPart,
   toolResultPart,
   textOnlyParts,
+  isUnderCanonicalRoot,
 } from '../types/index.ts';
 import { findFirstRealUserMessage, formatFrumTitle } from '../types/first-message.ts';
 
@@ -87,6 +88,14 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // trx-gzfh defense in depth: claude-code only owns ~/.claude/projects.
+    // Refuse paths outside that tree even if the JSONL line-shape matches
+    // (e.g. pi-orchestrated worker reports inside ~/.pi/agent/sessions
+    // also look claude-code-shaped). The source-registration chokepoint
+    // refuses those paths too, but adapters should never claim them.
+    if (!isUnderCanonicalRoot(path, DEFAULT_CLAUDE_PATH)) {
+      return null;
+    }
     const files = await findJsonlFiles(path, { shallowOnly: true });
     return files.length > 0 ? 0.9 : null;
   },
@@ -254,16 +263,26 @@ function extractMessages(entries: JsonlEntry[]): Message[] {
     const msg = entry.message;
     if (!msg || !msg.role) continue;
 
-    const content = extractContent(msg.content);
-    if (!content) continue;
-
     const createdAt = parseTimestamp(entry.timestamp);
-    const parts = buildClaudeCodeParts(msg.content) ?? textOnlyParts(content);
+    const parts = buildClaudeCodeParts(msg.content);
+    let content = extractContent(msg.content);
+
+    // Pure tool_use assistant turns have no text/thinking/tool_result blocks,
+    // so extractContent returns "". Keep them: their tool_call parts are the
+    // only record of which command/file the agent touched. Synthesize a brief
+    // searchable content string from the tool_call parts so FTS still works.
+    if (!content && parts) {
+      content = summarizeToolCalls(parts);
+    }
+
+    if (!content && (!parts || parts.length === 0)) continue;
+
+    const finalParts = parts ?? textOnlyParts(content);
 
     messages.push({
       role: mapRole(msg.role),
       content,
-      parts,
+      parts: finalParts,
       createdAt,
       model: msg.model,
       metadata: {
@@ -297,6 +316,27 @@ function buildClaudeCodeParts(content?: string | ClaudeContentBlock[]): CanonPar
     }
   }
   return parts.length > 0 ? parts : undefined;
+}
+
+function summarizeToolCalls(parts: CanonPart[]): string {
+  const lines: string[] = [];
+  for (const part of parts) {
+    if (part.type !== 'tool_call') continue;
+    const input = (part as { input?: unknown }).input;
+    const hint = toolInputHint(input);
+    lines.push(hint ? `${part.name}: ${hint}` : part.name);
+  }
+  return lines.join('\n');
+}
+
+function toolInputHint(input: unknown): string {
+  if (input == null || typeof input !== 'object') return '';
+  const obj = input as Record<string, unknown>;
+  for (const key of ['command', 'file_path', 'path', 'filePath', 'pattern', 'query', 'url']) {
+    const v = obj[key];
+    if (typeof v === 'string' && v) return v.slice(0, 200);
+  }
+  return '';
 }
 
 function extractContent(content?: string | ClaudeContentBlock[]): string {

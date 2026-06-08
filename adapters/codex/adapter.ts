@@ -20,6 +20,7 @@ import {
   textOnlyParts,
   toolCallPart,
   toolResultPart,
+  isUnderAnyCanonicalRoot,
 } from '../types/index.ts';
 import { isSystemContext } from '../types/first-message.ts';
 
@@ -86,6 +87,11 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // trx-gzfh defense in depth: codex only owns ~/.codex/sessions and
+    // ~/.codex/archived_sessions.
+    if (!isUnderAnyCanonicalRoot(path, DEFAULT_PATHS)) {
+      return null;
+    }
     const files = await findRolloutFiles(path, { shallowOnly: true });
     return files.length > 0 ? 0.9 : null;
   },

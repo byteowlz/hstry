@@ -285,6 +285,15 @@ enum Command {
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+
+        /// Attach a token-efficient peek bundle to each result (files touched,
+        /// tool counts, last messages). Implies --json.
+        #[arg(long)]
+        peek: bool,
+
+        /// Truncate `last_assistant` to N chars in peek bundles (default 400).
+        #[arg(long, requires = "peek")]
+        peek_chars: Option<usize>,
     },
 
     /// Show a conversation
@@ -295,6 +304,16 @@ enum Command {
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Show a token-efficient peek bundle for a single conversation
+    Peek {
+        /// Conversation ID
+        id: String,
+
+        /// Truncate `last_assistant` to N chars (default 400).
+        #[arg(long)]
+        chars: Option<usize>,
     },
 
     /// Manage sources
@@ -996,6 +1015,8 @@ async fn main() -> Result<()> {
             after,
             before,
             input,
+            peek,
+            peek_chars,
         } => {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
@@ -1010,7 +1031,14 @@ async fn main() -> Result<()> {
             let before = input.as_ref().and_then(|v| v.before.clone()).or(before);
             let after_dt = after.as_deref().map(parse_date_filter).transpose()?;
             let before_dt = before.as_deref().map(parse_date_filter).transpose()?;
-            cmd_list(&db, source, workspace, limit, after_dt, before_dt, cli.json).await
+            if peek {
+                cmd_list_peek(
+                    &db, source, workspace, limit, after_dt, before_dt, peek_chars,
+                )
+                .await
+            } else {
+                cmd_list(&db, source, workspace, limit, after_dt, before_dt, cli.json).await
+            }
         }
         Command::Show { id, input } => {
             let db = Database::open(&config.database).await?;
@@ -1018,6 +1046,11 @@ async fn main() -> Result<()> {
             let input = read_input::<ShowInput>(input)?;
             let id = input.as_ref().map_or(id, |v| v.id.clone());
             cmd_show(&db, &id, cli.json).await
+        }
+        Command::Peek { id, chars } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            cmd_peek(&db, &id, chars, cli.json).await
         }
         Command::Source { command } => {
             let db = Database::open(&config.database).await?;
@@ -1200,7 +1233,21 @@ async fn main() -> Result<()> {
 }
 
 /// Ensure sources from config file are in the database.
-async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
+///
+/// trx-gzfh: New sources declared in `config.toml` are validated through
+/// the source-registration chokepoint before they hit the database, so a
+/// hand-edited config can't introduce a duplicate / sub-path / cross-
+/// harness source. Updates to *already-registered* sources (path or
+/// adapter changes) are validated against the rest of the source set as
+/// well. Bad rows in config cause `ensure_config_sources` to fail loudly
+/// rather than silently registering a spurious source.
+async fn ensure_config_sources(
+    db: &Database,
+    runner: &AdapterRunner,
+    config: &Config,
+) -> Result<()> {
+    let canonical_roots = resolve_canonical_roots(runner).await;
+
     for source in &config.sources {
         let existing = db.get_source(&source.id).await?;
         let expanded_path = hstry_core::Config::expand_path(&source.path);
@@ -1208,38 +1255,61 @@ async fn ensure_config_sources(db: &Database, config: &Config) -> Result<()> {
             .to_string_lossy()
             .trim_end_matches('/')
             .to_string();
+
+        // The validator inspects the *current* sources table excluding
+        // any row we are about to update. Without this filter, every
+        // legitimate update would trip Rule 1 (duplicate path).
+        let others: Vec<Source> = db
+            .list_sources()
+            .await?
+            .into_iter()
+            .filter(|s| s.id != source.id)
+            .collect();
+
         let entry = match existing {
             Some(mut entry) => {
-                let mut reset = false;
-                if entry.adapter != source.adapter {
-                    entry.adapter.clone_from(&source.adapter);
-                    reset = true;
-                }
                 let existing_normalized = entry
                     .path
                     .as_deref()
                     .map(|p| p.trim_end_matches('/').to_string())
                     .unwrap_or_default();
-                if existing_normalized != normalized_path {
-                    entry.path = Some(normalized_path);
-                    reset = true;
-                }
-                if reset {
+                let adapter_changed = entry.adapter != source.adapter;
+                let path_changed = existing_normalized != normalized_path;
+
+                if adapter_changed || path_changed {
+                    // Re-validate against the invariant before mutating.
+                    let validated = hstry_core::source_registry::validate_new_source(
+                        &source.adapter,
+                        &normalized_path,
+                        source.id.clone(),
+                        entry.config.clone(),
+                        &canonical_roots,
+                        &others,
+                        |p| p.is_dir(),
+                    )
+                    .map_err(|e| {
+                        anyhow::anyhow!("config source '{id}' rejected: {e}", id = source.id)
+                    })?;
+                    entry.adapter = validated.adapter;
+                    entry.path = validated.path;
                     entry.last_sync_at = None;
-                    if let serde_json::Value::Object(mut config) = entry.config.clone() {
-                        config.remove("cursor");
-                        entry.config = serde_json::Value::Object(config);
+                    if let serde_json::Value::Object(mut cfg) = entry.config.clone() {
+                        cfg.remove("cursor");
+                        entry.config = serde_json::Value::Object(cfg);
                     }
                 }
                 entry
             }
-            None => Source {
-                id: source.id.clone(),
-                adapter: source.adapter.clone(),
-                path: Some(normalized_path),
-                last_sync_at: None,
-                config: serde_json::Value::Object(serde_json::Map::default()),
-            },
+            None => hstry_core::source_registry::validate_new_source(
+                &source.adapter,
+                &normalized_path,
+                source.id.clone(),
+                serde_json::Value::Object(serde_json::Map::default()),
+                &canonical_roots,
+                &others,
+                |p| p.is_dir(),
+            )
+            .map_err(|e| anyhow::anyhow!("config source '{id}' rejected: {e}", id = source.id))?,
         };
         db.upsert_source(&entry).await?;
     }
@@ -1263,7 +1333,7 @@ async fn sync_sources(
     adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
 
     // Ensure sources from config are in the database
-    ensure_config_sources(db, config).await?;
+    ensure_config_sources(db, runner, config).await?;
 
     let sources = db.list_sources().await?;
 
@@ -1603,13 +1673,32 @@ async fn cmd_import(
         return Ok(());
     }
 
-    // Ensure source exists
-    let source = hstry_core::models::Source {
-        id: source_id.clone(),
-        adapter: adapter_name.clone(),
-        path: Some(normalized_source_path),
-        last_sync_at: None,
-        config: serde_json::json!({}),
+    // trx-gzfh: route through the source-registration chokepoint so
+    // import cannot create spurious sources (e.g. a path inside another
+    // harness's tree, an individual file, a duplicate of an existing
+    // source). Idempotent for an already-registered source.
+    let canonical_roots = resolve_canonical_roots(runner).await;
+    let existing_sources = db.list_sources().await?;
+    let source = match hstry_core::source_registry::validate_new_source(
+        &adapter_name,
+        &normalized_source_path,
+        source_id.clone(),
+        serde_json::json!({}),
+        &canonical_roots,
+        &existing_sources,
+        |p| p.is_dir(),
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            if json {
+                return emit_json(JsonResponse::<()> {
+                    ok: false,
+                    result: None,
+                    error: Some(e.to_string()),
+                });
+            }
+            anyhow::bail!("{e}");
+        }
     };
     db.upsert_source(&source).await?;
 
@@ -2195,6 +2284,132 @@ async fn cmd_list(
     Ok(())
 }
 
+async fn cmd_list_peek(
+    db: &Database,
+    source: Option<String>,
+    workspace: Option<String>,
+    limit: i64,
+    after: Option<chrono::DateTime<chrono::Utc>>,
+    before: Option<chrono::DateTime<chrono::Utc>>,
+    last_assistant_chars: Option<usize>,
+) -> Result<()> {
+    let dedup_across_sources = source.is_none();
+    let workspace_filter = workspace.map(|value| format!("%{value}%"));
+    let opts = hstry_core::db::ListConversationsOptions {
+        source_id: source,
+        workspace: workspace_filter,
+        after,
+        before,
+        limit: Some(if dedup_across_sources {
+            expanded_list_limit(limit)
+        } else {
+            limit
+        }),
+    };
+
+    let previews = if dedup_across_sources {
+        let mut deduped = dedup_conversation_previews(db.list_conversation_previews(opts).await?);
+        if limit > 0 {
+            deduped.truncate(limit as usize);
+        }
+        deduped
+    } else {
+        db.list_conversation_previews(opts).await?
+    };
+
+    let mut cfg = hstry_core::peek::PeekConfig::default();
+    if let Some(n) = last_assistant_chars {
+        cfg.last_assistant_chars = n;
+    }
+
+    let mut bundles = Vec::with_capacity(previews.len());
+    for preview in previews {
+        let messages = db.get_messages(preview.conversation.id).await?;
+        let bundle = hstry_core::peek::build_peek(&preview.conversation, &messages, &cfg);
+        bundles.push(bundle);
+    }
+
+    emit_json(JsonResponse {
+        ok: true,
+        result: Some(bundles),
+        error: None,
+    })
+}
+
+async fn cmd_peek(db: &Database, id: &str, chars: Option<usize>, json: bool) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(id)?;
+    let conv = db
+        .get_conversation(uuid)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+    let messages = db.get_messages(uuid).await?;
+
+    let mut cfg = hstry_core::peek::PeekConfig::default();
+    if let Some(n) = chars {
+        cfg.last_assistant_chars = n;
+    }
+    let bundle = hstry_core::peek::build_peek(&conv, &messages, &cfg);
+
+    if json {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(bundle),
+            error: None,
+        });
+    }
+
+    print_peek_text(&bundle);
+    Ok(())
+}
+
+fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
+    println!("{} [{}]", b.id, b.source);
+    if let Some(m) = &b.model {
+        println!("Model: {m}");
+    }
+    println!(
+        "Created: {} ({} min, {} msgs)",
+        b.created_at.format("%Y-%m-%d %H:%M"),
+        b.duration_min,
+        b.message_count
+    );
+    println!(
+        "Counts: user={}, assistant={}, tool_calls={}",
+        b.counts.user, b.counts.assistant, b.counts.tool_calls
+    );
+    if !b.tools.is_empty() {
+        let tools: Vec<String> = b
+            .tools
+            .iter()
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect();
+        println!("Tools: {}", tools.join(", "));
+    }
+    if !b.files_touched.is_empty() {
+        println!("Files touched:");
+        for f in &b.files_touched {
+            println!("  {f}");
+        }
+    }
+    if !b.bash_sample.is_empty() {
+        println!("Bash sample:");
+        for c in &b.bash_sample {
+            println!("  $ {c}");
+        }
+    }
+    if let Some(s) = &b.first_user {
+        println!("\nFirst user: {s}");
+    }
+    if let Some(s) = &b.last_user {
+        if Some(s) != b.first_user.as_ref() {
+            println!("Last user:  {s}");
+        }
+    }
+    if let Some(s) = &b.last_assistant {
+        println!("Last asst:  {s}");
+    }
+}
+
 async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(id)?;
     let conv = db
@@ -2291,12 +2506,32 @@ async fn cmd_source(
                 format!("{adapter_name}-{short}")
             });
 
-            let source = hstry_core::models::Source {
-                id: source_id.clone(),
-                adapter: adapter_name.clone(),
-                path: Some(path_str),
-                last_sync_at: None,
-                config: serde_json::Value::Object(serde_json::Map::default()),
+            // trx-gzfh: route through the source-registration chokepoint.
+            // This enforces the five invariant rules (no duplicate, no
+            // sub-path, no super-path, no file paths, no cross-harness
+            // territory) before any source row is created.
+            let canonical_roots = resolve_canonical_roots(runner).await;
+            let existing = db.list_sources().await?;
+            let source = match hstry_core::source_registry::validate_new_source(
+                &adapter_name,
+                &path_str,
+                source_id.clone(),
+                serde_json::Value::Object(serde_json::Map::default()),
+                &canonical_roots,
+                &existing,
+                |p| p.is_dir(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    if json {
+                        return emit_json(JsonResponse::<()> {
+                            ok: false,
+                            result: None,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                    anyhow::bail!("{e}");
+                }
             };
 
             db.upsert_source(&source).await?;
@@ -3071,7 +3306,7 @@ async fn cmd_web_sync(
             config.save_to_path(config_path)?;
         }
 
-        ensure_config_sources(db, &config).await?;
+        ensure_config_sources(db, &runner, &config).await?;
         let stats =
             sync_sources(db, &runner, &config, Some(source_id.clone()), None, !json).await?;
 
@@ -3335,6 +3570,10 @@ async fn cmd_quickstart(
     let mut sources_added = Vec::new();
     let mut sources_skipped = 0usize;
 
+    // trx-gzfh: validate each hit before mutating config.toml so a bad
+    // scan result doesn't poison the on-disk config file.
+    let canonical_roots = resolve_canonical_roots(runner).await;
+
     for hit in &hits {
         if config
             .sources
@@ -3351,6 +3590,29 @@ async fn cmd_quickstart(
         }
 
         let source_id = generate_source_id(&config, &hit.adapter);
+
+        // The source-registration chokepoint. Skip the hit (don't write
+        // it to config.toml) if validation fails — scan is supposed to be
+        // best-effort, not load-bearing.
+        let existing_sources = db.list_sources().await?;
+        if let Err(e) = hstry_core::source_registry::validate_new_source(
+            &hit.adapter,
+            &hit.path,
+            source_id.clone(),
+            serde_json::Value::Object(serde_json::Map::default()),
+            &canonical_roots,
+            &existing_sources,
+            |p| p.is_dir(),
+        ) {
+            tracing::debug!(
+                "quickstart skipped hit {adapter}:{path}: {e}",
+                adapter = hit.adapter,
+                path = hit.path
+            );
+            sources_skipped += 1;
+            continue;
+        }
+
         config.sources.push(hstry_core::config::SourceConfig {
             id: source_id.clone(),
             adapter: hit.adapter.clone(),
@@ -3369,7 +3631,7 @@ async fn cmd_quickstart(
         config.save_to_path(config_path)?;
     }
 
-    ensure_config_sources(db, &config).await?;
+    ensure_config_sources(db, runner, &config).await?;
 
     let stats = sync_sources(db, runner, &config, None, None, !json).await?;
     let sync_summary = SyncSummary {
@@ -3682,6 +3944,37 @@ fn cmd_adapter_repo(
     }
 
     Ok(())
+}
+
+/// Resolve canonical roots for every available adapter by asking each adapter
+/// for its `defaultPaths` and expanding `~`/env-vars. Used by the
+/// source-registration chokepoint (trx-gzfh) to enforce the territory rule.
+///
+/// Adapters that fail to load or return errors are simply omitted — the
+/// invariant degrades to "no allowed roots" for that adapter, which means
+/// registration will refuse anything (fail safe).
+async fn resolve_canonical_roots(
+    runner: &AdapterRunner,
+) -> hstry_core::source_registry::CanonicalRoots {
+    let mut roots: hstry_core::source_registry::CanonicalRoots = HashMap::new();
+    for adapter_name in runner.list_adapters() {
+        let Some(adapter_path) = runner.find_adapter(&adapter_name) else {
+            continue;
+        };
+        let Ok(info) = runner.get_info(&adapter_path).await else {
+            continue;
+        };
+        let expanded: Vec<PathBuf> = info
+            .default_paths
+            .iter()
+            .map(|p| {
+                let path = hstry_core::Config::expand_path(p);
+                PathBuf::from(path.to_string_lossy().trim_end_matches('/').to_string())
+            })
+            .collect();
+        roots.insert(adapter_name, expanded);
+    }
+    roots
 }
 
 async fn scan_hits(runner: &AdapterRunner, config: &Config) -> Result<Vec<ScanHit>> {

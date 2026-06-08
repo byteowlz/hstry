@@ -39,6 +39,7 @@ import {
   toolCallPart,
   toolResultPart,
   textOnlyParts,
+  isUnderCanonicalRoot,
 } from '../types/index.ts';
 
 // Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node)
@@ -255,6 +256,10 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
+    // trx-gzfh defense in depth: opencode owns ~/.local/share/opencode.
+    if (!isUnderCanonicalRoot(path, DEFAULT_OPENCODE_PATH)) {
+      return null;
+    }
     const layout = await detectLayout(path);
     return layout !== 'none' ? 0.95 : null;
   },

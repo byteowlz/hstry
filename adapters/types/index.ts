@@ -176,6 +176,42 @@ export function textOnlyParts(content: string): CanonPart[] | undefined {
   return [textPart(content)];
 }
 
+/**
+ * Returns true iff `candidate` is equal to or a descendant of `root`.
+ *
+ * Used by harness adapters (claude-code, pi, codex, opencode, hermes)
+ * to refuse paths outside their canonical territory in `detect()`. This
+ * is the defense-in-depth layer for trx-gzfh — the Rust source-
+ * registration chokepoint enforces the same invariant, but adapters
+ * should never claim a path they don't own in the first place.
+ *
+ * Comparison is exact-string based after stripping trailing slashes;
+ * we do not canonicalize symlinks because adapters don't have a stable
+ * filesystem view (the user may be running them in containers, on
+ * mounted volumes, etc.). Callers should pass already-expanded paths
+ * (`~` resolved to `homedir()`).
+ *
+ * Edge case: a sibling directory with the same prefix (e.g.
+ * `~/.claude/projects-other` next to `~/.claude/projects`) must NOT
+ * count as a descendant. We require the boundary character to be a
+ * path separator.
+ */
+export function isUnderCanonicalRoot(candidate: string, root: string): boolean {
+  const c = candidate.replace(/\/+$/, '');
+  const r = root.replace(/\/+$/, '');
+  if (c === r) return true;
+  // Match `${r}/...` only — not `${r}-other` or `${r}.bak`.
+  return c.startsWith(r + '/');
+}
+
+/**
+ * Returns true iff `candidate` is inside any of the given canonical
+ * roots. Convenience wrapper around `isUnderCanonicalRoot`.
+ */
+export function isUnderAnyCanonicalRoot(candidate: string, roots: string[]): boolean {
+  return roots.some(root => isUnderCanonicalRoot(candidate, root));
+}
+
 /** Adapter metadata */
 export interface AdapterInfo {
   name: string;

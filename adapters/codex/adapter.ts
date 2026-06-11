@@ -7,6 +7,33 @@
 import { readdir, readFile, stat } from 'fs/promises';
 import { basename, extname, join } from 'path';
 import { homedir } from 'os';
+
+// Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node)
+let openDb: ((path: string) => SqliteDb) | null = null;
+
+interface SqliteDb {
+  prepare(sql: string): SqliteStatement;
+  close(): void;
+}
+interface SqliteStatement {
+  all(...params: unknown[]): unknown[];
+}
+
+try {
+  if (typeof Bun !== 'undefined') {
+    // @ts-ignore - bun:sqlite is Bun-only
+    const { Database: BunDb } = await import('bun:sqlite');
+    openDb = (path: string) => new BunDb(path, { readonly: true }) as unknown as SqliteDb;
+  } else {
+    const mod = await import('better-sqlite3');
+    const BetterSqlite = mod.default;
+    openDb = (path: string) => BetterSqlite(path, { readonly: true }) as unknown as SqliteDb;
+  }
+} catch {
+  // SQLite not available - state_5.sqlite thread titles will be skipped
+}
+
+declare const Bun: unknown;
 import type {
   Adapter,
   AdapterInfo,
@@ -63,6 +90,13 @@ interface CodexTurnContext {
   cwd?: string;
 }
 
+interface ThreadRow {
+  id: string;
+  title: string;
+  model: string | null;
+  archived: number;
+}
+
 interface CodexResponseItem {
   type?: string;
   role?: string;
@@ -81,7 +115,7 @@ const adapter: Adapter = {
     return {
       name: 'codex',
       displayName: 'Codex CLI',
-      version: '1.0.0',
+      version: '1.1.0',
       defaultPaths: DEFAULT_PATHS,
     };
   },
@@ -100,10 +134,11 @@ const adapter: Adapter = {
     const files = await findRolloutFiles(path, { shallowOnly: false });
     if (files.length === 0) return [];
 
+    const threadIndex = loadThreadIndex(path);
     const conversations: Conversation[] = [];
 
     for (const filePath of files) {
-      const conv = await parseRolloutFile(filePath, opts);
+      const conv = await parseRolloutFile(filePath, threadIndex, opts);
       if (conv) {
         conversations.push(conv);
       }
@@ -152,8 +187,52 @@ const adapter: Adapter = {
   },
 };
 
+/**
+ * Load thread metadata (titles, model, archived flag) from Codex's
+ * state_5.sqlite index. The desktop app and newer CLIs maintain it in
+ * CODEX_HOME next to the sessions directory; rollout JSONL files stay
+ * authoritative for message content.
+ */
+function loadThreadIndex(searchPath: string): Map<string, ThreadRow> {
+  const index = new Map<string, ThreadRow>();
+  if (!openDb) return index;
+
+  const dbPath = join(resolveCodexHome(searchPath), 'state_5.sqlite');
+  let db: SqliteDb | null = null;
+  try {
+    db = openDb(dbPath);
+    const rows = db
+      .prepare("SELECT id, title, model, archived FROM threads WHERE title != ''")
+      .all() as ThreadRow[];
+    for (const row of rows) {
+      if (row?.id) index.set(row.id, row);
+    }
+  } catch {
+    // Missing DB, locked file, or older schema - fall back to derived titles
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+  return index;
+}
+
+function resolveCodexHome(searchPath: string): string {
+  const segments = searchPath.split(/[\\/]/);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i] === 'sessions' || segments[i] === 'archived_sessions') {
+      const home = segments.slice(0, i).join('/');
+      if (home) return home;
+    }
+  }
+  return DEFAULT_CODEX_HOME;
+}
+
 async function parseRolloutFile(
   filePath: string,
+  threadIndex: Map<string, ThreadRow>,
   opts?: ParseOptions
 ): Promise<Conversation | null> {
   const raw = await readFile(filePath, 'utf-8');
@@ -325,20 +404,23 @@ async function parseRolloutFile(
     }
   }
 
-  const title = sessionMeta?.cwd
+  const thread = sessionMeta?.id ? threadIndex.get(sessionMeta.id) : undefined;
+  const derivedTitle = sessionMeta?.cwd
     ? buildTitle(sessionMeta.cwd, createdAt, firstUserMessage)
     : firstUserMessage?.slice(0, 80);
+  const title = thread?.title || derivedTitle;
 
   return {
     externalId: sessionMeta?.id ?? basename(filePath),
     title: title || undefined,
     createdAt,
     updatedAt: lastTimestamp,
-    model,
+    model: model ?? thread?.model ?? undefined,
     workspace: sessionMeta?.cwd,
     messages,
     metadata: {
       file: filePath,
+      ...(thread?.archived ? { archived: true } : {}),
       forkedFromId: sessionMeta?.forked_from_id ?? undefined,
       originator: sessionMeta?.originator,
       cliVersion: sessionMeta?.cli_version,

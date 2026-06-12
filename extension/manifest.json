@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "hstry sync",
+  "version": "0.1.0",
+  "description": "Background-syncs your ChatGPT and Claude web conversations into a local hstry database.",
+  "permissions": ["alarms", "storage"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "hstry sync — click to sync now"
+  }
+}

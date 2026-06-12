@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>hstry sync settings</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 560px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        color: #222;
+      }
+      h1 { font-size: 1.3rem; }
+      label { display: block; margin: 0.8rem 0 0.2rem; font-weight: 600; }
+      input[type='number'], input[type='password'] { width: 12rem; padding: 0.3rem; }
+      .checkbox-row { margin: 0.4rem 0; font-weight: normal; }
+      button { margin-top: 1rem; padding: 0.4rem 1rem; }
+      table { border-collapse: collapse; margin-top: 1.5rem; width: 100%; }
+      th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; }
+      .error { color: #b00; }
+      .ok { color: #086a08; }
+      #saved { margin-left: 0.8rem; color: #086a08; }
+    </style>
+  </head>
+  <body>
+    <h1>hstry sync</h1>
+
+    <label for="port">hstry-api port</label>
+    <input id="port" type="number" min="1" max="65535" />
+
+    <label for="token">Ingest token (optional, must match --token / HSTRY_API_TOKEN)</label>
+    <input id="token" type="password" autocomplete="off" />
+
+    <label for="interval">Sync interval (minutes)</label>
+    <input id="interval" type="number" min="1" max="720" />
+
+    <label>Providers</label>
+    <div class="checkbox-row">
+      <label><input id="provider-chatgpt" type="checkbox" /> ChatGPT (incl. Teams workspaces)</label>
+    </div>
+    <div class="checkbox-row">
+      <label><input id="provider-claude" type="checkbox" /> Claude</label>
+    </div>
+
+    <button id="save">Save</button>
+    <button id="sync-now">Sync now</button>
+    <span id="saved"></span>
+
+    <table id="status-table">
+      <thead>
+        <tr><th>Provider</th><th>Last run</th><th>Last success</th><th>Synced</th><th>Status</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <script src="options.js" type="module"></script>
+  </body>
+</html>

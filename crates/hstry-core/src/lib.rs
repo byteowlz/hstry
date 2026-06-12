@@ -7,7 +7,9 @@
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod ingest;
 pub mod models;
+pub mod parsed;
 pub mod parts;
 pub mod paths;
 pub mod peek;

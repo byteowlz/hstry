@@ -118,13 +118,20 @@ chrome.alarms.onAlarm.addListener(alarm => {
 chrome.action.onClicked.addListener(() => runSync('manual'));
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Acknowledge synchronously and let the work continue in the background. A
+  // full sync can outlive the message channel (or the worker), so we must not
+  // hold the channel open waiting for it — status flows to the UI via
+  // chrome.storage instead. Returning true here would reproduce the
+  // "message channel closed before a response was received" error.
   if (message?.type === 'syncNow') {
-    runSync('manual').then(() => sendResponse({ ok: true }));
-    return true;
+    runSync('manual');
+    sendResponse({ ok: true });
+    return false;
   }
   if (message?.type === 'settingsChanged') {
-    ensureAlarm().then(() => sendResponse({ ok: true }));
-    return true;
+    ensureAlarm();
+    sendResponse({ ok: true });
+    return false;
   }
   return false;
 });

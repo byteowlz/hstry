@@ -5,6 +5,7 @@ import {
   NotLoggedInError,
   fetchJson,
   shortId,
+  sleep,
   textPart,
   thinkingPart,
   toMs,
@@ -15,6 +16,9 @@ const PAGE_SIZE = 50;
 // Refetch a little history on every run so near-simultaneous edits are not
 // missed between polls.
 const OVERLAP_MS = 5 * 60 * 1000;
+// Pace detail requests to stay under ChatGPT's rate limit. Backoff in
+// fetchJson handles bursts, but pacing avoids tripping 429 in the first place.
+const THROTTLE_MS = 400;
 
 async function getAccessToken() {
   const data = await fetchJson(`${BASE}/api/auth/session`);
@@ -163,9 +167,13 @@ export async function syncChatGPT({ state, push, log }) {
     const lastSyncMs = state?.accounts?.[key]?.lastSyncMs ?? null;
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = Date.now();
+    let failures = 0;
 
     let batch = [];
+    let first = true;
     for await (const item of listUpdatedConversations(token, account.id, since)) {
+      if (!first) await sleep(THROTTLE_MS);
+      first = false;
       try {
         const detail = await fetchJson(`${BASE}/backend-api/conversation/${item.id}`, {
           headers: authHeaders(token, account.id),
@@ -173,6 +181,7 @@ export async function syncChatGPT({ state, push, log }) {
         const conv = toParsedConversation(detail, item.id, account.id);
         if (conv) batch.push(conv);
       } catch (err) {
+        failures++;
         log(`chatgpt: skipping conversation ${item.id}: ${err.message}`);
       }
       if (batch.length >= 10) {
@@ -184,7 +193,16 @@ export async function syncChatGPT({ state, push, log }) {
       total += await push(sourceId, 'chatgpt-web', batch);
     }
 
-    newState.accounts[key] = { lastSyncMs: runStartedMs, name: account.name };
+    // Only advance the watermark on a clean run. If any conversation failed
+    // (e.g. persistent 429), keep the old watermark so the next sync retries
+    // them rather than skipping past them forever. Re-pushes dedupe server-side.
+    if (failures > 0) {
+      log(`chatgpt: ${failures} conversation(s) failed; keeping watermark to retry next run`);
+    }
+    newState.accounts[key] = {
+      lastSyncMs: failures > 0 ? lastSyncMs : runStartedMs,
+      name: account.name,
+    };
   }
 
   return { state: newState, conversations: total };

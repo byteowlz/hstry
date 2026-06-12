@@ -4,6 +4,7 @@
 import {
   fetchJson,
   shortId,
+  sleep,
   textPart,
   thinkingPart,
   toolCallPart,
@@ -14,6 +15,7 @@ import {
 const BASE = 'https://claude.ai';
 const PAGE_SIZE = 50;
 const OVERLAP_MS = 5 * 60 * 1000;
+const THROTTLE_MS = 400;
 
 async function listOrganizations() {
   const orgs = await fetchJson(`${BASE}/api/organizations`);
@@ -111,9 +113,13 @@ export async function syncClaude({ state, push, log }) {
     const lastSyncMs = state?.orgs?.[key]?.lastSyncMs ?? null;
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = Date.now();
+    let failures = 0;
 
     let batch = [];
+    let first = true;
     for await (const item of listUpdatedConversations(org.id, since)) {
+      if (!first) await sleep(THROTTLE_MS);
+      first = false;
       try {
         const detail = await fetchJson(
           `${BASE}/api/organizations/${org.id}/chat_conversations/${item.uuid}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual`
@@ -121,6 +127,7 @@ export async function syncClaude({ state, push, log }) {
         const conv = toParsedConversation(detail, org.id);
         if (conv) batch.push(conv);
       } catch (err) {
+        failures++;
         log(`claude: skipping conversation ${item.uuid}: ${err.message}`);
       }
       if (batch.length >= 10) {
@@ -132,7 +139,14 @@ export async function syncClaude({ state, push, log }) {
       total += await push(sourceId, 'claude-web', batch);
     }
 
-    newState.orgs[key] = { lastSyncMs: runStartedMs, name: org.name };
+    // Keep the watermark unless the run was clean, so failures are retried.
+    if (failures > 0) {
+      log(`claude: ${failures} conversation(s) failed; keeping watermark to retry next run`);
+    }
+    newState.orgs[key] = {
+      lastSyncMs: failures > 0 ? lastSyncMs : runStartedMs,
+      name: org.name,
+    };
   }
 
   return { state: newState, conversations: total };

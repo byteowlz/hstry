@@ -50,7 +50,8 @@ async fn try_main() -> Result<()> {
         .clone()
         .or_else(|| std::env::var("HSTRY_API_TOKEN").ok())
         .filter(|t| !t.is_empty());
-    if ingest_token.is_none() {
+    let has_token = ingest_token.is_some();
+    if !has_token {
         info!(
             "No ingest token configured (set --token or HSTRY_API_TOKEN); /ingest accepts any loopback client"
         );
@@ -84,6 +85,13 @@ async fn try_main() -> Result<()> {
     info!("Starting API server on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Unconditional banner: env_logger is silent without RUST_LOG, which makes
+    // a healthy server look hung. Print one line so the user sees it is up.
+    let _ = writeln!(
+        io::stderr(),
+        "hstry-api listening on http://{addr}  (ingest auth: {}, set RUST_LOG=info,tower_http=debug for request logs)",
+        if has_token { "token required" } else { "open on loopback" }
+    );
     axum::serve(listener, app).await?;
 
     Ok(())

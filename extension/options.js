@@ -69,10 +69,15 @@ async function renderStatus() {
 
 el('save').addEventListener('click', save);
 el('sync-now').addEventListener('click', async () => {
-  el('saved').textContent = 'Syncing…';
-  await chrome.runtime.sendMessage({ type: 'syncNow' });
-  el('saved').textContent = '';
-  await renderStatus();
+  el('saved').textContent = 'Syncing… (updates below as it runs)';
+  // The worker acks immediately and syncs in the background; the status table
+  // refreshes via the storage.onChanged listener as each provider finishes.
+  try {
+    await chrome.runtime.sendMessage({ type: 'syncNow' });
+  } catch {
+    // Worker was asleep and is spinning up; the sync still starts.
+  }
+  setTimeout(() => (el('saved').textContent = ''), 2000);
 });
 
 chrome.storage.onChanged.addListener(changes => {

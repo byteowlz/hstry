@@ -890,18 +890,21 @@ enum MmryMemoryTypeArg {
     Procedural,
 }
 
+fn default_log_filter(verbose: u8) -> &'static str {
+    match verbose {
+        0 => "warn,hstry_cli=info,hstry_core=info,sqlx=error",
+        1 => "warn,hstry_cli=debug,hstry_core=debug,sqlx=warn",
+        _ => "trace",
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging
-    let level = match cli.verbose {
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_log_filter(cli.verbose)));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
@@ -4103,6 +4106,19 @@ fn display_title_for_list(title: Option<&str>, first_user: Option<&str>) -> Stri
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn default_log_filter_suppresses_sqlx_slow_query_warnings_without_verbose() {
+        assert_eq!(
+            default_log_filter(0),
+            "warn,hstry_cli=info,hstry_core=info,sqlx=error"
+        );
+        assert_eq!(
+            default_log_filter(1),
+            "warn,hstry_cli=debug,hstry_core=debug,sqlx=warn"
+        );
+        assert_eq!(default_log_filter(2), "trace");
+    }
 
     #[test]
     fn read_input_reads_json_file() {

@@ -1325,6 +1325,23 @@ fn default_sync_parallelism() -> usize {
         .unwrap_or(4)
 }
 
+/// Per-source result captured during a concurrent sync so the final summary can
+/// be rendered in a stable, grouped order instead of interleaved line-by-line.
+enum SyncOutcome {
+    Synced {
+        id: String,
+        adapter: String,
+        conversations: usize,
+        messages: usize,
+    },
+    UpToDate,
+    Failed {
+        id: String,
+        adapter: String,
+        message: String,
+    },
+}
+
 async fn sync_sources(
     db: &Database,
     runner: &AdapterRunner,
@@ -1348,6 +1365,7 @@ async fn sync_sources(
     }
 
     let mut sources_to_sync = Vec::new();
+    let mut disabled = 0usize;
     for source in sources {
         if let Some(ref filter) = source_filter
             && &source.id != filter
@@ -1356,14 +1374,7 @@ async fn sync_sources(
         }
 
         if !config.adapter_enabled(&source.adapter) {
-            if print {
-                println!(
-                    "Syncing {id} ({adapter})...",
-                    id = source.id,
-                    adapter = source.adapter
-                );
-                println!("  Adapter disabled in config, skipping");
-            }
+            disabled += 1;
             continue;
         }
 
@@ -1371,75 +1382,188 @@ async fn sync_sources(
     }
 
     if sources_to_sync.is_empty() {
+        if print && disabled > 0 {
+            println!(
+                "{}",
+                console::style(format!("{disabled} adapter(s) disabled in config")).dim()
+            );
+        }
         return Ok(Vec::new());
     }
 
+    let total = sources_to_sync.len();
     let parallelism = parallel.unwrap_or_else(default_sync_parallelism).max(1);
-    let parallelism = parallelism.min(sources_to_sync.len().max(1));
+    let parallelism = parallelism.min(total.max(1));
     let stats = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let outcomes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    let pb = if print {
+        let bar = indicatif::ProgressBar::new_spinner();
+        bar.set_style(
+            indicatif::ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner()),
+        );
+        bar.enable_steady_tick(std::time::Duration::from_millis(120));
+        bar.set_message(format!("Syncing 0/{total} sources..."));
+        Some(bar)
+    } else {
+        None
+    };
 
     stream::iter(sources_to_sync)
         .for_each_concurrent(parallelism, |mut source| {
             let stats = Arc::clone(&stats);
+            let outcomes = Arc::clone(&outcomes);
+            let done = Arc::clone(&done);
+            let pb = pb.clone();
             async move {
-                if print {
-                    println!(
-                        "Syncing {id} ({adapter})...",
-                        id = source.id,
-                        adapter = source.adapter
-                    );
-                }
+                let outcome = sync_one_source(db, runner, &mut source, &stats).await;
 
-                if source.last_sync_at.is_some() {
-                    match db.count_source_data(&source.id).await {
-                        Ok((conv_count, _)) => {
-                            if conv_count == 0 {
-                                if print {
-                                    println!("  No existing conversations; resetting sync cursor");
-                                }
-                                source.last_sync_at = None;
-                                if let serde_json::Value::Object(mut config) = source.config.clone()
-                                {
-                                    config.remove("cursor");
-                                    source.config = serde_json::Value::Object(config);
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            if print {
-                                eprintln!("  Error: {err}");
-                            }
-                            return;
-                        }
-                    }
-                }
-
-                match sync::sync_source(db, runner, &source).await {
-                    Ok(result) => {
-                        if print {
-                            if result.conversations > 0 {
-                                println!(
-                                    "  Synced {count} conversations",
-                                    count = result.conversations
-                                );
-                            } else {
-                                println!("  No new conversations");
-                            }
-                        }
-                        let mut stats = stats.lock().await;
-                        stats.push(result);
-                    }
-                    Err(err) => {
-                        if print {
-                            eprintln!("  Error: {err}");
-                        }
-                    }
+                let mut outcomes = outcomes.lock().await;
+                outcomes.push(outcome);
+                if let Some(bar) = pb.as_ref() {
+                    let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    bar.set_message(format!("Syncing {n}/{total} sources..."));
                 }
             }
         })
         .await;
 
+    if let Some(bar) = pb {
+        bar.finish_and_clear();
+    }
+
+    if print {
+        let outcomes = outcomes.lock().await;
+        print_sync_summary(&outcomes, disabled);
+    }
+
     Ok(stats.lock().await.clone())
+}
+
+/// Sync a single source, resetting a stale cursor when the source has no
+/// surviving conversations. Pushes successful stats onto the shared accumulator
+/// and returns the outcome for the end-of-run summary.
+async fn sync_one_source(
+    db: &Database,
+    runner: &AdapterRunner,
+    source: &mut Source,
+    stats: &Arc<tokio::sync::Mutex<Vec<sync::SyncStats>>>,
+) -> SyncOutcome {
+    if source.last_sync_at.is_some() {
+        match db.count_source_data(&source.id).await {
+            Ok((0, _)) => {
+                source.last_sync_at = None;
+                if let serde_json::Value::Object(mut config) = source.config.clone() {
+                    config.remove("cursor");
+                    source.config = serde_json::Value::Object(config);
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                return SyncOutcome::Failed {
+                    id: source.id.clone(),
+                    adapter: source.adapter.clone(),
+                    message: err.to_string(),
+                };
+            }
+        }
+    }
+
+    match sync::sync_source(db, runner, source).await {
+        Ok(result) => {
+            if result.conversations > 0 {
+                let outcome = SyncOutcome::Synced {
+                    id: source.id.clone(),
+                    adapter: source.adapter.clone(),
+                    conversations: result.conversations,
+                    messages: result.messages,
+                };
+                stats.lock().await.push(result);
+                outcome
+            } else {
+                stats.lock().await.push(result);
+                SyncOutcome::UpToDate
+            }
+        }
+        Err(err) => SyncOutcome::Failed {
+            id: source.id.clone(),
+            adapter: source.adapter.clone(),
+            message: err.to_string(),
+        },
+    }
+}
+
+/// Render the grouped, color-styled sync summary: failures first (so they're
+/// not lost in scrollback), then newly synced sources, then a single collapsed
+/// line for everything that was already up to date.
+fn print_sync_summary(outcomes: &[SyncOutcome], disabled: usize) {
+    let mut up_to_date = 0usize;
+    let mut synced = 0usize;
+    let mut total_conversations = 0usize;
+    let mut failed = 0usize;
+
+    for outcome in outcomes {
+        if let SyncOutcome::Failed {
+            id,
+            adapter,
+            message,
+        } = outcome
+        {
+            failed += 1;
+            eprintln!(
+                "{} {} {}",
+                console::style("✗").red().bold(),
+                console::style(format!("{id} ({adapter})")).bold(),
+                console::style(message).red()
+            );
+        }
+    }
+
+    for outcome in outcomes {
+        if let SyncOutcome::Synced {
+            id,
+            adapter,
+            conversations,
+            messages,
+        } = outcome
+        {
+            synced += 1;
+            total_conversations += conversations;
+            println!(
+                "{} {} {}",
+                console::style("✓").green().bold(),
+                console::style(format!("{id} ({adapter})")).bold(),
+                console::style(format!(
+                    "{conversations} conversations, {messages} messages"
+                ))
+                .dim()
+            );
+        } else if matches!(outcome, SyncOutcome::UpToDate) {
+            up_to_date += 1;
+        }
+    }
+
+    let mut notes = Vec::new();
+    if up_to_date > 0 {
+        notes.push(format!("{up_to_date} up to date"));
+    }
+    if disabled > 0 {
+        notes.push(format!("{disabled} disabled"));
+    }
+    if !notes.is_empty() {
+        println!("{}", console::style(notes.join(", ")).dim());
+    }
+
+    let summary = if synced > 0 {
+        format!("Synced {total_conversations} conversations across {synced} source(s)")
+    } else if failed > 0 {
+        "No conversations synced".to_string()
+    } else {
+        "Everything up to date".to_string()
+    };
+    println!("{}", console::style(summary).bold());
 }
 
 async fn cmd_sync(
@@ -4150,6 +4274,33 @@ mod tests {
         assert!(!is_system_context("The agent ran the command successfully"));
         assert!(!is_system_context("Check the AGENTS.md file")); // just filename mention
     }
+
+    #[test]
+    fn parse_date_filter_accepts_relative_durations() {
+        let now = chrono::Utc::now();
+        let cases = [
+            ("2", chrono::Duration::days(2)),
+            ("1w", chrono::Duration::weeks(1)),
+            ("2d", chrono::Duration::days(2)),
+            ("3h", chrono::Duration::hours(3)),
+            ("30m", chrono::Duration::minutes(30)),
+            ("2mo", chrono::Duration::days(60)),
+            ("1y", chrono::Duration::days(365)),
+            ("1 week", chrono::Duration::weeks(1)),
+            ("2 days", chrono::Duration::days(2)),
+            ("3 hours ago", chrono::Duration::hours(3)),
+        ];
+        for (input, expected) in cases {
+            let parsed =
+                parse_date_filter(input).unwrap_or_else(|err| panic!("parse '{input}': {err}"));
+            // Bare numbers snap to start-of-day, so allow a full day of slack.
+            let delta = ((now - expected) - parsed).num_seconds().abs();
+            assert!(
+                delta <= 86_400,
+                "input '{input}' parsed too far from expected (delta {delta}s)"
+            );
+        }
+    }
 }
 
 async fn cmd_export(
@@ -4407,7 +4558,22 @@ fn sanitize_filename_segment(input: &str) -> String {
 /// Supports:
 /// - ISO dates: "2026-03-01", "2026-03-01T10:00:00Z"
 /// - Relative: "today", "yesterday", "N days ago", "N weeks ago", "N months ago"
+/// - Without "ago": "1 week", "2 days", "3 hours"
+/// - Compact: "1w", "2d", "3h", "30m", "2mo", "1y"
+/// - Bare number: "2" (interpreted as N days ago)
 /// - Named: "last week", "last month"
+fn unit_to_duration(n: i64, unit: &str) -> Option<chrono::Duration> {
+    match unit.trim_end_matches('s') {
+        "m" | "min" | "minute" => Some(chrono::Duration::minutes(n)),
+        "h" | "hr" | "hour" => Some(chrono::Duration::hours(n)),
+        "d" | "day" => Some(chrono::Duration::days(n)),
+        "w" | "wk" | "week" => Some(chrono::Duration::weeks(n)),
+        "mo" | "mon" | "month" => Some(chrono::Duration::days(n * 30)),
+        "y" | "yr" | "year" => Some(chrono::Duration::days(n * 365)),
+        _ => None,
+    }
+}
+
 fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     let lower = s.trim().to_lowercase();
 
@@ -4434,23 +4600,28 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
         return start_of_day(now - chrono::Duration::days(30));
     }
 
-    // "N days/weeks/months ago"
-    if let Some(rest) = lower.strip_suffix(" ago") {
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() == 2
-            && let Ok(n) = parts[0].parse::<i64>()
-        {
-            let duration = match parts[1].trim_end_matches('s') {
-                "day" => Some(chrono::Duration::days(n)),
-                "week" => Some(chrono::Duration::weeks(n)),
-                "month" => Some(chrono::Duration::days(n * 30)),
-                "hour" => Some(chrono::Duration::hours(n)),
-                _ => None,
-            };
-            if let Some(d) = duration {
-                return Ok(now - d);
-            }
-        }
+    // "N days/weeks/months ago" or just "N days/weeks" (with or without "ago")
+    let relative = lower.strip_suffix(" ago").unwrap_or(&lower);
+    let parts: Vec<&str> = relative.split_whitespace().collect();
+    if parts.len() == 2
+        && let Ok(n) = parts[0].parse::<i64>()
+        && let Some(d) = unit_to_duration(n, parts[1])
+    {
+        return Ok(now - d);
+    }
+
+    // Compact durations like "1w", "2d", "3h", "30m", "2mo", "1y"
+    if let Some(idx) = lower.find(|c: char| c.is_alphabetic())
+        && idx > 0
+        && let Ok(n) = lower[..idx].parse::<i64>()
+        && let Some(d) = unit_to_duration(n, &lower[idx..])
+    {
+        return Ok(now - d);
+    }
+
+    // Bare number → N days ago
+    if let Ok(n) = lower.parse::<i64>() {
+        return start_of_day(now - chrono::Duration::days(n));
     }
 
     // Fall back to dateparser for ISO dates and other formats

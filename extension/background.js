@@ -39,17 +39,32 @@ async function setStatus(status) {
 }
 
 function makePush(settings) {
+  const url = `http://127.0.0.1:${settings.port}/ingest`;
   return async function push(sourceId, adapter, conversations) {
-    const res = await fetch(`http://127.0.0.1:${settings.port}/ingest`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}),
-      },
-      body: JSON.stringify({ source: sourceId, adapter, conversations }),
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings.token ? { Authorization: `Bearer ${settings.token}` } : {}),
+        },
+        body: JSON.stringify({ source: sourceId, adapter, conversations }),
+      });
+    } catch {
+      // fetch() rejects with a bare "Failed to fetch" when nothing is
+      // listening. Turn it into something actionable.
+      throw new Error(
+        `cannot reach hstry-api at ${url} — is it running on port ${settings.port}? ` +
+          `start it with: hstry-api --port ${settings.port}` +
+          (settings.token ? ' --token <your-token>' : '')
+      );
+    }
+    if (res.status === 401) {
+      throw new Error(`hstry-api rejected the token (401) — extension token must match the server's --token / HSTRY_API_TOKEN`);
+    }
     if (!res.ok) {
-      throw new Error(`hstry-api /ingest -> ${res.status} (is hstry-api running on port ${settings.port}?)`);
+      throw new Error(`hstry-api /ingest -> ${res.status}`);
     }
     const data = await res.json();
     return data?.conversations ?? conversations.length;

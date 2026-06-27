@@ -4,23 +4,65 @@
     <meta charset="utf-8" />
     <title>hstry sync settings</title>
     <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #222222;
+        --muted: #666666;
+        --border: #dddddd;
+        --field-bg: #ffffff;
+        --field-border: #cccccc;
+        --button-bg: #f2f2f2;
+        --error: #b00000;
+        --ok: #086a08;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1e1e1e;
+          --fg: #e6e6e6;
+          --muted: #a0a0a0;
+          --border: #3a3a3a;
+          --field-bg: #2a2a2a;
+          --field-border: #4a4a4a;
+          --button-bg: #333333;
+          --error: #ff6b6b;
+          --ok: #5fd35f;
+        }
+      }
       body {
         font-family: system-ui, sans-serif;
         max-width: 560px;
         margin: 2rem auto;
         padding: 0 1rem;
-        color: #222;
+        color: var(--fg);
+        background: var(--bg);
       }
       h1 { font-size: 1.3rem; }
       label { display: block; margin: 0.8rem 0 0.2rem; font-weight: 600; }
-      input[type='number'], input[type='password'] { width: 12rem; padding: 0.3rem; }
+      input[type='number'], input[type='password'] {
+        width: 12rem;
+        padding: 0.3rem;
+        color: var(--fg);
+        background: var(--field-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 3px;
+      }
       .checkbox-row { margin: 0.4rem 0; font-weight: normal; }
-      button { margin-top: 1rem; padding: 0.4rem 1rem; }
+      button {
+        margin-top: 1rem;
+        padding: 0.4rem 1rem;
+        color: var(--fg);
+        background: var(--button-bg);
+        border: 1px solid var(--field-border);
+        border-radius: 3px;
+        cursor: pointer;
+      }
       table { border-collapse: collapse; margin-top: 1.5rem; width: 100%; }
-      th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; }
-      .error { color: #b00; }
-      .ok { color: #086a08; }
-      #saved { margin-left: 0.8rem; color: #086a08; }
+      th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+      th { color: var(--muted); }
+      .error { color: var(--error); }
+      .ok { color: var(--ok); }
+      #saved { margin-left: 0.8rem; color: var(--ok); }
     </style>
   </head>
   <body>

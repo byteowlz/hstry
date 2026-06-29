@@ -18,6 +18,14 @@ pub use proto::search_service_server::{SearchService, SearchServiceServer};
 pub use proto::write_service_client::WriteServiceClient;
 pub use proto::write_service_server::{WriteService, WriteServiceServer};
 
+/// Maximum gRPC message size (encode and decode) for the internal service.
+///
+/// Tonic defaults to a 4 MiB decode limit, which a single search response can
+/// exceed once many hits each carry their full message content. Raise it so
+/// large result sets round-trip without tripping "decoded message length too
+/// large".
+pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
 pub fn search_mode_to_proto(mode: SearchMode) -> proto::SearchMode {
     match mode {
         SearchMode::Auto => proto::SearchMode::Auto,
@@ -159,7 +167,10 @@ async fn try_connect_search_client() -> Option<SearchServiceClient<tonic::transp
 
     let port = port?;
     let endpoint = format!("http://127.0.0.1:{port}");
-    SearchServiceClient::connect(endpoint).await.ok()
+    SearchServiceClient::connect(endpoint).await.ok().map(|c| {
+        c.max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE)
+    })
 }
 
 #[cfg(unix)]
@@ -186,7 +197,11 @@ async fn try_connect_unix(
         .await
         .ok()?;
 
-    Some(SearchServiceClient::new(channel))
+    Some(
+        SearchServiceClient::new(channel)
+            .max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE),
+    )
 }
 
 fn read_port_from_paths() -> Option<u16> {

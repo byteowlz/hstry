@@ -23,8 +23,8 @@ use crate::sync;
 use hstry_core::config::ServiceTransport;
 use hstry_core::models::Source;
 use hstry_core::service::{
-    ReadService, ReadServiceServer, SearchService, SearchServiceServer, WriteService,
-    WriteServiceServer, conversation_from_proto, conversation_summary_to_proto,
+    MAX_MESSAGE_SIZE, ReadService, ReadServiceServer, SearchService, SearchServiceServer,
+    WriteService, WriteServiceServer, conversation_from_proto, conversation_summary_to_proto,
     conversation_to_proto, hit_to_proto, message_event_to_proto, message_from_proto,
     message_to_proto, search_request_to_opts,
 };
@@ -903,9 +903,21 @@ async fn start_tcp_server(
 
     let handle = tokio::spawn(async move {
         if let Err(err) = tonic::transport::Server::builder()
-            .add_service(SearchServiceServer::new(server.clone()))
-            .add_service(WriteServiceServer::new(server.clone()))
-            .add_service(ReadServiceServer::new(server))
+            .add_service(
+                SearchServiceServer::new(server.clone())
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
+            .add_service(
+                WriteServiceServer::new(server.clone())
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
+            .add_service(
+                ReadServiceServer::new(server)
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await
         {
@@ -947,9 +959,21 @@ async fn start_unix_server(server: ServerState) -> Result<tokio::task::JoinHandl
 
     let handle = tokio::spawn(async move {
         if let Err(err) = tonic::transport::Server::builder()
-            .add_service(SearchServiceServer::new(server.clone()))
-            .add_service(WriteServiceServer::new(server.clone()))
-            .add_service(ReadServiceServer::new(server))
+            .add_service(
+                SearchServiceServer::new(server.clone())
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
+            .add_service(
+                WriteServiceServer::new(server.clone())
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
+            .add_service(
+                ReadServiceServer::new(server)
+                    .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                    .max_encoding_message_size(MAX_MESSAGE_SIZE),
+            )
             .serve_with_incoming(UnixListenerStream::new(listener))
             .await
         {

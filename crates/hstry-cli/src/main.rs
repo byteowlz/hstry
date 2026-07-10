@@ -316,6 +316,20 @@ enum Command {
         chars: Option<usize>,
     },
 
+    /// Remove one conversation and its related data
+    Remove {
+        /// Conversation UUID, unique prefix, or external ID
+        id: String,
+
+        /// Delete without prompting; otherwise only preview the removal
+        #[arg(long)]
+        yes: bool,
+
+        /// Preview the removal without changing the database
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+    },
+
     /// Manage sources
     Source {
         #[command(subcommand)]
@@ -1054,6 +1068,11 @@ async fn main() -> Result<()> {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             cmd_peek(&db, &id, chars, cli.json).await
+        }
+        Command::Remove { id, yes, dry_run } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            cmd_remove(&db, &id, yes, dry_run, cli.json).await
         }
         Command::Source { command } => {
             let db = Database::open(&config.database).await?;
@@ -2527,10 +2546,10 @@ fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
     if let Some(s) = &b.first_user {
         println!("\nFirst user: {s}");
     }
-    if let Some(s) = &b.last_user {
-        if Some(s) != b.first_user.as_ref() {
-            println!("Last user:  {s}");
-        }
+    if let Some(s) = &b.last_user
+        && Some(s) != b.first_user.as_ref()
+    {
+        println!("Last user:  {s}");
     }
     if let Some(s) = &b.last_assistant {
         println!("Last asst:  {s}");
@@ -5245,7 +5264,7 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
     // Try partial UUID match or external_id match
     let all = db
         .list_conversations(hstry_core::db::ListConversationsOptions {
-            limit: Some(500),
+            limit: None,
             ..Default::default()
         })
         .await?;
@@ -5272,6 +5291,67 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
             "Ambiguous ID '{id_str}': matched {n} conversations. Use a longer prefix."
         ),
     }
+}
+
+#[derive(Debug, Serialize)]
+struct RemoveConversationResult {
+    id: uuid::Uuid,
+    source_id: String,
+    external_id: Option<String>,
+    title: Option<String>,
+    messages: i64,
+    removed: bool,
+}
+
+async fn cmd_remove(
+    db: &Database,
+    id: &str,
+    yes: bool,
+    dry_run: bool,
+    json_output: bool,
+) -> Result<()> {
+    let conversation = resolve_conversation_by_id(db, id).await?;
+    let messages = db.count_messages_for_conversation(conversation.id).await?;
+    let should_remove = yes && !dry_run;
+
+    if should_remove {
+        db.delete_conversations_batch(&[conversation.id]).await?;
+    }
+
+    let result = RemoveConversationResult {
+        id: conversation.id,
+        source_id: conversation.source_id,
+        external_id: conversation.external_id,
+        title: conversation.title,
+        messages,
+        removed: should_remove,
+    };
+
+    if json_output {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(result),
+            error: None,
+        });
+    }
+
+    let title = result.title.as_deref().unwrap_or("Untitled conversation");
+    if should_remove {
+        println!(
+            "Removed '{title}' ({id}) and {messages} message(s)",
+            id = result.id
+        );
+    } else {
+        println!("Would remove:");
+        println!("  Title:    {title}");
+        println!("  ID:       {}", result.id);
+        println!("  Source:   {}", result.source_id);
+        println!("  Messages: {messages}");
+        println!();
+        println!("Run `hstry remove {} --yes` to confirm.", result.id);
+    }
+
+    Ok(())
 }
 
 /// Build the launch command string by replacing placeholders.

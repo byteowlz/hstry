@@ -17,6 +17,10 @@ use crate::stable_message_id;
 pub struct IngestOutcome {
     /// Conversations written (new or updated) in this batch.
     pub conversations: usize,
+    /// Conversations inserted for the first time in this batch.
+    pub created: usize,
+    /// Existing conversations refreshed in this batch.
+    pub updated: usize,
     /// Messages submitted in this batch (duplicates dedupe at the DB layer).
     pub messages: usize,
     /// Conversation ids touched by this batch; pass to
@@ -95,6 +99,7 @@ pub async fn ingest_batch(
         let mut provider = conv.provider;
         let mut workspace = conv.workspace;
 
+        let is_existing = existing_conv.is_some();
         if let Some(existing) = existing_conv {
             if let serde_json::Value::Object(mut existing_map) = existing.metadata {
                 if let serde_json::Value::Object(new_map) = metadata {
@@ -153,6 +158,11 @@ pub async fn ingest_batch(
         };
 
         if !seen_in_batch {
+            if is_existing {
+                outcome.updated += 1;
+            } else {
+                outcome.created += 1;
+            }
             outcome.affected_conversation_ids.push(hstry_conv.id);
             batch_convs.push(hstry_conv.clone());
             outcome.conversations += 1;
@@ -249,4 +259,73 @@ pub async fn ingest_batch(
     }
 
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    use super::*;
+    use crate::models::Source;
+    use crate::parsed::{ParsedConversation, ParsedMessage};
+
+    fn parsed_conversation() -> ParsedConversation {
+        ParsedConversation {
+            external_id: Some("progress-fixture".to_string()),
+            readable_id: None,
+            title: Some("Progress fixture".to_string()),
+            created_at: 1_700_000_000_000,
+            updated_at: None,
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                created_at: None,
+                model: None,
+                tokens: None,
+                cost_usd: None,
+                parts: None,
+                tool_calls: None,
+                metadata: None,
+            }],
+            metadata: None,
+            version: None,
+            message_count: None,
+            parent_external_id: None,
+            parent_message_idx: None,
+            fork_type: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn outcome_distinguishes_created_from_updated_conversations() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("hstry-ingest-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path).await?;
+        db.upsert_source(&Source {
+            id: "web".to_string(),
+            adapter: "web".to_string(),
+            path: None,
+            last_sync_at: None,
+            config: serde_json::json!({}),
+        })
+        .await?;
+
+        let first = ingest_batch(&db, "web", vec![parsed_conversation()]).await?;
+        assert_eq!(
+            (first.conversations, first.created, first.updated),
+            (1, 1, 0)
+        );
+
+        let second = ingest_batch(&db, "web", vec![parsed_conversation()]).await?;
+        assert_eq!(
+            (second.conversations, second.created, second.updated),
+            (1, 0, 1)
+        );
+        Ok(())
+    }
 }

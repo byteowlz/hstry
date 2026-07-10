@@ -101,15 +101,19 @@ function toParsedConversation(detail, orgId) {
   };
 }
 
-export async function syncClaude({ state, push, log }) {
+export async function syncClaude({ state, push, register = async () => {}, log, report = async () => {} }) {
+  await report({ phase: 'discovering' });
   const orgs = await listOrganizations();
   const newState = { ...state, orgs: {} };
   let total = 0;
+  let detected = 0;
+  let processed = 0;
   const multiOrg = orgs.length > 1;
 
   for (const org of orgs) {
     const key = shortId(org.id);
     const sourceId = multiOrg ? `claude-web-${key}` : 'claude-web';
+    await register(sourceId, 'claude-web');
     const lastSyncMs = state?.orgs?.[key]?.lastSyncMs ?? null;
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = Date.now();
@@ -118,6 +122,8 @@ export async function syncClaude({ state, push, log }) {
     let batch = [];
     let first = true;
     for await (const item of listUpdatedConversations(org.id, since)) {
+      detected++;
+      await report({ phase: 'importing', detected, processed });
       if (!first) await sleep(THROTTLE_MS);
       first = false;
       try {
@@ -130,6 +136,8 @@ export async function syncClaude({ state, push, log }) {
         failures++;
         log(`claude: skipping conversation ${item.uuid}: ${err.message}`);
       }
+      processed++;
+      await report({ detected, processed });
       if (batch.length >= 10) {
         total += await push(sourceId, 'claude-web', batch);
         batch = [];
@@ -148,6 +156,8 @@ export async function syncClaude({ state, push, log }) {
       name: org.name,
     };
   }
+
+  await report({ phase: 'complete', detected, processed });
 
   return { state: newState, conversations: total };
 }

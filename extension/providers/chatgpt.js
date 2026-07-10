@@ -155,15 +155,19 @@ function toParsedConversation(detail, conversationId, accountId) {
   };
 }
 
-export async function syncChatGPT({ state, push, log }) {
+export async function syncChatGPT({ state, push, register = async () => {}, log, report = async () => {} }) {
+  await report({ phase: 'discovering' });
   const token = await getAccessToken();
   const accounts = await listAccounts(token);
   const newState = { ...state, accounts: {} };
   let total = 0;
+  let detected = 0;
+  let processed = 0;
 
   for (const account of accounts) {
     const key = account.id ? shortId(account.id) : 'default';
     const sourceId = account.id && account.isWorkspace ? `chatgpt-web-${key}` : 'chatgpt-web';
+    await register(sourceId, 'chatgpt-web');
     const lastSyncMs = state?.accounts?.[key]?.lastSyncMs ?? null;
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = Date.now();
@@ -172,6 +176,8 @@ export async function syncChatGPT({ state, push, log }) {
     let batch = [];
     let first = true;
     for await (const item of listUpdatedConversations(token, account.id, since)) {
+      detected++;
+      await report({ phase: 'importing', detected, processed });
       if (!first) await sleep(THROTTLE_MS);
       first = false;
       try {
@@ -184,6 +190,8 @@ export async function syncChatGPT({ state, push, log }) {
         failures++;
         log(`chatgpt: skipping conversation ${item.id}: ${err.message}`);
       }
+      processed++;
+      await report({ detected, processed });
       if (batch.length >= 10) {
         total += await push(sourceId, 'chatgpt-web', batch);
         batch = [];
@@ -204,6 +212,8 @@ export async function syncChatGPT({ state, push, log }) {
       name: account.name,
     };
   }
+
+  await report({ phase: 'complete', detected, processed });
 
   return { state: newState, conversations: total };
 }

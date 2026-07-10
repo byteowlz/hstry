@@ -1,101 +1,90 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>hstry sync settings</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hstry web sync</title>
+    <link rel="stylesheet" href="styles.css" />
     <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #ffffff;
-        --fg: #222222;
-        --muted: #666666;
-        --border: #dddddd;
-        --field-bg: #ffffff;
-        --field-border: #cccccc;
-        --button-bg: #f2f2f2;
-        --error: #b00000;
-        --ok: #086a08;
+      main { width: min(780px, calc(100% - 32px)); margin: 56px auto 80px; }
+      .page-header { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 24px; padding-bottom: 22px; border-bottom: 1px solid var(--rule-strong); }
+      .page-header p:last-child { max-width: 520px; margin: 7px 0 0; color: var(--muted); }
+      .version { color: var(--faint); font-size: 12px; }
+      .connection-bar { display: grid; grid-template-columns: 9px 1fr auto; align-items: center; gap: 10px; min-height: 54px; padding: 0 2px; border-bottom: 1px solid var(--rule); }
+      .connection-result { color: var(--muted); font-size: 13px; }
+      .connection-result.success { color: var(--success); }
+      .connection-result.error { color: var(--danger); }
+      .section { padding: 30px 0; border-bottom: 1px solid var(--rule); }
+      .section-heading { display: grid; grid-template-columns: 190px 1fr; gap: 24px; margin-bottom: 23px; }
+      .section-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+      .form-grid { display: grid; grid-template-columns: 190px 1fr; gap: 19px 24px; align-items: start; }
+      label { display: block; padding-top: 10px; font-size: 13px; font-weight: 700; }
+      .control input[type='number'], .control input[type='password'] { width: 100%; min-height: 42px; padding: 8px 11px; color: var(--ink); background: var(--panel); border: 1px solid var(--rule-strong); border-radius: 3px; }
+      .hint { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .provider-list { border-top: 1px solid var(--rule); }
+      .provider-row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px; min-height: 66px; border-bottom: 1px solid var(--rule); }
+      .provider-row input { width: 16px; height: 16px; accent-color: var(--accent); }
+      .provider-row label { padding: 0; }
+      .provider-row small { display: block; color: var(--muted); font-weight: 400; }
+      .provider-domain { color: var(--faint); font-size: 12px; }
+      .status-list { border-top: 1px solid var(--rule); }
+      .status-item { display: grid; grid-template-columns: 150px 1fr; gap: 20px; padding: 15px 0; border-bottom: 1px solid var(--rule); }
+      .status-title { display: flex; align-items: center; gap: 9px; }
+      .status-item p { margin: 0; color: var(--muted); font-size: 13px; }
+      .status-item .error-copy { color: var(--danger); }
+      .command-row { display: grid; grid-template-columns: 190px 1fr; gap: 24px; align-items: center; margin-top: 22px; }
+      code { padding: 10px 12px; overflow-x: auto; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+      .actions { display: flex; align-items: center; gap: 9px; padding-top: 25px; }
+      #saved { margin-left: 6px; color: var(--muted); font-size: 12px; }
+      @media (max-width: 620px) {
+        main { margin-top: 28px; }
+        .page-header, .section-heading, .form-grid, .command-row, .status-item { grid-template-columns: 1fr; gap: 8px; }
+        .page-header { align-items: start; }
+        label { padding-top: 0; }
+        .status-item { gap: 6px; }
+        .actions { flex-wrap: wrap; }
       }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #1e1e1e;
-          --fg: #e6e6e6;
-          --muted: #a0a0a0;
-          --border: #3a3a3a;
-          --field-bg: #2a2a2a;
-          --field-border: #4a4a4a;
-          --button-bg: #333333;
-          --error: #ff6b6b;
-          --ok: #5fd35f;
-        }
-      }
-      body {
-        font-family: system-ui, sans-serif;
-        max-width: 560px;
-        margin: 2rem auto;
-        padding: 0 1rem;
-        color: var(--fg);
-        background: var(--bg);
-      }
-      h1 { font-size: 1.3rem; }
-      label { display: block; margin: 0.8rem 0 0.2rem; font-weight: 600; }
-      input[type='number'], input[type='password'] {
-        width: 12rem;
-        padding: 0.3rem;
-        color: var(--fg);
-        background: var(--field-bg);
-        border: 1px solid var(--field-border);
-        border-radius: 3px;
-      }
-      .checkbox-row { margin: 0.4rem 0; font-weight: normal; }
-      button {
-        margin-top: 1rem;
-        padding: 0.4rem 1rem;
-        color: var(--fg);
-        background: var(--button-bg);
-        border: 1px solid var(--field-border);
-        border-radius: 3px;
-        cursor: pointer;
-      }
-      table { border-collapse: collapse; margin-top: 1.5rem; width: 100%; }
-      th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
-      th { color: var(--muted); }
-      .error { color: var(--error); }
-      .ok { color: var(--ok); }
-      #saved { margin-left: 0.8rem; color: var(--ok); }
     </style>
   </head>
   <body>
-    <h1>hstry sync</h1>
+    <main>
+      <header class="page-header">
+        <div><h1>hstry web sync</h1><p>Import conversations from the accounts already signed in to this browser.</p></div>
+        <span class="version">v0.3.2</span>
+      </header>
 
-    <label for="port">hstry-api port</label>
-    <input id="port" type="number" min="1" max="65535" />
+      <div class="connection-bar">
+        <span id="connection-dot" class="status-dot checking" aria-hidden="true"></span>
+        <span id="connection-result" class="connection-result" role="status">Checking saved endpoint…</span>
+        <button id="test-connection" class="button-quiet">Check connection</button>
+      </div>
 
-    <label for="token">Ingest token (optional, must match --token / HSTRY_API_TOKEN)</label>
-    <input id="token" type="password" autocomplete="off" />
+      <section class="section" aria-labelledby="connection-heading">
+        <div class="section-heading"><h2 id="connection-heading">Connection</h2><p>The API must be running on this computer. The token is only required when the API was started with one.</p></div>
+        <div class="form-grid">
+          <label for="port">Port</label><div class="control"><input id="port" type="number" min="1" max="65535" /><span class="hint">Default: 3000</span></div>
+          <label for="token">Ingest token</label><div class="control"><input id="token" type="password" autocomplete="off" placeholder="No token" /><span class="hint">Must match <code style="padding:1px 3px">--token</code> or <code style="padding:1px 3px">HSTRY_API_TOKEN</code>.</span></div>
+          <label for="interval">Interval</label><div class="control"><input id="interval" type="number" min="1" max="720" /><span class="hint">Minutes between background syncs.</span></div>
+        </div>
+        <div class="command-row"><span class="muted">Start command</span><code id="setup-command">hstry-api --port 3000</code></div>
+      </section>
 
-    <label for="interval">Sync interval (minutes)</label>
-    <input id="interval" type="number" min="1" max="720" />
+      <section class="section" aria-labelledby="providers-heading">
+        <div class="section-heading"><h2 id="providers-heading">Providers</h2><p>Each provider uses the active browser session. Sign in on the provider site before syncing.</p></div>
+        <div id="provider-list" class="provider-list"></div>
+      </section>
 
-    <label>Providers</label>
-    <div class="checkbox-row">
-      <label><input id="provider-chatgpt" type="checkbox" /> ChatGPT (incl. Teams workspaces)</label>
-    </div>
-    <div class="checkbox-row">
-      <label><input id="provider-claude" type="checkbox" /> Claude</label>
-    </div>
+      <section class="section" aria-labelledby="status-heading">
+        <div class="section-heading"><h2 id="status-heading">Last sync</h2><p>Provider results are updated as each import finishes.</p></div>
+        <div id="status-list" class="status-list"></div>
+      </section>
 
-    <button id="save">Save</button>
-    <button id="sync-now">Sync now</button>
-    <span id="saved"></span>
-
-    <table id="status-table">
-      <thead>
-        <tr><th>Provider</th><th>Last run</th><th>Last success</th><th>Synced</th><th>Status</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-
+      <div class="actions">
+        <button id="save" class="button-secondary">Save</button>
+        <button id="sync-now" class="button-primary">Save & sync now</button>
+        <span id="saved" role="status"></span>
+      </div>
+    </main>
     <script src="options.js" type="module"></script>
   </body>
 </html>

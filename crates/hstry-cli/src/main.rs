@@ -298,7 +298,7 @@ enum Command {
 
     /// Show a conversation
     Show {
-        /// Conversation ID
+        /// Conversation ID, unique prefix, or external ID
         id: String,
 
         /// Read JSON input from file or "-" for stdin
@@ -308,7 +308,7 @@ enum Command {
 
     /// Show a token-efficient peek bundle for a single conversation
     Peek {
-        /// Conversation ID
+        /// Conversation ID, unique prefix, or external ID
         id: String,
 
         /// Truncate `last_assistant` to N chars (default 400).
@@ -2421,6 +2421,7 @@ async fn cmd_list(
                 workspace: preview.conversation.workspace,
                 created_at: preview.conversation.created_at,
                 title,
+                readable_id: preview.conversation.readable_id,
             }
         })
         .collect::<Vec<_>>();
@@ -2483,12 +2484,8 @@ async fn cmd_list_peek(
 }
 
 async fn cmd_peek(db: &Database, id: &str, chars: Option<usize>, json: bool) -> Result<()> {
-    let uuid = uuid::Uuid::parse_str(id)?;
-    let conv = db
-        .get_conversation(uuid)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
-    let messages = db.get_messages(uuid).await?;
+    let conv = resolve_conversation_by_id(db, id).await?;
+    let messages = db.get_messages(conv.id).await?;
 
     let mut cfg = hstry_core::peek::PeekConfig::default();
     if let Some(n) = chars {
@@ -2557,13 +2554,9 @@ fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
 }
 
 async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
-    let uuid = uuid::Uuid::parse_str(id)?;
-    let conv = db
-        .get_conversation(uuid)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+    let conv = resolve_conversation_by_id(db, id).await?;
 
-    let messages = db.get_messages(uuid).await?;
+    let messages = db.get_messages(conv.id).await?;
     if json {
         let details = hstry_core::models::ConversationWithMessages {
             conversation: conv,
@@ -5277,7 +5270,11 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
                 .external_id
                 .as_ref()
                 .is_some_and(|e| e.starts_with(id_str) || e == id_str);
-            id_match || ext_match
+            let readable_match = c
+                .readable_id
+                .as_deref()
+                .is_some_and(|r| r == id_str || r.starts_with(&format!("{id_str}-")));
+            id_match || ext_match || readable_match
         })
         .collect();
 

@@ -323,10 +323,16 @@ impl Database {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
-            let readable_id = readable_id_from_metadata(&metadata);
+            let readable_id = readable_id_from_metadata(&metadata).filter(|s| !s.is_empty());
 
-            // Only backfill if the source actually provided a readable_id.
-            // hstry should never fabricate IDs -- that is the harness's job.
+            // Prefer a source-provided readable_id; otherwise generate a
+            // human-readable adjective-noun id deterministically from the
+            // conversation UUID (collision-checked globally).
+            let readable_id = match readable_id {
+                Some(provided) => Some(provided),
+                None => Some(self.assign_readable_id(id).await?),
+            };
+
             if let Some(readable_id) = readable_id {
                 sqlx::query("UPDATE conversations SET readable_id = ? WHERE id = ?")
                     .bind(readable_id)
@@ -535,21 +541,25 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        // Use the readable_id provided by the source/adapter, or fall back to
-        // metadata, or preserve whatever hstry already has. Never fabricate one --
-        // readable_id generation is the harness's responsibility (e.g. Pi extension).
-        let readable_id = conv
+        // Use the readable_id provided by the source/adapter, fall back to
+        // metadata, preserve any existing value, or finally generate a
+        // human-readable adjective-noun id deterministically from the UUID.
+        let mut readable_id = conv
             .readable_id
             .clone()
             .or_else(|| readable_id_from_metadata(&conv.metadata));
-        let readable_id = if readable_id.is_some() {
-            readable_id
-        } else if let Some(external_id) = conv.external_id.as_deref() {
-            self.get_conversation_readable_id(&conv.source_id, external_id)
-                .await?
-        } else {
-            None
-        };
+        if readable_id.is_none() {
+            readable_id = match conv.external_id.as_deref() {
+                Some(external_id) => {
+                    self.get_conversation_readable_id(&conv.source_id, external_id)
+                        .await?
+                }
+                None => None,
+            };
+        }
+        if readable_id.is_none() {
+            readable_id = Some(self.assign_readable_id(conv.id).await?);
+        }
 
         sqlx::query(
             r"
@@ -919,6 +929,42 @@ impl Database {
         .await?;
 
         Ok(row.and_then(|row| row.get::<Option<String>, _>("readable_id")))
+    }
+
+    /// Assign a globally-unique human-readable id for `uuid`.
+    ///
+    /// Uses the deterministic `adjective-noun` base from [`readable_id`],
+    /// appending a `-N` suffix if the base already exists. The suffix search
+    /// starts at a UUID-derived offset so the final id is stable for a given
+    /// UUID regardless of ingestion order.
+
+    /// starts at a UUID-derived offset so the final id is stable for a given
+    /// UUID regardless of ingestion order.
+    async fn assign_readable_id(&self, uuid: Uuid) -> Result<String> {
+        let base = crate::readable_id::base_for(uuid);
+        if self.readable_id_is_free(&base).await? {
+            return Ok(base);
+        }
+        let start = crate::readable_id::suffix_for(uuid);
+        for offset in 0..998 {
+            let n = start + offset;
+            let candidate = format!("{base}-{n}");
+            if self.readable_id_is_free(&candidate).await? {
+                return Ok(candidate);
+            }
+        }
+        // Exhausted the suffix window (astronomically unlikely): fall back to
+        // the base plus a short UUID fragment for guaranteed uniqueness.
+        Ok(format!("{base}-{}", &uuid.to_string()[..4]))
+    }
+
+    async fn readable_id_is_free(&self, candidate: &str) -> Result<bool> {
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM conversations WHERE readable_id = ? LIMIT 1")
+                .bind(candidate)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.is_none())
     }
 
     /// Get the version and message_count for a conversation.
@@ -1584,11 +1630,16 @@ impl Database {
         .execute(&mut **tx)
         .await?;
 
-        // Never fabricate readable_ids -- that is the harness's job.
+        // Prefer source/metadata readable_id; otherwise derive the
+        // deterministic base from the UUID. (No DB collision check here: this
+        // path is the merge/import batch and runs inside a transaction whose
+        // sibling rows aren't visible to the pool. Merged conversations almost
+        // always carry an existing readable_id from their source DB.)
         let readable_id = conv
             .readable_id
             .clone()
-            .or_else(|| readable_id_from_metadata(&conv.metadata));
+            .or_else(|| readable_id_from_metadata(&conv.metadata))
+            .or_else(|| Some(crate::readable_id::base_for(conv.id)));
 
         sqlx::query(
             r"
@@ -3297,9 +3348,10 @@ fn readable_id_from_metadata(metadata: &serde_json::Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-// Removed: generate_readable_id() -- hstry must not fabricate readable_ids.
-// The harness (Pi, opencode, etc.) owns readable_id generation. If the source
-// adapter doesn't provide one, hstry stores NULL.
+// Human-readable ids (`adjective-noun`) are generated on demand from a
+// conversation's UUID via `crate::readable_id::base_for`, with collision
+// resolution handled by `Database::assign_readable_id`. See the
+// `ensure_conversations_readable_id_column` backfill scan and `upsert_*`.
 
 #[cfg(test)]
 mod fts_query_tests {

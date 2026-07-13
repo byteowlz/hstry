@@ -19,6 +19,9 @@ pub struct ConversationDisplay {
     pub workspace: Option<String>,
     pub created_at: DateTime<Utc>,
     pub title: String,
+    /// Human-readable id (adjective-noun) when available; shown in the id
+    /// column in preference to the UUID prefix.
+    pub readable_id: Option<String>,
 }
 
 impl Icons {
@@ -420,7 +423,12 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
         // Single line: title | workdir | time | agent | id
         let date = relative_time_short(conv.created_at);
         let date_str = format!("{} {}", icons.clock, date);
-        let id_short = conv.id.to_string()[..8].to_string();
+        // Prefer the human-readable adjective-noun id; fall back to the UUID
+        // prefix when none is assigned yet.
+        let id_short = conv
+            .readable_id
+            .clone()
+            .unwrap_or_else(|| conv.id.to_string()[..8].to_string());
 
         let workdir_raw = conv
             .workspace
@@ -439,7 +447,7 @@ pub fn print_conversations(conversations: &[ConversationDisplay]) {
 
         let time_width = 8usize;
         let agent_width = 12usize;
-        let id_width = 8usize;
+        let id_width = 12usize;
         let separator_width = 3usize * 4; // " | " * 4
         let reserved = time_width + agent_width + id_width + separator_width + 2; // left border + space
         let available = inner.saturating_sub(reserved).max(20);

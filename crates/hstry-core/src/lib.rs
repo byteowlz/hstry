@@ -13,6 +13,7 @@ pub mod parsed;
 pub mod parts;
 pub mod paths;
 pub mod peek;
+pub mod readable_id;
 pub mod remote;
 pub mod schema;
 pub mod service;

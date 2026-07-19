@@ -259,6 +259,7 @@ pub fn hit_to_proto(hit: &SearchHit) -> proto::SearchHit {
         score: hit.score,
         source_id: hit.source_id.clone(),
         external_id: hit.external_id.clone().unwrap_or_default(),
+        readable_id: hit.readable_id.clone().unwrap_or_default(),
         title: hit.title.clone().unwrap_or_default(),
         workspace: hit.workspace.clone().unwrap_or_default(),
         source_adapter: hit.source_adapter.clone(),
@@ -284,6 +285,11 @@ pub fn hit_from_proto(hit: proto::SearchHit) -> SearchHit {
             None
         } else {
             Some(hit.external_id)
+        },
+        readable_id: if hit.readable_id.is_empty() {
+            None
+        } else {
+            Some(hit.readable_id)
         },
         title: if hit.title.is_empty() {
             None

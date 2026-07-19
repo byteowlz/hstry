@@ -227,6 +227,8 @@ pub struct SearchHit {
     pub score: f32,
     pub source_id: String,
     pub external_id: Option<String>,
+    #[serde(default)]
+    pub readable_id: Option<String>,
     pub title: Option<String>,
     pub workspace: Option<String>,
     pub source_adapter: String,

@@ -12,6 +12,8 @@ use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+use tokio::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 /// Per-source purge counts returned by [`Database::purge_source`].
@@ -44,6 +46,10 @@ pub struct Database {
     message_events_enabled: AtomicBool,
     /// Whether to enqueue indexer jobs on message upsert (trx-z42c.5).
     indexer_outbox_enabled: AtomicBool,
+    /// SQLite permits only one writer at a time. Serializing bulk ingestion
+    /// transactions avoids wasting the busy timeout on writer contention while
+    /// retaining the pool's concurrent WAL readers.
+    ingest_writer: Mutex<()>,
 }
 
 /// Normalize a source path for consistent comparison.
@@ -63,6 +69,7 @@ impl Database {
         let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", path.display()))?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(30))
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new()
@@ -76,9 +83,15 @@ impl Database {
             // pay no overhead unless the operator opts in.
             message_events_enabled: AtomicBool::new(false),
             indexer_outbox_enabled: AtomicBool::new(false),
+            ingest_writer: Mutex::new(()),
         };
         db.init().await?;
         Ok(db)
+    }
+
+    /// Acquire the single-writer gate used by bulk ingestion transactions.
+    pub(crate) async fn lock_ingest_writer(&self) -> MutexGuard<'_, ()> {
+        self.ingest_writer.lock().await
     }
 
     /// Toggle the `message_events` append-only log at runtime (trx-aa3m).
@@ -2104,6 +2117,7 @@ impl Database {
                 c.updated_at AS conv_updated_at,
                 c.source_id AS source_id,
                 c.external_id AS external_id,
+                c.readable_id AS readable_id,
                 c.title AS title,
                 c.workspace AS workspace,
                 s.adapter AS source_adapter,
@@ -2208,6 +2222,7 @@ impl Database {
                 score: row.get::<f32, _>("score"),
                 source_id: row.get("source_id"),
                 external_id: row.get("external_id"),
+                readable_id: row.get("readable_id"),
                 title: row.get("title"),
                 workspace: row.get("workspace"),
                 source_adapter: row.get("source_adapter"),

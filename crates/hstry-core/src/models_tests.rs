@@ -355,6 +355,7 @@ mod search_hit_tests {
             score: 0.95,
             source_id: "source-1".to_string(),
             external_id: Some("ext-1".to_string()),
+            readable_id: Some("calm-owls".to_string()),
             title: Some("Q&A Session".to_string()),
             workspace: Some("/project".to_string()),
             source_adapter: "opencode".to_string(),

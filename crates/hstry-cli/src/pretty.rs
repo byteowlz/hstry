@@ -282,6 +282,7 @@ pub fn print_search_results(hits: &[SearchHit]) {
         let role_str = hit.role.to_string();
         let role = role_style(&role_str).apply_to(&role_str);
         let adapter = style(&hit.source_adapter).cyan();
+        let readable_id = hit.readable_id.as_deref().unwrap_or("");
         let date = relative_time_short(hit.conv_created_at);
 
         let ws_max = width.saturating_sub(60).max(20);
@@ -300,11 +301,12 @@ pub fn print_search_results(hits: &[SearchHit]) {
         let date_str = format!("{} {}", icons.clock, date);
 
         let line1 = format!(
-            "{} {} {} {} {} {}{}",
+            "{} {} {} {} {} {} {}{}",
             style("│").dim(),
             style(bar).yellow(),
             role,
             adapter,
+            style(readable_id).magenta(),
             style(&ws).dim(),
             style(host_str).dim(),
             style(date_str).dim().italic()
@@ -544,6 +546,7 @@ pub fn print_search_results_compact(hits: &[SearchHit]) {
         let role_str = hit.role.to_string();
         let role = role_style(&role_str).apply_to(&role_str);
         let adapter = style(&hit.source_adapter).cyan();
+        let readable_id = hit.readable_id.as_deref().unwrap_or("");
         let date = relative_time_short(hit.conv_created_at);
 
         let ws_max = width.saturating_sub(70).max(20);
@@ -562,11 +565,12 @@ pub fn print_search_results_compact(hits: &[SearchHit]) {
         let date_str = format!("{} {}", icons.clock, date);
 
         let line1 = format!(
-            "{} {} {} {} {} {}{}",
+            "{} {} {} {} {} {} {}{}",
             style("│").dim(),
             style(bar).yellow(),
             role,
             adapter,
+            style(readable_id).magenta(),
             style(&ws).dim(),
             style(host_str).dim(),
             style(date_str).dim().italic()

@@ -4360,13 +4360,12 @@ async fn cmd_export(
         .await?
     } else {
         let mut convs = Vec::new();
-        for id in conversations_arg.split(',') {
-            let id = id.trim();
-            if let Ok(uuid) = uuid::Uuid::parse_str(id)
-                && let Some(conv) = db.get_conversation(uuid).await?
-            {
-                convs.push(conv);
-            }
+        for id in conversations_arg
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            convs.push(resolve_conversation_by_id(db, id).await?);
         }
         convs
     };
@@ -4645,6 +4644,7 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 /// Run interactive fzf picker to select a conversation
 async fn run_fzf_picker(
     db: &Database,
+    runner: &AdapterRunner,
     config: &Config,
     source_filter: Option<String>,
     workspace_filter: Option<String>,
@@ -4652,15 +4652,11 @@ async fn run_fzf_picker(
     before: Option<chrono::DateTime<chrono::Utc>>,
     limit: i64,
     agent_override: Option<String>,
+    dry_run: bool,
     json_output: bool,
 ) -> Result<()> {
     use hstry_core::db::ListConversationsOptions;
     use std::process::{Command, Stdio};
-
-    // Determine agent if specified (for preview)
-    let agent_name = agent_override
-        .as_deref()
-        .unwrap_or(&config.resume.default_agent);
 
     // Fetch conversations with filters
     let workspace_filter_like = workspace_filter.as_ref().map(|v| format!("%{v}%"));
@@ -4747,73 +4743,29 @@ async fn run_fzf_picker(
         return Ok(());
     }
 
-    // Extract ID and resume
     let selected_id = id_map
         .get(selected)
         .ok_or_else(|| anyhow::anyhow!("Could not find selected conversation"))?;
 
-    // Now call cmd_resume with the selected ID
-    // We need to re-resolve but since we have the ID, we can use resolve_conversation_by_id
-    let conversation = db
-        .get_conversation(*selected_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
-
-    // Get agent config (same logic as cmd_resume)
-    let agent_config = config
-        .resume
-        .agents
-        .get(agent_name)
-        .ok_or_else(|| {
-            let available: Vec<_> = config.resume.agents.keys().collect();
-            anyhow::anyhow!(
-                "No resume configuration for agent '{agent_name}'. Available: {available:?}"
-            )
-        })?
-        .clone();
-
-    // Get source
-    let source = db
-        .get_source(&conversation.source_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Source '{}' not found", conversation.source_id))?;
-
-    let source_adapter = &source.adapter;
-    let is_same_agent = source_adapter == &agent_config.format;
-
-    // Output what would happen
-    if json_output {
-        return emit_json(JsonResponse {
-            ok: true,
-            result: Some(serde_json::json!({
-                "conversation_id": conversation.id,
-                "title": conversation.title,
-                "source": conversation.source_id,
-                "source_adapter": source_adapter,
-                "target_agent": agent_name,
-                "target_format": agent_config.format,
-                "is_same_agent": is_same_agent,
-                "action": if is_same_agent { "open_directly" } else { "convert" },
-            })),
-            error: None,
-        });
-    }
-
-    println!(
-        "Selected: {} ({})",
-        conversation.title.as_deref().unwrap_or("(untitled)"),
-        conversation.id
-    );
-    println!("Source: {} ({})", source_adapter, conversation.source_id);
-    println!("Target agent: {} ({})", agent_name, agent_config.format);
-
-    if is_same_agent {
-        println!("Action: Open directly in {}", agent_name);
-    } else {
-        println!("Action: Convert to {} format", agent_config.format);
-    }
-
-    Ok(())
+    // Dispatch through the same path as an explicitly supplied ID so picker
+    // selection performs the conversion/direct resume and launches the agent.
+    Box::pin(cmd_resume(
+        db,
+        runner,
+        config,
+        Some(selected_id.to_string()),
+        None,
+        agent_override,
+        None,
+        None,
+        None,
+        None,
+        limit,
+        dry_run,
+        false,
+        json_output,
+    ))
+    .await
 }
 
 async fn cmd_resume(
@@ -4859,6 +4811,7 @@ async fn cmd_resume(
     if pick {
         return run_fzf_picker(
             db,
+            runner,
             config,
             source_filter,
             workspace_filter,
@@ -4866,6 +4819,7 @@ async fn cmd_resume(
             before,
             limit,
             agent_override,
+            dry_run,
             json_output,
         )
         .await;

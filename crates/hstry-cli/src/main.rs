@@ -2166,6 +2166,7 @@ fn is_system_context(content: &str) -> bool {
         "Guidance for coding agents",
         "<SYSTEM_PROMPT>",
         "</SYSTEM_PROMPT>",
+        "The conversation history before this point was compacted",
     ];
 
     for marker in &strong_markers {
@@ -4285,6 +4286,11 @@ mod tests {
         assert!(!is_system_context("Can you help me with this code?"));
         assert!(!is_system_context("The agent ran the command successfully"));
         assert!(!is_system_context("Check the AGENTS.md file")); // just filename mention
+
+        // Compaction-continuation messages must not be treated as real titles
+        assert!(is_system_context(
+            "The conversation history before this point was compacted into the following summary:"
+        ));
     }
 
     #[test]

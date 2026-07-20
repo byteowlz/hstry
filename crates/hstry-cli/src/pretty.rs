@@ -138,7 +138,7 @@ fn print_rows(rows: &[(String, String, String, String, String)], empty: &str) {
         .unwrap_or(2)
         .clamp(8, 20);
     let fixed_width = workspace_width + source_width + age_width + id_width + 8;
-    let title_width = terminal_width.saturating_sub(fixed_width).max(24);
+    let title_width = terminal_width.saturating_sub(fixed_width).clamp(24, 72);
 
     println!(
         "{:<title_width$}  {:<workspace_width$}  {:<source_width$}  {:>age_width$}  {:<id_width$}",

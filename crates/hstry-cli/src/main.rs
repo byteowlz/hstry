@@ -294,6 +294,11 @@ enum Command {
         /// Truncate `last_assistant` to N chars in peek bundles (default 400).
         #[arg(long, requires = "peek")]
         peek_chars: Option<usize>,
+
+        /// Include continuation fragments (resume/compaction sessions) that are
+        /// hidden by default. Their content is always searchable regardless.
+        #[arg(short, long)]
+        all: bool,
     },
 
     /// Show a conversation
@@ -1034,6 +1039,7 @@ async fn main() -> Result<()> {
             input,
             peek,
             peek_chars,
+            all,
         } => {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
@@ -1054,7 +1060,10 @@ async fn main() -> Result<()> {
                 )
                 .await
             } else {
-                cmd_list(&db, source, workspace, limit, after_dt, before_dt, cli.json).await
+                cmd_list(
+                    &db, source, workspace, limit, after_dt, before_dt, all, cli.json,
+                )
+                .await
             }
         }
         Command::Show { id, input } => {
@@ -2166,7 +2175,6 @@ fn is_system_context(content: &str) -> bool {
         "Guidance for coding agents",
         "<SYSTEM_PROMPT>",
         "</SYSTEM_PROMPT>",
-        "The conversation history before this point was compacted",
     ];
 
     for marker in &strong_markers {
@@ -2181,6 +2189,17 @@ fn is_system_context(content: &str) -> bool {
     }
 
     false
+}
+
+/// Detect a resume/compaction continuation fragment whose first user message is
+/// the synthetic "conversation history ... compacted" summary Claude Code
+/// injects. These are hidden from `list` by default but stay fully searchable.
+fn is_continuation_fragment(first_user: Option<&str>) -> bool {
+    first_user.is_some_and(|content| {
+        content
+            .trim_start()
+            .starts_with("The conversation history before this point was compacted")
+    })
 }
 
 #[derive(Serialize)]
@@ -2364,6 +2383,7 @@ async fn cmd_list(
     limit: i64,
     after: Option<chrono::DateTime<chrono::Utc>>,
     before: Option<chrono::DateTime<chrono::Utc>>,
+    include_all: bool,
     json: bool,
 ) -> Result<()> {
     let dedup_across_sources = source.is_none();
@@ -2380,34 +2400,28 @@ async fn cmd_list(
         }),
     };
 
-    if json {
-        let previews = if dedup_across_sources {
-            let mut deduped =
-                dedup_conversation_previews(db.list_conversation_previews(opts).await?);
-            if limit > 0 {
-                deduped.truncate(limit as usize);
-            }
-            deduped
-        } else {
-            db.list_conversation_previews(opts).await?
-        };
+    let mut fetched = db.list_conversation_previews(opts).await?;
+    if !include_all {
+        fetched.retain(|preview| !is_continuation_fragment(preview.first_user_message.as_deref()));
+    }
 
+    let previews = if dedup_across_sources {
+        let mut deduped = dedup_conversation_previews(fetched);
+        if limit > 0 {
+            deduped.truncate(limit as usize);
+        }
+        deduped
+    } else {
+        fetched
+    };
+
+    if json {
         return emit_json(JsonResponse {
             ok: true,
             result: Some(previews),
             error: None,
         });
     }
-
-    let previews = if dedup_across_sources {
-        let mut deduped = dedup_conversation_previews(db.list_conversation_previews(opts).await?);
-        if limit > 0 {
-            deduped.truncate(limit as usize);
-        }
-        deduped
-    } else {
-        db.list_conversation_previews(opts).await?
-    };
 
     let display = previews
         .into_iter()
@@ -4228,7 +4242,10 @@ fn display_title_for_list(title: Option<&str>, first_user: Option<&str>) -> Stri
     let title = title.unwrap_or("");
     let first_user = first_user.unwrap_or("");
 
-    if (title.is_empty() || is_system_context(title)) && !first_user.trim().is_empty() {
+    if (title.is_empty() || is_system_context(title))
+        && !first_user.trim().is_empty()
+        && !is_continuation_fragment(Some(first_user))
+    {
         return first_user.to_string();
     }
 
@@ -4287,10 +4304,23 @@ mod tests {
         assert!(!is_system_context("The agent ran the command successfully"));
         assert!(!is_system_context("Check the AGENTS.md file")); // just filename mention
 
-        // Compaction-continuation messages must not be treated as real titles
-        assert!(is_system_context(
+        // Compaction-continuation content stays searchable, so it is NOT
+        // classified as system context (that path drives search filtering).
+        assert!(!is_system_context(
             "The conversation history before this point was compacted into the following summary:"
         ));
+    }
+
+    #[test]
+    fn continuation_fragments_are_detected_and_hidden_by_default() {
+        assert!(is_continuation_fragment(Some(
+            "The conversation history before this point was compacted into the following summary: ..."
+        )));
+        assert!(is_continuation_fragment(Some(
+            "\n  The conversation history before this point was compacted"
+        )));
+        assert!(!is_continuation_fragment(Some("Central Server for ROMs")));
+        assert!(!is_continuation_fragment(None));
     }
 
     #[test]

@@ -197,8 +197,9 @@ export function textOnlyParts(content: string): CanonPart[] | undefined {
  * path separator.
  */
 export function isUnderCanonicalRoot(candidate: string, root: string): boolean {
-  const c = candidate.replace(/\/+$/, '');
-  const r = root.replace(/\/+$/, '');
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const c = norm(candidate);
+  const r = norm(root);
   if (c === r) return true;
   // Match `${r}/...` only — not `${r}-other` or `${r}.bak`.
   return c.startsWith(r + '/');

@@ -329,6 +329,9 @@ hstry-tui
 | `cursor` | `Cursor workspaceStorage` (platform-specific) | Cursor (state.vscdb) |
 | `opencode` | `~/.local/share/opencode` | OpenCode |
 | `pi` | `~/.pi/agent/sessions` | Pi coding agent |
+| `qclaw` | `~/.qclaw/agents` | QClaw / OpenClaw (Pi-style JSONL) |
+| `workbuddy` | `~/.workbuddy/projects` | WorkBuddy (event JSONL; v1 skips subagents) |
+| `antigravity` | `~/.gemini/tmp` | Gemini CLI sessions (CLI-only v1) |
 | `aider` | Project directories | Aider (finds `.aider.chat.history.md`) |
 | `goose` | `~/.local/share/goose/sessions` | Goose (SQLite/JSONL) |
 | `jan` | `~/jan/threads` | Jan.ai |

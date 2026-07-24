@@ -697,14 +697,8 @@ fn stop_service() -> Result<()> {
     };
 
     if is_process_running(pid) {
-        if let Ok(pid_i32) = i32::try_from(pid) {
-            use nix::sys::signal::{Signal, kill};
-            use nix::unistd::Pid;
-            let _ = kill(Pid::from_raw(pid_i32), Signal::SIGTERM);
-            println!("Sent SIGTERM to service (pid {pid}).");
-        } else {
-            println!("Service not running.");
-        }
+        terminate_process(pid)?;
+        println!("Sent termination signal to service (pid {pid}).");
     } else {
         println!("Service not running.");
     }
@@ -713,12 +707,65 @@ fn stop_service() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> Result<()> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let pid_i32 = i32::try_from(pid).context("Invalid PID")?;
+    kill(Pid::from_raw(pid_i32), Signal::SIGTERM).context("Failed to send SIGTERM")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_process(pid: u32) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .context("Failed to run taskkill")?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("taskkill exited with {status}");
+    }
+}
+
+#[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
+
     i32::try_from(pid)
         .map(|pid_i32| kill(Pid::from_raw(pid_i32), None).is_ok())
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn is_process_running(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.contains(&pid.to_string())
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn get_service_status(config_path: &Path) -> Result<ServiceStatus> {

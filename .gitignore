@@ -6,3 +6,4 @@ eval/
 .vscode/
 
 node_modules/
+.codegraph/

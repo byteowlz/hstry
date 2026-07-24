@@ -172,11 +172,11 @@ gh workflow run release.yml -f tag=v1.0.0
 - Linux x86_64 (ubuntu-latest)
 - macOS x86_64 (cross-compiled from macos-14 ARM64)
 - macOS ARM64 (macos-14)
-- Windows x86_64 (if enabled)
+- Windows x86_64 — **CI** (`windows-latest` in `.github/workflows/ci.yml`) runs `cargo check` / `cargo test`; **release zip packaging** in `release.yml` is still a follow-up
 
 **Disabled by default (uncomment in workflow if needed):**
 - Linux ARM64: Requires `Cross.toml` with OpenSSL configuration
-- Windows: May have C runtime mismatch issues with some crates
+- Windows release artifacts: enable `x86_64-pc-windows-msvc` in `release.yml` when Scoop/zip distribution is ready
 
 **Platform notes:**
 - `macos-13` runner is retired - always use `macos-14`

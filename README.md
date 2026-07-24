@@ -47,6 +47,17 @@ makepkg -si
 cargo install --path crates/hstry-cli
 ```
 
+### Scoop (Windows)
+
+Once published to the Scoop bucket:
+
+```powershell
+scoop bucket add byteowlz https://github.com/byteowlz/scoop-bucket
+scoop install hstry
+```
+
+Until Scoop packaging ships, build from source (below) or install via Cargo.
+
 ### Pre-built Binaries
 
 Download pre-built binaries from the [GitHub Releases](https://github.com/byteowlz/hstry/releases) page.
@@ -54,6 +65,7 @@ Download pre-built binaries from the [GitHub Releases](https://github.com/byteow
 Available platforms:
 - Linux x86_64 and ARM64
 - macOS Intel and Apple Silicon
+- Windows x86_64 (release artifacts are a follow-up; CI already builds on `windows-latest`)
 
 ### Build from Source
 
@@ -67,6 +79,57 @@ To install all binaries (CLI, TUI, MCP):
 ```bash
 cargo install --path .
 ```
+
+### Windows (build and usage)
+
+Windows 11 is a first-class target. Paths follow the same `dirs` layout as other platforms:
+
+| Directory | Windows default |
+|-----------|-----------------|
+| Config / adapters | `%APPDATA%\hstry\` |
+| Database | `%LOCALAPPDATA%\hstry\hstry.db` |
+| Service state | `%LOCALAPPDATA%\hstry\` |
+
+**Dependencies**
+
+| Dependency | Purpose | Install |
+|------------|---------|---------|
+| Rust toolchain | Compile | [rustup](https://rustup.rs/) |
+| protoc | gRPC proto compile | `winget install Google.Protobuf` |
+| Node LTS | Run adapters | `winget install OpenJS.NodeJS.LTS` |
+| better-sqlite3 | Cursor / Codex SQLite parsing | In the adapters dir: `npm install` |
+
+**Notes**
+
+- Adapters are executed directly by the Rust runtime via `node` / `bun` / `deno`. **pnpm is not required at runtime.**
+- Prefer `js_runtime = "node"` in `config.toml`. Deno cannot load the `better-sqlite3` native module.
+- After cloning or updating adapters, copy them into the config directory:
+
+```powershell
+# From the repo root
+just update-adapters-windows
+# or
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-adapters.ps1
+```
+
+Then install native deps once:
+
+```powershell
+cd $env:APPDATA\hstry\adapters
+npm install
+```
+
+**Build and run**
+
+```powershell
+# Needs protoc on PATH (see winget above)
+cargo build -p hstry-cli --release
+cargo run -p hstry-cli -- scan
+cargo run -p hstry-cli -- import $env:USERPROFILE\.codex\sessions
+cargo run -p hstry-cli -- search "query"
+```
+
+Service uses TCP by default on Windows (`transport = "tcp"`). Do not set `transport = "unix"`.
 
 ## Quick Start
 
@@ -235,15 +298,15 @@ Command templates support these placeholders: `{session_path}`, `{session_id}`, 
 
 ## Configuration
 
-hstry follows XDG Base Directory specifications:
+hstry follows XDG Base Directory specifications on Unix, and the platform defaults from the `dirs` crate on Windows:
 
-| Directory | Default | Environment Override |
-|-----------|---------|---------------------|
-| Config | `~/.config/hstry/` | `$XDG_CONFIG_HOME/hstry/` |
-| Data | `~/.local/share/hstry/` | `$XDG_DATA_HOME/hstry/` |
-| State | `~/.local/state/hstry/` | `$XDG_STATE_HOME/hstry/` |
+| Directory | Unix default | Windows default | Environment Override |
+|-----------|--------------|-----------------|---------------------|
+| Config | `~/.config/hstry/` | `%APPDATA%\hstry\` | `$XDG_CONFIG_HOME/hstry/` |
+| Data | `~/.local/share/hstry/` | `%LOCALAPPDATA%\hstry\` | `$XDG_DATA_HOME/hstry/` |
+| State | `~/.local/state/hstry/` | `%LOCALAPPDATA%\hstry\` | `$XDG_STATE_HOME/hstry/` |
 
-Default config: `~/.config/hstry/config.toml`
+Default config: `~/.config/hstry/config.toml` (Windows: `%APPDATA%\hstry\config.toml`)
 
 ```toml
 "$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
@@ -378,8 +441,8 @@ just check-all       # Format, lint, and test
 just test            # Run tests only
 just clippy          # Lint only
 just update-adapters # Copy latest adapters to ~/.config/hstry/adapters
+just update-adapters-windows # Windows: copy to %APPDATA%\hstry\adapters
 ```
-
 ## Contributing
 
 Contributions are welcome! Please see [docs/RELEASE.md](docs/RELEASE.md) for information about the release process.
@@ -392,9 +455,10 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list of changes.
 
 The release process is fully automated via GitHub Actions:
 
-1. **GitHub Releases**: Automatic builds for Linux (x86_64/ARM64) and macOS (Intel/Apple Silicon)
+1. **GitHub Releases**: Automatic builds for Linux (x86_64/ARM64) and macOS (Intel/Apple Silicon); Windows zip packaging is a follow-up
 2. **Homebrew**: Automatic formula updates in `byteowlz/homebrew-tap`
 3. **AUR**: Automatic PKGBUILD updates
+4. **Scoop** (planned): Windows installs via `byteowlz/scoop-bucket`
 
 See [docs/RELEASE.md](docs/RELEASE.md) for detailed release instructions.
 

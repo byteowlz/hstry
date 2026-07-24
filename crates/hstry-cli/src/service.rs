@@ -683,6 +683,16 @@ fn start_service(config_path: &Path) -> Result<()> {
         cmd.process_group(0);
     }
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Mirror unix process_group(0): keep the background service alive after
+        // the parent CLI exits, and avoid flashing a console window.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
+
     let child = cmd.spawn().context("Failed to start service process")?;
     let pid = child.id();
     write_pid_file(pid)?;

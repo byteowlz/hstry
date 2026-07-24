@@ -233,3 +233,25 @@ mod remote_config_tests {
         assert_eq!(parsed.port, remote.port);
     }
 }
+
+#[cfg(test)]
+mod sync_config_tests {
+    use super::super::{SyncConfig, sanitize_device_namespace};
+
+    #[test]
+    fn sanitize_device_namespace_normalizes_labels() {
+        assert_eq!(sanitize_device_namespace("Arknight"), "arknight");
+        assert_eq!(sanitize_device_namespace("win-pc"), "win-pc");
+        assert_eq!(sanitize_device_namespace("MacBook Pro"), "macbook-pro");
+        assert_eq!(sanitize_device_namespace("---"), "unknown");
+    }
+
+    #[test]
+    fn device_namespace_prefers_configured_device_id() {
+        let config = SyncConfig {
+            device_id: Some("arknights".to_string()),
+            ..SyncConfig::default()
+        };
+        assert_eq!(config.device_namespace(), "arknights");
+    }
+}

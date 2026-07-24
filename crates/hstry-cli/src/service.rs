@@ -1313,11 +1313,13 @@ impl ServiceState {
                         .await
                         .map(|_| ())
                 }
-                hstry_core::remote::SyncDirection::Push => {
-                    hstry_core::remote::sync_to_remote(&self.config.database, remote_config)
-                        .await
-                        .map(|_| ())
-                }
+                hstry_core::remote::SyncDirection::Push => hstry_core::remote::sync_to_remote(
+                    &self.config.database,
+                    remote_config,
+                    &self.config.sync.device_namespace(),
+                )
+                .await
+                .map(|_| ()),
                 hstry_core::remote::SyncDirection::Bidirectional => Ok(()),
             };
         }

@@ -480,6 +480,47 @@ impl Default for SyncConfig {
     }
 }
 
+/// Normalize a device label for use as a remote merge namespace (`{namespace}:{source_id}`).
+pub fn sanitize_device_namespace(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn default_hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+impl SyncConfig {
+    /// Namespace used when pushing a satellite database to a hub.
+    ///
+    /// Prefers explicit `device_id` from config; falls back to the OS hostname.
+    pub fn device_namespace(&self) -> String {
+        if let Some(ref id) = self.device_id {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return sanitize_device_namespace(trimmed);
+            }
+        }
+        sanitize_device_namespace(&default_hostname())
+    }
+}
+
 impl Config {
     /// Resolve Tantivy index path from config.
     pub fn search_index_path(&self) -> PathBuf {

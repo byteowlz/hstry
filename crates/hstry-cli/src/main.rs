@@ -454,6 +454,10 @@ enum Command {
         /// Filter by source
         #[arg(long)]
         source: Option<String>,
+
+        /// Deduplicate across sources by harness + external_id (e.g. multiple Cursor paths)
+        #[arg(long)]
+        cross_source: bool,
     },
 
     /// Integrate with mmry
@@ -698,6 +702,17 @@ enum SourceCommand {
     /// Clean up duplicate sources (same adapter/path with different IDs)
     Cleanup {
         /// Remove duplicate sources automatically
+        #[arg(long)]
+        auto_remove: bool,
+    },
+
+    /// Remove redundant Cursor sources (keep globalStorage when present)
+    PruneCursor {
+        /// Only show what would be removed
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Remove redundant sources automatically
         #[arg(long)]
         auto_remove: bool,
     },
@@ -1203,10 +1218,14 @@ async fn main() -> Result<()> {
             apply_storage_config(&db, &config);
             cmd_stats(&db, cli.json).await
         }
-        Command::Dedup { dry_run, source } => {
+        Command::Dedup {
+            dry_run,
+            source,
+            cross_source,
+        } => {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
-            cmd_dedup(&db, dry_run, source, cli.json).await
+            cmd_dedup(&db, dry_run, source, cross_source, cli.json).await
         }
         Command::Mmry { command } => {
             let db = Database::open(&config.database).await?;
@@ -2335,9 +2354,44 @@ fn source_preference(source_id: &str, harness: Option<&str>) -> u8 {
     }
 }
 
+fn cursor_source_path_rank(path: &str) -> u8 {
+    let normalized = path.replace('\\', "/").to_lowercase();
+    if normalized.contains("globalstorage") {
+        0
+    } else if normalized.contains("workspacestorage") {
+        2
+    } else if normalized.contains("cursaves") {
+        3
+    } else {
+        1
+    }
+}
+
+fn source_quality_rank(
+    source_id: &str,
+    sources: &std::collections::HashMap<String, hstry_core::models::Source>,
+    harness: Option<&str>,
+) -> u8 {
+    if let Some(source) = sources.get(source_id) {
+        if source.adapter == "cursor" {
+            return cursor_source_path_rank(source.path.as_deref().unwrap_or(""));
+        }
+    }
+    source_preference(source_id, harness)
+}
+
 fn should_replace_conversation(candidate: &Conversation, current: &Conversation) -> bool {
-    let candidate_pref = source_preference(&candidate.source_id, candidate.harness.as_deref());
-    let current_pref = source_preference(&current.source_id, current.harness.as_deref());
+    should_replace_conversation_with_sources(candidate, current, &std::collections::HashMap::new())
+}
+
+fn should_replace_conversation_with_sources(
+    candidate: &Conversation,
+    current: &Conversation,
+    sources: &std::collections::HashMap<String, hstry_core::models::Source>,
+) -> bool {
+    let candidate_pref =
+        source_quality_rank(&candidate.source_id, sources, candidate.harness.as_deref());
+    let current_pref = source_quality_rank(&current.source_id, sources, current.harness.as_deref());
 
     if candidate_pref != current_pref {
         return candidate_pref < current_pref;
@@ -2855,6 +2909,132 @@ async fn cmd_source(
                     error: None,
                 });
             }
+        }
+        SourceCommand::PruneCursor {
+            dry_run,
+            auto_remove,
+        } => {
+            let sources = db.list_sources().await?;
+            let cursor_sources: Vec<_> = sources.iter().filter(|s| s.adapter == "cursor").collect();
+
+            if cursor_sources.is_empty() {
+                if !json {
+                    println!("No Cursor sources configured.");
+                }
+                return Ok(());
+            }
+
+            let has_global_storage = cursor_sources
+                .iter()
+                .any(|s| cursor_source_path_rank(s.path.as_deref().unwrap_or("")) == 0);
+
+            let mut to_remove: Vec<String> = Vec::new();
+            let mut keep: Vec<String> = Vec::new();
+
+            if has_global_storage {
+                for source in &cursor_sources {
+                    let rank = cursor_source_path_rank(source.path.as_deref().unwrap_or(""));
+                    if rank == 0 {
+                        keep.push(source.id.clone());
+                    } else {
+                        to_remove.push(source.id.clone());
+                    }
+                }
+            } else {
+                let min_rank = cursor_sources
+                    .iter()
+                    .map(|s| cursor_source_path_rank(s.path.as_deref().unwrap_or("")))
+                    .min()
+                    .unwrap_or(1);
+
+                let mut candidates: Vec<_> = cursor_sources
+                    .iter()
+                    .filter(|s| {
+                        cursor_source_path_rank(s.path.as_deref().unwrap_or("")) == min_rank
+                    })
+                    .collect();
+                candidates.sort_by(|a, b| a.id.cmp(&b.id));
+
+                if let Some(best) = candidates.first() {
+                    keep.push(best.id.clone());
+                    for source in &cursor_sources {
+                        if source.id != best.id {
+                            to_remove.push(source.id.clone());
+                        }
+                    }
+                }
+            }
+
+            if !json {
+                println!("Cursor sources: {}", cursor_sources.len());
+                for id in &keep {
+                    println!("  Keep: {id}");
+                }
+                for id in &to_remove {
+                    if let Some(source) = cursor_sources.iter().find(|s| &s.id == id) {
+                        println!("  Remove: {id} ({})", source.path.as_deref().unwrap_or("-"));
+                    }
+                }
+            }
+
+            if to_remove.is_empty() {
+                if !json {
+                    println!("No redundant Cursor sources to prune.");
+                }
+                return Ok(());
+            }
+
+            if dry_run || !auto_remove {
+                if !json && !dry_run {
+                    println!(
+                        "Run with --auto-remove to delete redundant sources (after `hstry dedup --cross-source`)."
+                    );
+                } else if !json && dry_run {
+                    println!("Dry run: would remove {} Cursor sources.", to_remove.len());
+                } else if json {
+                    return emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(serde_json::json!({
+                            "dry_run": dry_run,
+                            "keep": keep,
+                            "remove": to_remove,
+                        })),
+                        error: None,
+                    });
+                }
+                return Ok(());
+            }
+
+            let mut conversations_removed = 0i64;
+            let mut messages_removed = 0i64;
+            for source_id in &to_remove {
+                let (conv_count, msg_count) =
+                    db.count_source_data(source_id).await.unwrap_or((0, 0));
+                conversations_removed += conv_count;
+                messages_removed += msg_count;
+                db.remove_source(source_id).await?;
+            }
+
+            if json {
+                return emit_json(JsonResponse {
+                    ok: true,
+                    result: Some(serde_json::json!({
+                        "removed_sources": to_remove.len(),
+                        "removed_conversations": conversations_removed,
+                        "removed_messages": messages_removed,
+                        "keep": keep,
+                        "source_ids": to_remove,
+                    })),
+                    error: None,
+                });
+            }
+
+            println!(
+                "Removed {} Cursor sources ({} conversations, {} messages)",
+                to_remove.len(),
+                conversations_removed,
+                messages_removed
+            );
         }
     }
     Ok(())
@@ -5584,11 +5764,26 @@ async fn cmd_dedup(
     db: &Database,
     dry_run: bool,
     source_filter: Option<String>,
+    cross_source: bool,
     json: bool,
 ) -> Result<()> {
     use std::collections::HashMap;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
+    if cross_source && source_filter.is_some() {
+        anyhow::bail!("--cross-source cannot be combined with --source");
+    }
+
+    let sources: HashMap<String, hstry_core::models::Source> = if cross_source {
+        db.list_sources()
+            .await?
+            .into_iter()
+            .map(|s| (s.id.clone(), s))
+            .collect()
+    } else {
+        HashMap::new()
+    };
 
     let opts = hstry_core::db::ListConversationsOptions {
         source_id: source_filter,
@@ -5601,46 +5796,76 @@ async fn cmd_dedup(
     let conversations = db.list_conversations(opts).await?;
 
     if !json {
+        let mode = if cross_source {
+            "cross-source (harness + external_id)"
+        } else {
+            "per-source content hash"
+        };
         println!(
-            "Scanning {} conversations for duplicates...",
+            "Scanning {} conversations for duplicates ({mode})...",
             conversations.len()
         );
     }
 
-    // Group conversations by a hash of their full content
-    let mut groups: HashMap<u64, Vec<Conversation>> = HashMap::new();
-
-    for conv in conversations {
-        let messages = db.get_messages(conv.id).await?;
-
-        // Hash all message content for accurate dedup
-        let mut hasher = DefaultHasher::new();
-        conv.source_id.hash(&mut hasher);
-        for msg in &messages {
-            msg.role.to_string().hash(&mut hasher);
-            msg.content.hash(&mut hasher);
-        }
-        let hash = hasher.finish();
-
-        groups.entry(hash).or_default().push(conv);
-    }
-
-    // Find groups with duplicates
-    let mut duplicates_found = 0usize;
     let mut to_remove: Vec<uuid::Uuid> = Vec::new();
+    let mut duplicates_found = 0usize;
 
-    for (_key, mut convs) in groups {
-        if convs.len() > 1 {
+    if cross_source {
+        let mut groups: HashMap<String, Vec<Conversation>> = HashMap::new();
+        for conv in conversations {
+            groups
+                .entry(conversation_identity_key(&conv))
+                .or_default()
+                .push(conv);
+        }
+
+        for mut convs in groups.into_values() {
+            if convs.len() <= 1 {
+                continue;
+            }
             duplicates_found += convs.len() - 1;
-            // Sort by updated_at descending, keep the most recent
-            convs.sort_by(|a, b| {
-                let a_time = a.updated_at.unwrap_or(a.created_at);
-                let b_time = b.updated_at.unwrap_or(b.created_at);
-                b_time.cmp(&a_time)
-            });
-            // Keep first (most recent), mark rest for removal
-            for conv in convs.into_iter().skip(1) {
-                to_remove.push(conv.id);
+            let mut best = convs.remove(0);
+            for candidate in convs {
+                if should_replace_conversation_with_sources(&candidate, &best, &sources) {
+                    to_remove.push(best.id);
+                    best = candidate;
+                } else {
+                    to_remove.push(candidate.id);
+                }
+            }
+        }
+    } else {
+        // Group conversations by a hash of their full content
+        let mut groups: HashMap<u64, Vec<Conversation>> = HashMap::new();
+
+        for conv in conversations {
+            let messages = db.get_messages(conv.id).await?;
+
+            // Hash all message content for accurate dedup
+            let mut hasher = DefaultHasher::new();
+            conv.source_id.hash(&mut hasher);
+            for msg in &messages {
+                msg.role.to_string().hash(&mut hasher);
+                msg.content.hash(&mut hasher);
+            }
+            let hash = hasher.finish();
+
+            groups.entry(hash).or_default().push(conv);
+        }
+
+        for (_key, mut convs) in groups {
+            if convs.len() > 1 {
+                duplicates_found += convs.len() - 1;
+                // Sort by updated_at descending, keep the most recent
+                convs.sort_by(|a, b| {
+                    let a_time = a.updated_at.unwrap_or(a.created_at);
+                    let b_time = b.updated_at.unwrap_or(b.created_at);
+                    b_time.cmp(&a_time)
+                });
+                // Keep first (most recent), mark rest for removal
+                for conv in convs.into_iter().skip(1) {
+                    to_remove.push(conv.id);
+                }
             }
         }
     }
@@ -6444,15 +6669,24 @@ async fn cmd_remote(
                             .map(|(_, sync)| sync)
                     }
                     hstry_core::remote::SyncDirection::Push => {
-                        remote::sync_to_remote(&config.database, remote_config).await
+                        remote::sync_to_remote(
+                            &config.database,
+                            remote_config,
+                            &config.sync.device_namespace(),
+                        )
+                        .await
                     }
                     hstry_core::remote::SyncDirection::Bidirectional => {
                         // Pull first, then push
                         let pull_result = remote::sync_from_remote(db, remote_config).await;
                         match pull_result {
                             Ok((_, mut sync)) => {
-                                if let Ok(push_sync) =
-                                    remote::sync_to_remote(&config.database, remote_config).await
+                                if let Ok(push_sync) = remote::sync_to_remote(
+                                    &config.database,
+                                    remote_config,
+                                    &config.sync.device_namespace(),
+                                )
+                                .await
                                 {
                                     sync.conversations_added += push_sync.conversations_added;
                                     sync.conversations_updated += push_sync.conversations_updated;

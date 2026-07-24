@@ -477,7 +477,11 @@ pub async fn sync_from_remote(
 }
 
 /// Push local database to remote and merge.
-pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Result<SyncResult> {
+pub async fn sync_to_remote(
+    local_db_path: &Path,
+    config: &RemoteConfig,
+    device_namespace: &str,
+) -> Result<SyncResult> {
     let transport = SshTransport::from_config(config);
 
     // Test connection
@@ -503,8 +507,8 @@ pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Resu
     // Open/create the temp database
     let temp_db = Database::open(&temp_db_path).await?;
 
-    // Merge local into temp (with namespace "local" for tracking)
-    let sync_result = merge_databases(&temp_db, local_db_path, "local").await?;
+    let namespace = crate::config::sanitize_device_namespace(device_namespace);
+    let sync_result = merge_databases(&temp_db, local_db_path, &namespace).await?;
 
     temp_db.close().await;
 

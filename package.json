@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "better-sqlite3": "^13.0.1",
     "pi-subdir-context": "npm:pi-subdir-context"
   }
 }

@@ -6,3 +6,8 @@ eval/
 .vscode/
 
 node_modules/
+.codegraph/
+
+# local adapter / import test artifacts
+dry-run*.txt
+parse-limit*.json

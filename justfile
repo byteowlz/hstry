@@ -1,5 +1,8 @@
 # hstry justfile (Rust workspace)
 
+# On Windows, run recipes via PowerShell (default `sh` is often missing).
+set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
+
 # Default recipe - show help
 default:
     @just --list
@@ -247,3 +250,7 @@ update-adapters:
     @rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters/"*
     @cp -r adapters/* "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters/"
     @echo "Adapters updated in ${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters"
+
+# Copy latest adapters on Windows (%APPDATA%\hstry\adapters, or $XDG_CONFIG_HOME)
+update-adapters-windows:
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-adapters.ps1

@@ -307,7 +307,15 @@ hstry search "auth error" --scope remote --remote laptop
 
 # Sync (merge) remote history into the local database
 hstry remote sync --remote laptop --direction pull
+
+# Push local staging to a hub (satellite mode; merges by device_id namespace)
+hstry remote sync --remote hub --direction push
 ```
+
+Satellite push merges into the hub database (it does not replace it). Configure
+`[[remotes]].database_path` when the hub DB is not the default path, and set
+`sync.device_id` per machine. See [`docs/remote-sync.md`](docs/remote-sync.md) for
+troubleshooting (spaced paths, concurrent push, verification).
 
 ## Terminal UI
 

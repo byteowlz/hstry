@@ -265,9 +265,13 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Build an SCP remote target (`user@host:'/path with spaces/file'`).
+/// Build an SCP remote target (`user@host:/path with spaces/file`).
+///
+/// The path is passed as a single `scp` argv element, so spaces are safe without
+/// shell quoting. Do not wrap the path in quotes — Windows OpenSSH scp treats
+/// `host:'/path'` as a literal path and fails to find the file.
 fn scp_remote_target(host: &str, remote_path: &str) -> String {
-    format!("{}:{}", host, shell_quote(remote_path))
+    format!("{host}:{remote_path}")
 }
 
 /// Get the cache directory for remote databases.
@@ -514,6 +518,12 @@ pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Resu
     let remote_exists = transport.file_exists(&expanded_path)?;
     if remote_exists {
         transport.fetch_file(&expanded_path, &temp_db_path)?;
+        let fetched_len = std::fs::metadata(&temp_db_path).map_err(Error::Io)?.len();
+        if fetched_len < 1024 {
+            return Err(Error::Remote(format!(
+                "Fetched remote database at {expanded_path} is unexpectedly small ({fetched_len} bytes); aborting push to avoid overwriting the hub"
+            )));
+        }
     } else if config.database_path.is_some() {
         tracing::warn!(
             remote = %expanded_path,
@@ -749,10 +759,10 @@ mod tests {
     }
 
     #[test]
-    fn scp_remote_target_quotes_remote_path() {
+    fn scp_remote_target_preserves_spaces_without_shell_quotes() {
         assert_eq!(
             scp_remote_target("admin@nas", "/vol1/1000/Code/hstry backup/hstry.db"),
-            "admin@nas:'/vol1/1000/Code/hstry backup/hstry.db'"
+            "admin@nas:/vol1/1000/Code/hstry backup/hstry.db"
         );
     }
 

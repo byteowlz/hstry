@@ -175,7 +175,7 @@ impl SshTransport {
         }
 
         // Expand remote path (shell expansion happens on remote)
-        let remote_spec = format!("{}:{}", self.host, remote_path);
+        let remote_spec = scp_remote_target(&self.host, remote_path);
 
         let mut cmd = self.scp_command();
         cmd.arg(&remote_spec).arg(local_path);
@@ -202,7 +202,7 @@ impl SshTransport {
         let metadata = std::fs::metadata(local_path)?;
         let size = metadata.len();
 
-        let remote_spec = format!("{}:{}", self.host, remote_path);
+        let remote_spec = scp_remote_target(&self.host, remote_path);
 
         let mut cmd = self.scp_command();
         cmd.arg(local_path).arg(&remote_spec);
@@ -241,17 +241,33 @@ impl SshTransport {
 
     /// Check if a file exists on the remote.
     pub fn file_exists(&self, remote_path: &str) -> Result<bool> {
-        let cmd = format!("test -f {remote_path} && echo yes || echo no");
+        let cmd = format!(
+            "test -f {} && echo yes || echo no",
+            shell_quote(remote_path)
+        );
         let output = self.exec(&cmd)?;
         Ok(output.trim() == "yes")
     }
 
     /// Get the expanded path on the remote (resolves ~ and env vars).
     pub fn expand_remote_path(&self, path: &str) -> Result<String> {
-        let cmd = format!("echo {path}");
+        let cmd = format!("eval echo {}", shell_quote(path));
         let output = self.exec(&cmd)?;
         Ok(output.trim().to_string())
     }
+}
+
+/// Quote a path for safe use in remote shell commands.
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Build an SCP remote target (`user@host:'/path with spaces/file'`).
+fn scp_remote_target(host: &str, remote_path: &str) -> String {
+    format!("{}:{}", host, shell_quote(remote_path))
 }
 
 /// Get the cache directory for remote databases.
@@ -494,10 +510,15 @@ pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Resu
     let temp_dir = tempfile::tempdir()?;
     let temp_db_path = temp_dir.path().join("merged.db");
 
-    // If remote DB exists, fetch it first
+    // If remote DB exists, fetch it first so we merge instead of replacing the hub.
     let remote_exists = transport.file_exists(&expanded_path)?;
     if remote_exists {
         transport.fetch_file(&expanded_path, &temp_db_path)?;
+    } else if config.database_path.is_some() {
+        tracing::warn!(
+            remote = %expanded_path,
+            "Remote hub database not found; push will create a new hub from local data only"
+        );
     }
 
     // Open/create the temp database
@@ -715,5 +736,165 @@ mod tests {
         let transport = SshTransport::from_config(&config);
         assert_eq!(transport.host, "user@example.com");
         assert_eq!(transport.port, Some(2222));
+    }
+
+    #[test]
+    fn shell_quote_escapes_spaces_and_single_quotes() {
+        assert_eq!(
+            shell_quote("/vol1/1000/Code/hstry backup/hstry.db"),
+            "'/vol1/1000/Code/hstry backup/hstry.db'"
+        );
+        assert_eq!(shell_quote("it's fine"), "'it'\"'\"'s fine'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn scp_remote_target_quotes_remote_path() {
+        assert_eq!(
+            scp_remote_target("admin@nas", "/vol1/1000/Code/hstry backup/hstry.db"),
+            "admin@nas:'/vol1/1000/Code/hstry backup/hstry.db'"
+        );
+    }
+
+    #[tokio::test]
+    async fn push_merge_preserves_existing_hub_sources() {
+        use crate::models::{MessageRole, Source};
+
+        let hub_dir = tempfile::tempdir().unwrap();
+        let hub_path = hub_dir.path().join("hub.db");
+        let hub = Database::open(&hub_path).await.unwrap();
+
+        let win_source = Source {
+            id: "arknights:cursor-abc".to_string(),
+            adapter: "cursor".to_string(),
+            path: Some("/win/cursor".to_string()),
+            last_sync_at: None,
+            config: serde_json::json!({}),
+        };
+        hub.upsert_source(&win_source).await.unwrap();
+
+        let conv = Conversation {
+            id: Uuid::new_v4(),
+            source_id: win_source.id.clone(),
+            external_id: Some("ext-1".to_string()),
+            readable_id: None,
+            platform_id: None,
+            title: Some("Windows session".to_string()),
+            created_at: Utc::now(),
+            updated_at: Some(Utc::now()),
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            metadata: serde_json::json!({}),
+            harness: None,
+            version: 0,
+            message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
+        };
+        hub.upsert_conversation(&conv).await.unwrap();
+        hub.insert_message(&Message {
+            id: Uuid::new_v4(),
+            conversation_id: conv.id,
+            idx: 0,
+            role: MessageRole::User,
+            content: "hello from windows".to_string(),
+            parts_json: serde_json::json!({}),
+            created_at: Some(Utc::now()),
+            model: None,
+            tokens: None,
+            cost_usd: None,
+            metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
+            harness: None,
+            client_id: None,
+        })
+        .await
+        .unwrap();
+        hub.close().await;
+
+        let mac_dir = tempfile::tempdir().unwrap();
+        let mac_path = mac_dir.path().join("mac.db");
+        let mac = Database::open(&mac_path).await.unwrap();
+
+        let mac_source = Source {
+            id: "cursor-xyz".to_string(),
+            adapter: "cursor".to_string(),
+            path: Some("/mac/cursor".to_string()),
+            last_sync_at: None,
+            config: serde_json::json!({}),
+        };
+        mac.upsert_source(&mac_source).await.unwrap();
+
+        let mac_conv = Conversation {
+            id: Uuid::new_v4(),
+            source_id: mac_source.id.clone(),
+            external_id: Some("ext-2".to_string()),
+            readable_id: None,
+            platform_id: None,
+            title: Some("Mac session".to_string()),
+            created_at: Utc::now(),
+            updated_at: Some(Utc::now()),
+            model: None,
+            provider: None,
+            workspace: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost_usd: None,
+            metadata: serde_json::json!({}),
+            harness: None,
+            version: 0,
+            message_count: 0,
+            parent_conversation_id: None,
+            parent_message_idx: None,
+            fork_type: None,
+        };
+        mac.upsert_conversation(&mac_conv).await.unwrap();
+        mac.insert_message(&Message {
+            id: Uuid::new_v4(),
+            conversation_id: mac_conv.id,
+            idx: 0,
+            role: MessageRole::User,
+            content: "hello from mac".to_string(),
+            parts_json: serde_json::json!({}),
+            created_at: Some(Utc::now()),
+            model: None,
+            tokens: None,
+            cost_usd: None,
+            metadata: serde_json::json!({}),
+            sender: None,
+            provider: None,
+            harness: None,
+            client_id: None,
+        })
+        .await
+        .unwrap();
+        mac.close().await;
+
+        let merged_dir = tempfile::tempdir().unwrap();
+        let merged_path = merged_dir.path().join("merged.db");
+        std::fs::copy(&hub_path, &merged_path).unwrap();
+        let merged = Database::open(&merged_path).await.unwrap();
+
+        let result = merge_databases(&merged, &mac_path, "macbook")
+            .await
+            .unwrap();
+        assert_eq!(result.conversations_added, 1);
+
+        let sources = merged.list_sources().await.unwrap();
+        let source_ids: Vec<_> = sources.iter().map(|s| s.id.as_str()).collect();
+        assert!(source_ids.contains(&"arknights:cursor-abc"));
+        assert!(source_ids.contains(&"macbook:cursor-xyz"));
+
+        let convs = merged
+            .list_conversations(crate::db::ListConversationsOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(convs.len(), 2);
     }
 }

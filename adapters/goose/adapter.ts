@@ -5,7 +5,7 @@
  * - SQLite database: ~/.local/share/goose/sessions/sessions.db (v1.10.0+)
  * - Legacy JSONL files: ~/.local/share/goose/sessions/*.jsonl
  *
- * Requires: better-sqlite3 for database support (npm install better-sqlite3)
+ * Uses bun:sqlite under Bun, or better-sqlite3 under Node when available.
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
@@ -26,13 +26,36 @@ import {
   toolResultPart,
 } from '../types/index.ts';
 
-// Dynamic import for better-sqlite3 (optional dependency)
-let Database: typeof import('better-sqlite3') | null = null;
+// Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node).
+// Avoid loading better-sqlite3 in Bun: some native builds can crash Bun before
+// the adapter gets a chance to fall back to JSONL parsing.
+let openDb: ((path: string) => SqliteDb) | null = null;
+
+interface SqliteDb {
+  prepare(sql: string): SqliteStatement;
+  close(): void;
+}
+
+interface SqliteStatement {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+}
+
 try {
-  Database = (await import('better-sqlite3')).default;
+  if (typeof Bun !== 'undefined') {
+    // @ts-ignore - bun:sqlite is Bun-only
+    const { Database: BunDb } = await import('bun:sqlite');
+    openDb = (path: string) => new BunDb(path, { readonly: true }) as unknown as SqliteDb;
+  } else {
+    const mod = await import('better-sqlite3');
+    const BetterSqlite = mod.default;
+    openDb = (path: string) => BetterSqlite(path, { readonly: true }) as unknown as SqliteDb;
+  }
 } catch {
   // SQLite not available - will fall back to JSONL only
 }
+
+declare const Bun: unknown;
 
 const DEFAULT_PATHS_UNIX = [
   join(homedir(), '.local', 'share', 'goose', 'sessions'),
@@ -104,13 +127,13 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
-    // Check for SQLite database (if better-sqlite3 is available)
-    if (Database) {
+    // Check for SQLite database (if SQLite support is available)
+    if (openDb) {
       const dbPath = join(path, 'sessions.db');
       const dbStats = await stat(dbPath).catch(() => null);
       if (dbStats?.isFile()) {
         try {
-          const db = new Database(dbPath, { readonly: true });
+          const db = openDb(dbPath);
           const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
           db.close();
           if (tables.some(t => t.name === 'sessions' || t.name === 'session')) {
@@ -193,12 +216,12 @@ const adapter: Adapter = {
 };
 
 async function parseDatabase(dbPath: string, opts?: ParseOptions): Promise<Conversation[]> {
-  if (!Database) return [];
+  if (!openDb) return [];
 
   const conversations: Conversation[] = [];
 
   try {
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDb(dbPath);
 
     // Check if messages table exists (new schema)
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];

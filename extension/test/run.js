@@ -30,7 +30,7 @@ const FIXTURES = {
           account: { account_id: 'acc-personal', plan_type: 'plus', structure: 'personal' },
         },
         'team-1': {
-          account: { account_id: 'acc-team1', organization_name: 'Fraunhofer', structure: 'workspace' },
+          account: { account_id: 'acc-team1', organization_name: 'Fixture Workspace', structure: 'workspace' },
         },
       },
     },
@@ -70,7 +70,9 @@ const FIXTURES = {
     },
   },
   'claude.ai': {
-    '/api/organizations': [{ uuid: 'org-fixture-1', name: 'Personal', capabilities: ['chat'] }],
+    '/api/organizations': {
+      organizations: [{ id: 'org-fixture-1', name: 'Personal', capabilities: ['claude_pro'] }],
+    },
     '/api/organizations/org-fixture-1/chat_conversations': [
       { uuid: 'claude-conv-1', name: 'Claude fixture chat', created_at: OLD_ISO, updated_at: OLD_ISO },
     ],

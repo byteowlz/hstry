@@ -32,6 +32,16 @@
       .status-title { display: flex; align-items: center; gap: 9px; }
       .status-item p { margin: 0; color: var(--muted); font-size: 13px; }
       .status-item .error-copy { color: var(--danger); }
+      .advanced-panel { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+      .advanced-panel summary { padding: 14px 2px; color: var(--accent); font-size: 13px; font-weight: 700; cursor: pointer; }
+      .advanced-panel[open] summary { border-bottom: 1px solid var(--rule); }
+      .resync-note { max-width: 65ch; margin: 15px 0 8px; color: var(--muted); font-size: 13px; }
+      .resync-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 18px; min-height: 62px; border-top: 1px solid var(--rule); }
+      .resync-row:first-of-type { border-top: 0; }
+      .resync-row strong, .resync-row small { display: block; }
+      .resync-row small { color: var(--muted); }
+      .resync-result { min-height: 20px; margin: 10px 0 14px; color: var(--muted); font-size: 12px; }
+      .resync-result.error { color: var(--danger); }
       .command-row { display: grid; grid-template-columns: 190px 1fr; gap: 24px; align-items: center; margin-top: 22px; }
       code { padding: 10px 12px; overflow-x: auto; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
       .actions { display: flex; align-items: center; gap: 9px; padding-top: 25px; }
@@ -50,7 +60,7 @@
     <main>
       <header class="page-header">
         <div><h1>hstry web sync</h1><p>Import conversations from the accounts already signed in to this browser.</p></div>
-        <span class="version">v0.3.2</span>
+        <span class="version">v0.3.3</span>
       </header>
 
       <div class="connection-bar">
@@ -77,6 +87,16 @@
       <section class="section" aria-labelledby="status-heading">
         <div class="section-heading"><h2 id="status-heading">Last sync</h2><p>Provider results are updated as each import finishes.</p></div>
         <div id="status-list" class="status-list"></div>
+      </section>
+
+      <section class="section" aria-labelledby="advanced-heading">
+        <div class="section-heading"><h2 id="advanced-heading">Advanced</h2><p>Recovery actions for conversations missed by incremental sync.</p></div>
+        <details class="advanced-panel">
+          <summary>Full resync controls</summary>
+          <p class="resync-note">A full resync re-imports every available conversation for one provider. Existing conversations are updated rather than duplicated.</p>
+          <div id="resync-list"></div>
+          <p id="resync-result" class="resync-result" role="status" aria-live="polite"></p>
+        </details>
       </section>
 
       <div class="actions">

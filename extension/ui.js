@@ -44,6 +44,13 @@ export function providerState(entry, enabled = true, { apiConnected = false } = 
       detail: progressDetail(progress),
     };
   }
+  if (entry?.continuationPending || entry?.progress?.phase === 'queued') {
+    return {
+      tone: 'syncing',
+      label: 'Continuing',
+      detail: `${progressDetail(entry.progress ?? {})} · next batch queued`,
+    };
+  }
   if (!entry?.lastRunMs) return { tone: 'idle', label: 'Ready to sync', detail: 'No sync has run yet.' };
   if (
     apiConnected &&

@@ -36,6 +36,14 @@ check('running provider exposes live phase', providerState({
   label: 'Syncing',
   detail: '12 detected · 7 processed · 3 new · 2 updated',
 });
+check('queued provider explains continuation', providerState({
+  continuationPending: true,
+  progress: { phase: 'queued', detected: 219, processed: 10 },
+}, true), {
+  tone: 'syncing',
+  label: 'Continuing',
+  detail: '219 detected · 10 processed · next batch queued',
+});
 check('progress detail omits empty counters', progressDetail({ detected: 4, processed: 1 }), '4 detected · 1 processed');
 check('visible settings normalize before sync', normalizeSettings({
   port: '3434',

@@ -55,6 +55,9 @@ clap_complete = "4.5"
 ratatui = "0.30"
 crossterm = "0.29"
 pulldown-cmark = "0.13"
+ratatui-image = { version = "11.0", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+base64 = "0.22"
 
 # Async runtime
 tokio = { version = "1.43", features = ["full"] }

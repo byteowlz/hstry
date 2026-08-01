@@ -89,6 +89,37 @@ fn display_source(source: &str) -> &str {
         .map_or(source, |(base, _)| base)
 }
 
+/// Stable origin color per source adapter, matching the TUI's mapping.
+fn adapter_style(adapter: &str) -> console::Style {
+    use console::Color;
+    let key = adapter.to_lowercase();
+    let color = match key.as_str() {
+        a if a.contains("claude") => Color::Yellow,
+        a if a.contains("pi") => Color::Magenta,
+        a if a.contains("codex") => Color::Cyan,
+        a if a.contains("opencode") => Color::Green,
+        a if a.contains("goose") => Color::Color256(12),
+        a if a.contains("chatgpt") || a.contains("openai") => Color::Color256(10),
+        a if a.contains("gemini") => Color::Color256(13),
+        a if a.contains("octo") => Color::Color256(14),
+        _ => {
+            const PALETTE: [Color; 6] = [
+                Color::Color256(11),
+                Color::Color256(9),
+                Color::Cyan,
+                Color::Magenta,
+                Color::Green,
+                Color::Color256(12),
+            ];
+            let hash: usize = key.bytes().fold(0usize, |acc, b| {
+                acc.wrapping_mul(31).wrapping_add(b as usize)
+            });
+            PALETTE[hash % PALETTE.len()]
+        }
+    };
+    console::Style::new().fg(color)
+}
+
 fn truncate(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_string();
@@ -146,18 +177,23 @@ fn print_rows(rows: &[(String, String, String, String, String)], empty: &str) {
         .unwrap_or(available);
     let title_width = longest_title.min(available).max("TITLE".len());
 
-    println!(
+    let header = format!(
         "{:<title_width$}  {:<workspace_width$}  {:<source_width$}  {:>age_width$}  {:<id_width$}",
         "TITLE", "WORKSPACE", "SOURCE", "AGE", "ID"
     );
+    println!("{}", console::style(header).bold().dim());
     for (title, workspace, source, age, id) in rows {
+        // Pad each cell before styling so ANSI codes don't break alignment.
+        let title_cell = format!("{:<title_width$}", truncate(title, title_width));
+        let workspace_cell = format!("{:<workspace_width$}", truncate(workspace, workspace_width));
+        let source_cell = format!("{:<source_width$}", truncate(source, source_width));
+        let age_cell = format!("{age:>age_width$}");
+        let id_cell = format!("{:<id_width$}", truncate(id, id_width));
         println!(
-            "{:<title_width$}  {:<workspace_width$}  {:<source_width$}  {:>age_width$}  {:<id_width$}",
-            truncate(title, title_width),
-            truncate(workspace, workspace_width),
-            truncate(source, source_width),
-            age,
-            truncate(id, id_width),
+            "{title_cell}  {workspace_cell}  {}  {}  {}",
+            adapter_style(source).apply_to(source_cell),
+            console::style(age_cell).dim(),
+            console::style(id_cell).dim(),
         );
     }
 }

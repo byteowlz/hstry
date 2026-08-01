@@ -136,6 +136,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Disable colored output (also honors NO_COLOR)
+    #[arg(long, global = true)]
+    no_color: bool,
+
     /// Increase verbosity
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
@@ -920,6 +924,10 @@ fn default_log_filter(verbose: u8) -> &'static str {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.no_color {
+        console::set_colors_enabled(false);
+    }
 
     // Initialize logging
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()

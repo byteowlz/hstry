@@ -14,11 +14,17 @@ function rpc(rpcId, data) {
 
 const nowSec = Math.floor(Date.now() / 1000) - 3600;
 const geminiHtml = '<script data-id="_gd">{"SNlM0e":"csrf-token","FdrFJe":"sid-token","cfb2h":"build-label"}</script>';
+let geminiListArg = null;
 globalThis.fetch = async (url, init = {}) => {
   const parsed = new URL(url);
   if (parsed.pathname === '/app') return new Response(geminiHtml, { status: 200 });
   if (parsed.searchParams.get('rpcids') === 'MaZiqc') {
-    return new Response(rpc('MaZiqc', [null, null, [[`c_gemini-fixture`, 'Gemini fixture chat', null, null, null, [nowSec, 0]]]]));
+    const request = JSON.parse(init.body.get('f.req'));
+    geminiListArg = JSON.parse(request[0][0][1]);
+    const chats = JSON.stringify(geminiListArg) === JSON.stringify([20])
+      ? [[`c_gemini-fixture`, 'Gemini fixture chat', null, null, null, [nowSec, 0]]]
+      : [];
+    return new Response(rpc('MaZiqc', [null, null, chats]));
   }
   if (parsed.searchParams.get('rpcids') === 'hNvQHb') {
     const turn = [null, null, [['hello gemini']], [[[null, ['gemini response']]]]];
@@ -40,6 +46,7 @@ const gemini = await syncGemini({
   register: async (source, adapter) => geminiRegistrations.push([source, adapter]),
   log: () => {},
 });
+check('gemini list uses current unfiltered payload', geminiListArg, [20]);
 check('gemini sync count', gemini.conversations, 1);
 check('gemini source and adapter', [geminiPushes[0]?.source, geminiPushes[0]?.adapter], ['gemini-web', 'gemini']);
 check('gemini messages', geminiPushes[0]?.conversations[0]?.messages.map(message => message.content), ['hello gemini', 'gemini response']);

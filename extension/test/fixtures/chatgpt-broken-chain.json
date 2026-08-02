@@ -1,0 +1,94 @@
+{
+  "id": "gpt-broken-chain",
+  "title": "Broken chain fixture",
+  "create_time": 1700000000,
+  "update_time": 1700000100,
+  "current_node": "tail-assistant",
+  "mapping": {
+    "root": {
+      "id": "root",
+      "parent": null,
+      "message": {
+        "author": { "role": "system" },
+        "create_time": 1700000000,
+        "content": { "content_type": "text", "parts": [""] }
+      }
+    },
+    "first-user": {
+      "id": "first-user",
+      "parent": "root",
+      "message": {
+        "author": { "role": "user" },
+        "create_time": 1700000001,
+        "content": { "content_type": "text", "parts": ["first question"] }
+      }
+    },
+    "execution-answer": {
+      "id": "execution-answer",
+      "parent": "first-user",
+      "message": {
+        "author": { "role": "assistant" },
+        "create_time": 1700000001,
+        "content": { "content_type": "execution_output", "text": "execution result" }
+      }
+    },
+    "execution-answer-alias": {
+      "id": "execution-answer",
+      "parent": "first-user",
+      "message": {
+        "author": { "role": "assistant" },
+        "create_time": 1700000001,
+        "content": { "content_type": "execution_output", "text": "execution result" }
+      }
+    },
+    "quote-user": {
+      "id": "quote-user",
+      "parent": "execution-answer",
+      "message": {
+        "author": { "role": "user" },
+        "create_time": 1700000003,
+        "content": { "content_type": "tether_quote", "parts": ["quoted follow-up"] }
+      }
+    },
+    "alternate-answer": {
+      "id": "alternate-answer",
+      "parent": "quote-user",
+      "message": {
+        "author": { "role": "assistant" },
+        "create_time": 1700000004,
+        "content": { "content_type": "text", "parts": ["regenerated alternate"] }
+      }
+    },
+    "unknown-answer": {
+      "id": "unknown-answer",
+      "parent": "quote-user",
+      "message": {
+        "author": { "role": "assistant" },
+        "create_time": 1700000005,
+        "content": {
+          "content_type": "future_answer_type",
+          "parts": [{ "text": "future-compatible answer" }]
+        }
+      }
+    },
+    "metadata-user": {
+      "id": "metadata-user",
+      "parent": "unknown-answer",
+      "message": {
+        "author": { "role": "user" },
+        "create_time": 1700000006,
+        "metadata": { "search_result": { "title": "metadata-only context" } },
+        "content": { "content_type": "future_metadata_type", "parts": [] }
+      }
+    },
+    "tail-assistant": {
+      "id": "tail-assistant",
+      "parent": "missing-parent",
+      "message": {
+        "author": { "role": "assistant" },
+        "create_time": 1700000007,
+        "content": { "content_type": "tether_browsing_display", "text": "tail answer" }
+      }
+    }
+  }
+}

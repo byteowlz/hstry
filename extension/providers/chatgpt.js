@@ -74,17 +74,121 @@ async function* listUpdatedConversations(token, accountId, sinceMs) {
   }
 }
 
-/** Linearize the active branch of the mapping tree (current_node -> root). */
+/** Linearize the active branch of the mapping tree (current_node -> root).
+ * If ChatGPT returns a broken parent chain, preserve all message-bearing nodes
+ * in deterministic chronological order rather than silently losing the prefix. */
 function linearize(detail) {
   const mapping = detail?.mapping ?? {};
   const chain = [];
+  const visited = new Set();
   let nodeId = detail?.current_node;
-  while (nodeId && mapping[nodeId]) {
+  let incomplete = !nodeId;
+
+  while (nodeId) {
+    if (!mapping[nodeId] || visited.has(nodeId)) {
+      incomplete = true;
+      break;
+    }
+    visited.add(nodeId);
     chain.push(mapping[nodeId]);
     nodeId = mapping[nodeId].parent;
   }
-  chain.reverse();
-  return chain;
+
+  if (!incomplete) {
+    chain.reverse();
+    return chain;
+  }
+
+  const compareEntries = (left, right) =>
+    left.createdAt - right.createdAt ||
+    left.id.localeCompare(right.id) ||
+    left.key.localeCompare(right.key);
+  const seenIds = new Set();
+  const entries = Object.entries(mapping)
+    .map(([key, node]) => ({
+      key,
+      node,
+      id: String(node?.id ?? key),
+      createdAt: toMs(node?.message?.create_time ?? node?.create_time) ?? 0,
+    }))
+    .sort(compareEntries)
+    .filter(entry => {
+      if (seenIds.has(entry.id)) return false;
+      seenIds.add(entry.id);
+      return true;
+    });
+
+  // A topological sort keeps parents before children when ChatGPT assigns the
+  // same timestamp to several nodes. The chronological/id ordering of the
+  // ready queue makes the result deterministic across repeated syncs.
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  const children = new Map();
+  const indegree = new Map(entries.map(entry => [entry.id, 0]));
+  for (const entry of entries) {
+    const parentKey = entry.node?.parent;
+    const parentId = parentKey ? String(mapping[parentKey]?.id ?? parentKey) : null;
+    if (!parentId || parentId === entry.id || !byId.has(parentId)) continue;
+    indegree.set(entry.id, 1);
+    const siblings = children.get(parentId) ?? [];
+    siblings.push(entry.id);
+    children.set(parentId, siblings);
+  }
+
+  const ready = entries.filter(entry => indegree.get(entry.id) === 0).sort(compareEntries);
+  const ordered = [];
+  while (ready.length > 0) {
+    const entry = ready.shift();
+    ordered.push(entry);
+    for (const childId of children.get(entry.id) ?? []) {
+      indegree.set(childId, indegree.get(childId) - 1);
+      if (indegree.get(childId) === 0) {
+        ready.push(byId.get(childId));
+        ready.sort(compareEntries);
+      }
+    }
+  }
+
+  if (ordered.length < entries.length) {
+    const orderedIds = new Set(ordered.map(entry => entry.id));
+    ordered.push(...entries.filter(entry => !orderedIds.has(entry.id)).sort(compareEntries));
+  }
+
+  return ordered.filter(entry => entry.node?.message).map(entry => entry.node);
+}
+
+const NON_TEXT_METADATA_KEYS = new Set([
+  'content_type',
+  'language',
+  'message_type',
+  'model',
+  'model_slug',
+  'request_id',
+  'status',
+]);
+
+function recoverStrings(value, output) {
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text) output.push(text);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) recoverStrings(item, output);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+
+  for (const [childKey, childValue] of Object.entries(value)) {
+    if (
+      NON_TEXT_METADATA_KEYS.has(childKey) ||
+      childKey === 'asset_pointer' ||
+      childKey.endsWith('_id') ||
+      childKey.endsWith('_slug')
+    ) {
+      continue;
+    }
+    recoverStrings(childValue, output);
+  }
 }
 
 function extractMessage(node) {
@@ -97,27 +201,44 @@ function extractMessage(node) {
   const parts = [];
   const texts = [];
   const content = msg.content ?? {};
+  const addText = text => {
+    const trimmed = text?.trim();
+    if (!trimmed) return;
+    texts.push(trimmed);
+    parts.push(textPart(trimmed));
+  };
 
   if (content.content_type === 'text' || content.content_type === 'multimodal_text') {
     for (const part of content.parts ?? []) {
-      if (typeof part === 'string' && part.trim()) {
-        texts.push(part);
-        parts.push(textPart(part));
+      if (typeof part === 'string') {
+        addText(part);
       } else if (part?.content_type === 'image_asset_pointer') {
-        const ref = `[image] ${part.asset_pointer ?? ''}`.trim();
-        texts.push(ref);
-        parts.push(textPart(ref));
+        addText(`[image] ${part.asset_pointer ?? ''}`.trim());
+      } else {
+        const recovered = [];
+        recoverStrings(part, recovered);
+        for (const text of recovered) addText(text);
       }
     }
   } else if (content.content_type === 'code' && content.text) {
-    const code = `\`\`\`${content.language ?? ''}\n${content.text}\n\`\`\``;
-    texts.push(code);
-    parts.push(textPart(code));
+    addText(`\`\`\`${content.language ?? ''}\n${content.text}\n\`\`\``);
   } else if (content.content_type === 'thoughts') {
     for (const thought of content.thoughts ?? []) {
       const text = thought?.content ?? thought?.summary;
       if (text) parts.push(thinkingPart(text));
     }
+  } else if (content.content_type === 'image_asset_pointer') {
+    addText(`[image] ${content.asset_pointer ?? ''}`.trim());
+  } else {
+    const recovered = [];
+    recoverStrings(content, recovered);
+    for (const text of recovered) addText(text);
+  }
+
+  if (texts.length === 0 && parts.length === 0) {
+    const recovered = [];
+    recoverStrings(msg.metadata, recovered);
+    for (const text of recovered) addText(text);
   }
 
   const contentStr = texts.join('\n').trim();

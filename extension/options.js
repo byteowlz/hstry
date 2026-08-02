@@ -37,6 +37,38 @@ function renderProviderControls() {
   }
 }
 
+function renderResyncControls(status = {}) {
+  const list = el('resync-list');
+  list.replaceChildren();
+  for (const [id, provider] of Object.entries(PROVIDERS)) {
+    const enabled = currentSettings.providers[id];
+    const row = document.createElement('div');
+    row.className = 'resync-row';
+    row.innerHTML = `<div><strong></strong><small></small></div><button class="button-secondary" type="button">Full resync</button>`;
+    row.querySelector('strong').textContent = provider.name;
+    const description = row.querySelector('small');
+    description.id = `resync-description-${id}`;
+    description.textContent = enabled
+      ? `Re-import all conversations from ${provider.site}.`
+      : 'Enable this provider before running a full resync.';
+    const button = row.querySelector('button');
+    const providerRunning =
+      status[id]?.running && Date.now() - (status[id]?.lastRunMs ?? 0) < 60 * 60 * 1000;
+    button.disabled = !enabled || providerRunning;
+    button.dataset.provider = id;
+    button.setAttribute('aria-label', `${provider.name}: full resync`);
+    button.setAttribute('aria-describedby', description.id);
+    list.appendChild(row);
+  }
+}
+
+function showResyncResult(message, isError = false) {
+  const result = el('resync-result');
+  result.textContent = message;
+  result.className = `resync-result${isError ? ' error' : ''}`;
+  result.setAttribute('role', isError ? 'alert' : 'status');
+}
+
 async function save({ announce = true } = {}) {
   currentSettings = readFormSettings();
   await chrome.storage.local.set({ settings: currentSettings });
@@ -94,7 +126,37 @@ async function renderStatus() {
     if (state.tone === 'error') copy.className = 'error-copy';
     list.appendChild(item);
   }
+  renderResyncControls(status);
 }
+
+async function startFullResync(providerName) {
+  const provider = PROVIDERS[providerName];
+  if (!provider) return;
+
+  showResyncResult(`Checking connection for ${provider.name}…`);
+  await save({ announce: false });
+  if (!currentSettings.providers[providerName]) {
+    showResyncResult(`Enable ${provider.name} before running a full resync.`, true);
+    return;
+  }
+  if (!(await checkConnection())) {
+    showResyncResult('Full resync not started. Check the API connection.', true);
+    return;
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    type: 'fullSyncProvider',
+    provider: providerName,
+  });
+  if (!response?.ok) {
+    showResyncResult(response?.error ?? 'Full resync could not be started.', true);
+    return;
+  }
+  showResyncResult(`${provider.name} full resync started. You can close this page.`);
+  await renderStatus();
+}
+
+renderProviderControls();
 
 el('save').addEventListener('click', async () => {
   await save();
@@ -121,10 +183,27 @@ el('test-connection').addEventListener('click', async () => {
   await save({ announce: false });
   await checkConnection();
 });
+el('resync-list').addEventListener('click', async event => {
+  const button = event.target.closest?.('button[data-provider]');
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await startFullResync(button.dataset.provider);
+  } catch (error) {
+    showResyncResult(error.message || 'Full resync could not be started.', true);
+  } finally {
+    await renderStatus();
+  }
+});
 el('port').addEventListener('input', updateSetupCommand);
 el('token').addEventListener('input', updateSetupCommand);
+for (const id of Object.keys(PROVIDERS)) {
+  el(`provider-${id}`).addEventListener('change', async () => {
+    currentSettings = readFormSettings();
+    await renderStatus();
+  });
+}
 chrome.storage.onChanged.addListener(changes => { if (changes.status) renderStatus(); });
-renderProviderControls();
 await load();
 updateSetupCommand();
 await checkConnection();

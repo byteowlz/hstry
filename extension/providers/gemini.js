@@ -5,6 +5,8 @@ import { NotLoggedInError, textPart, toMs } from '../lib/common.js';
 const BASE = 'https://gemini.google.com';
 const OVERLAP_MS = 5 * 60 * 1000;
 const PAGE_SIZE = 20;
+const SYNC_CHUNK_SIZE = 10;
+const REQUEST_TIMEOUT_MS = 20_000;
 
 function extractSession(html) {
   const read = key => html.match(new RegExp(`"${key}":"((?:\\\\.|[^"\\\\])*)"`))?.[1];
@@ -33,7 +35,10 @@ function parseRpcResponse(text, rpcId) {
 }
 
 async function getSession() {
-  const res = await fetch(`${BASE}/app`, { credentials: 'include' });
+  const res = await fetch(`${BASE}/app`, {
+    credentials: 'include',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (res.status === 401 || res.status === 403 || res.url.includes('accounts.google.com')) {
     throw new NotLoggedInError('gemini.google.com');
   }
@@ -63,6 +68,7 @@ async function batchExecute(session, rpcId, arg) {
     credentials: 'include',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8', 'X-Same-Domain': '1' },
     body,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (res.status === 401 || res.status === 403) throw new NotLoggedInError('gemini.google.com');
   if (!res.ok) throw new Error(`Gemini ${rpcId} -> ${res.status}`);
@@ -73,7 +79,7 @@ async function listChats(session, sinceMs) {
   const chats = new Map();
   let cursor = null;
   for (let page = 0; page < 200; page++) {
-    const arg = cursor === null ? [PAGE_SIZE, null, [0, null, 1]] : [PAGE_SIZE, cursor, [0, null, 1]];
+    const arg = cursor === null ? [PAGE_SIZE] : [PAGE_SIZE, cursor];
     const data = await batchExecute(session, 'MaZiqc', arg);
     const nextCursor = data?.[1] ?? null;
     const items = Array.isArray(data?.[2]) ? data[2] : [];
@@ -148,14 +154,19 @@ export async function syncGemini({ state, push, register = async () => {}, log, 
   await register('gemini-web', 'gemini');
   const lastSyncMs = state?.lastSyncMs ?? null;
   const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
-  const runStartedMs = Date.now();
-  const summaries = await listChats(session, since);
-  await report({ phase: 'importing', detected: summaries.length, processed: 0 });
+  const pending = state?.pending;
+  const runStartedMs = pending?.runStartedMs ?? Date.now();
+  const summaries = Array.isArray(pending?.summaries)
+    ? pending.summaries
+    : await listChats(session, since);
+  const startIndex = Number.isInteger(pending?.nextIndex) ? pending.nextIndex : 0;
+  const endIndex = Math.min(startIndex + SYNC_CHUNK_SIZE, summaries.length);
+  await report({ phase: 'importing', detected: summaries.length, processed: startIndex });
   let total = 0;
   let failures = 0;
-  let processed = 0;
+  let processed = startIndex;
   let batch = [];
-  for (const summary of summaries) {
+  for (const summary of summaries.slice(startIndex, endIndex)) {
     try {
       const conversation = await readChat(session, summary);
       if (conversation) batch.push(conversation);
@@ -171,10 +182,23 @@ export async function syncGemini({ state, push, register = async () => {}, log, 
     }
   }
   if (batch.length) total += await push('gemini-web', 'gemini', batch);
-  await report({ phase: 'complete', processed });
+  const hasMore = endIndex < summaries.length;
+  const hadFailures = Boolean(pending?.hadFailures) || failures > 0;
+  await report({ phase: hasMore ? 'queued' : 'complete', processed });
   return {
-    state: { lastSyncMs: failures ? lastSyncMs : runStartedMs },
+    state: hasMore
+      ? {
+          lastSyncMs,
+          pending: {
+            runStartedMs,
+            summaries,
+            nextIndex: endIndex,
+            hadFailures,
+          },
+        }
+      : { lastSyncMs: hadFailures ? lastSyncMs : runStartedMs },
     conversations: total,
+    hasMore,
   };
 }
 

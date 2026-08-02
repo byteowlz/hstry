@@ -17,12 +17,36 @@ import type {
 } from '../types/index.ts';
 import { runAdapter, textOnlyParts } from '../types/index.ts';
 
-// Dynamic import for better-sqlite3 (optional dependency)
-let Database: typeof import('better-sqlite3') | null = null;
+interface SqliteStatement {
+  get(...params: unknown[]): unknown;
+}
+
+interface SqliteDatabase {
+  query?(sql: string): SqliteStatement;
+  prepare?(sql: string): SqliteStatement;
+  close(): void;
+}
+
+type OpenDatabase = (path: string) => SqliteDatabase;
+
+let openDatabase: OpenDatabase | null = null;
 try {
-  Database = (await import('better-sqlite3')).default;
+  const isBun = typeof (globalThis as typeof globalThis & { Bun?: unknown }).Bun !== 'undefined';
+  if (isBun) {
+    const { Database } = await import('bun:sqlite');
+    openDatabase = path => new Database(path, { readonly: true });
+  } else {
+    const { default: Database } = await import('better-sqlite3');
+    openDatabase = path => new Database(path, { readonly: true });
+  }
 } catch {
-  // SQLite not available - adapter will return empty results
+  // SQLite is unavailable in this runtime; detection returns no match.
+}
+
+function getRow(db: SqliteDatabase, sql: string, parameter: string): StateRow | undefined {
+  const statement = db.query?.(sql) ?? db.prepare?.(sql);
+  if (!statement) throw new Error('SQLite runtime does not support prepared queries');
+  return statement.get(parameter) as StateRow | undefined;
 }
 
 // Platform-specific paths
@@ -88,7 +112,7 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
-    if (!Database) return null;
+    if (!openDatabase) return null;
 
     const dbFiles = await findStateFiles(path);
     if (dbFiles.length === 0) return null;
@@ -96,8 +120,8 @@ const adapter: Adapter = {
     // Check if any database has cursor chat data
     for (const dbPath of dbFiles.slice(0, 3)) {
       try {
-        const db = new Database(dbPath, { readonly: true });
-        const row = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get(CHAT_DATA_KEY) as StateRow | undefined;
+        const db = openDatabase(dbPath);
+        const row = getRow(db, 'SELECT value FROM ItemTable WHERE key = ?', CHAT_DATA_KEY);
         db.close();
         if (row) return 0.9;
       } catch { /* continue */ }
@@ -107,7 +131,7 @@ const adapter: Adapter = {
   },
 
   async parse(path: string, opts?: ParseOptions): Promise<Conversation[]> {
-    if (!Database) return [];
+    if (!openDatabase) return [];
 
     const dbFiles = await findStateFiles(path);
     if (dbFiles.length === 0) return [];
@@ -171,17 +195,18 @@ async function parseStateDb(dbPath: string, workspaceId: string, opts?: ParseOpt
   const conversations: Conversation[] = [];
 
   try {
-    const db = new Database(dbPath, { readonly: true });
+    if (!openDatabase) return conversations;
+    const db = openDatabase(dbPath);
 
     // Try to get chat data
-    const chatRow = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get(CHAT_DATA_KEY) as StateRow | undefined;
+    const chatRow = getRow(db, 'SELECT value FROM ItemTable WHERE key = ?', CHAT_DATA_KEY);
     if (chatRow) {
       const chatConvs = parseChatData(chatRow.value, workspaceId, opts);
       conversations.push(...chatConvs);
     }
 
     // Also try prompts (may have additional data)
-    const promptsRow = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get(PROMPTS_KEY) as StateRow | undefined;
+    const promptsRow = getRow(db, 'SELECT value FROM ItemTable WHERE key = ?', PROMPTS_KEY);
     if (promptsRow) {
       const promptConvs = parsePrompts(promptsRow.value, workspaceId, opts);
       conversations.push(...promptConvs);

@@ -12,7 +12,9 @@ const DEFAULT_SETTINGS = {
 };
 
 const ALARM_NAME = 'hstry-sync';
-let syncing = false;
+const CONTINUE_ALARM_PREFIX = 'hstry-sync-continue-';
+const activeProviders = new Set();
+let statusWriteQueue = Promise.resolve();
 
 async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
@@ -31,6 +33,30 @@ async function getStatus() {
 async function setStatus(status) {
   await chrome.storage.local.set({ status });
 }
+
+function setStatusEntry(name, entry) {
+  statusWriteQueue = statusWriteQueue.then(async () => {
+    const status = await getStatus();
+    status[name] = entry;
+    await setStatus(status);
+  });
+  return statusWriteQueue;
+}
+
+async function clearInterruptedRuns() {
+  const status = await getStatus();
+  let changed = false;
+  for (const entry of Object.values(status)) {
+    if (!entry?.running) continue;
+    entry.running = false;
+    entry.lastError = 'Previous sync was interrupted. Run it again.';
+    entry.progress = { ...entry.progress, phase: 'failed' };
+    changed = true;
+  }
+  if (changed) await setStatus(status);
+}
+
+const startupReady = clearInterruptedRuns();
 
 function makePush(settings, onResult = async () => {}) {
   const url = `http://127.0.0.1:${settings.port}/ingest`;
@@ -131,78 +157,103 @@ async function ensureAlarm() {
   }
 }
 
-async function runSync(trigger) {
-  if (syncing) return;
-  syncing = true;
-  await chrome.action.setBadgeText({ text: '…' });
+async function scheduleContinuation(providerName) {
+  await chrome.alarms.create(`${CONTINUE_ALARM_PREFIX}${providerName}`, {
+    delayInMinutes: 0.1,
+  });
+}
 
+async function runSync(
+  trigger,
+  { onlyProvider = null, full = false, onStarted = async () => {} } = {}
+) {
+  await startupReady;
   const settings = await getSettings();
   const status = await getStatus();
+  const selected = Object.entries(PROVIDERS).filter(
+    ([name]) =>
+      settings.providers[name] &&
+      (!onlyProvider || name === onlyProvider) &&
+      !activeProviders.has(name)
+  );
+  if (selected.length === 0) return false;
+  for (const [name] of selected) activeProviders.add(name);
+  await chrome.action.setBadgeText({ text: '…' });
+
   let anyError = false;
-
-  for (const [name, provider] of Object.entries(PROVIDERS)) {
-    if (!settings.providers[name]) continue;
-
-    const entry = {
-      ...(status[name] ?? {}),
-      lastRunMs: Date.now(),
-      trigger,
-      running: true,
-      progress: {
-        phase: 'discovering',
-        detected: 0,
-        processed: 0,
-        accepted: 0,
-        created: 0,
-        updated: 0,
-      },
-    };
-    status[name] = entry;
-    await setStatus(status);
-    const report = async progress => {
-      entry.progress = { ...entry.progress, ...progress };
-      status[name] = entry;
-      await setStatus(status);
-    };
-    const push = makePush(settings, async result => {
-      await report({
-        accepted: entry.progress.accepted + result.accepted,
-        created: entry.progress.created + result.created,
-        updated: entry.progress.updated + result.updated,
+  let startedReported = false;
+  await Promise.all(
+    selected.map(async ([name, provider]) => {
+      const entry = {
+        ...(status[name] ?? {}),
+        ...(full && name === onlyProvider ? { state: {} } : {}),
+        lastRunMs: Date.now(),
+        trigger,
+        running: true,
+        progress: {
+          phase: 'discovering',
+          detected: 0,
+          processed: 0,
+          accepted: 0,
+          created: 0,
+          updated: 0,
+        },
+      };
+      await setStatusEntry(name, entry);
+      if (!startedReported) {
+        startedReported = true;
+        await onStarted();
+      }
+      const report = async progress => {
+        entry.progress = { ...entry.progress, ...progress };
+        await setStatusEntry(name, entry);
+      };
+      const push = makePush(settings, async result => {
+        await report({
+          accepted: entry.progress.accepted + result.accepted,
+          created: entry.progress.created + result.created,
+          updated: entry.progress.updated + result.updated,
+        });
       });
-    });
-    const register = makeRegister(settings);
-    try {
-      const result = await provider.sync({
-        state: status[name]?.state ?? {},
-        push,
-        register,
-        report,
-        log: message => console.warn(`[hstry-sync] ${message}`),
-      });
-      entry.state = result.state;
-      entry.lastSuccessMs = Date.now();
-      entry.lastCount = result.conversations;
-      entry.lastError = null;
-      entry.running = false;
-      entry.progress = { ...entry.progress, phase: 'complete' };
-    } catch (err) {
-      anyError = true;
-      entry.lastError =
-        err instanceof NotLoggedInError ? `${err.message} — open the site and log in` : err.message;
-      entry.running = false;
-      entry.progress = { ...entry.progress, phase: 'failed' };
-      console.warn(`[hstry-sync] ${name} failed:`, err);
-    }
-    status[name] = entry;
-    await setStatus(status);
-  }
+      const register = makeRegister(settings);
+      try {
+        const result = await provider.sync({
+          state: entry.state ?? {},
+          push,
+          register,
+          report,
+          log: message => console.warn(`[hstry-sync] ${message}`),
+        });
+        entry.state = result.state;
+        entry.lastSuccessMs = Date.now();
+        entry.lastCount = result.conversations;
+        entry.lastError = null;
+        entry.running = false;
+        entry.continuationPending = Boolean(result.hasMore);
+        entry.progress = {
+          ...entry.progress,
+          phase: result.hasMore ? 'queued' : 'complete',
+        };
+        if (result.hasMore) await scheduleContinuation(name);
+      } catch (err) {
+        anyError = true;
+        entry.lastError =
+          err instanceof NotLoggedInError ? `${err.message} — open the site and log in` : err.message;
+        entry.running = false;
+        entry.progress = { ...entry.progress, phase: 'failed' };
+        console.warn(`[hstry-sync] ${name} failed:`, err);
+      } finally {
+        activeProviders.delete(name);
+        await setStatusEntry(name, entry);
+      }
+    })
+  );
 
-  await chrome.action.setBadgeText({ text: anyError ? '!' : '' });
+  await chrome.action.setBadgeText({ text: anyError ? '!' : activeProviders.size > 0 ? '…' : '' });
   if (anyError) {
     await chrome.action.setBadgeBackgroundColor({ color: '#cc3333' });
   }
-  syncing = false;
+  return true;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -215,7 +266,18 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name === ALARM_NAME) runSync('alarm');
+  if (alarm.name === ALARM_NAME) {
+    runSync('alarm');
+    return;
+  }
+  if (alarm.name.startsWith(CONTINUE_ALARM_PREFIX)) {
+    const providerName = alarm.name.slice(CONTINUE_ALARM_PREFIX.length);
+    if (Object.hasOwn(PROVIDERS, providerName)) {
+      runSync('continuation', { onlyProvider: providerName }).then(started => {
+        if (!started) scheduleContinuation(providerName);
+      });
+    }
+  }
 });
 
 chrome.action.onClicked.addListener(() => runSync('manual'));
@@ -230,6 +292,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     runSync('manual');
     sendResponse({ ok: true });
     return false;
+  }
+  if (message?.type === 'fullSyncProvider') {
+    const providerName = message.provider;
+    if (!Object.hasOwn(PROVIDERS, providerName)) {
+      sendResponse({ ok: false, error: 'Unknown provider' });
+      return false;
+    }
+    if (activeProviders.has(providerName)) {
+      sendResponse({ ok: false, error: 'This provider is already syncing' });
+      return false;
+    }
+    getSettings()
+      .then(settings => {
+        if (!settings.providers[providerName]) {
+          sendResponse({ ok: false, error: 'Enable this provider before syncing' });
+          return;
+        }
+        if (activeProviders.has(providerName)) {
+          sendResponse({ ok: false, error: 'This provider is already syncing' });
+          return;
+        }
+        let responded = false;
+        const respond = result => {
+          if (responded) return;
+          responded = true;
+          sendResponse(result);
+        };
+        runSync('full', {
+          onlyProvider: providerName,
+          full: true,
+          onStarted: async () => respond({ ok: true }),
+        }).catch(error => respond({ ok: false, error: error.message }));
+      })
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
   }
   if (message?.type === 'settingsChanged') {
     Promise.all([ensureAlarm(), registerEnabledSources()]).then(([, sources]) => {

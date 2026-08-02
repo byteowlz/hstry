@@ -35,7 +35,10 @@ pub fn relative_time_short(dt: DateTime<Utc>) -> String {
     if duration.num_weeks() < 8 {
         return format!("{}w", duration.num_weeks());
     }
-    dt.format("%Y-%m-%d").to_string()
+    if duration.num_days() < 365 {
+        return format!("{}mo", duration.num_days() / 30);
+    }
+    format!("{}y", duration.num_days() / 365)
 }
 
 /// Decode HTML entities and clean up snippet text.

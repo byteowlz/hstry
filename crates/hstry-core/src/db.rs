@@ -950,9 +950,6 @@ impl Database {
     /// appending a `-N` suffix if the base already exists. The suffix search
     /// starts at a UUID-derived offset so the final id is stable for a given
     /// UUID regardless of ingestion order.
-
-    /// starts at a UUID-derived offset so the final id is stable for a given
-    /// UUID regardless of ingestion order.
     async fn assign_readable_id(&self, uuid: Uuid) -> Result<String> {
         let base = crate::readable_id::base_for(uuid);
         if self.readable_id_is_free(&base).await? {

@@ -80,14 +80,12 @@ pub fn build_peek(conv: &Conversation, messages: &[Message], cfg: &PeekConfig) -
 
     for (i, msg) in messages.iter().enumerate() {
         match msg.role {
-            MessageRole::User => {
-                if has_text_content(msg) {
-                    counts.user += 1;
-                    if first_user_idx.is_none() {
-                        first_user_idx = Some(i);
-                    }
-                    last_user_idx = Some(i);
+            MessageRole::User if has_text_content(msg) => {
+                counts.user += 1;
+                if first_user_idx.is_none() {
+                    first_user_idx = Some(i);
                 }
+                last_user_idx = Some(i);
             }
             MessageRole::Assistant => {
                 counts.assistant += 1;

@@ -6454,6 +6454,9 @@ async fn cmd_remote(
             }
 
             let direction: hstry_core::remote::SyncDirection = direction.into();
+            let device_namespace = (direction != hstry_core::remote::SyncDirection::Pull)
+                .then(|| config.sync.device_namespace())
+                .transpose()?;
             let mut results = Vec::new();
             let mut total_convs_added = 0usize;
             let mut total_convs_updated = 0usize;
@@ -6472,15 +6475,24 @@ async fn cmd_remote(
                             .map(|(_, sync)| sync)
                     }
                     hstry_core::remote::SyncDirection::Push => {
-                        remote::sync_to_remote(&config.database, remote_config).await
+                        remote::sync_to_remote(
+                            &config.database,
+                            remote_config,
+                            device_namespace.as_deref().unwrap_or("device"),
+                        )
+                        .await
                     }
                     hstry_core::remote::SyncDirection::Bidirectional => {
                         // Pull first, then push
                         let pull_result = remote::sync_from_remote(db, remote_config).await;
                         match pull_result {
                             Ok((_, mut sync)) => {
-                                if let Ok(push_sync) =
-                                    remote::sync_to_remote(&config.database, remote_config).await
+                                if let Ok(push_sync) = remote::sync_to_remote(
+                                    &config.database,
+                                    remote_config,
+                                    device_namespace.as_deref().unwrap_or("device"),
+                                )
+                                .await
                                 {
                                     sync.conversations_added += push_sync.conversations_added;
                                     sync.conversations_updated += push_sync.conversations_updated;

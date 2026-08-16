@@ -210,6 +210,43 @@ mod adapter_repo_source_tests {
 }
 
 #[cfg(test)]
+mod sync_config_tests {
+    use super::super::{SyncConfig, sanitize_device_namespace};
+
+    #[test]
+    fn configured_device_namespace_is_normalized() {
+        let config = SyncConfig {
+            device_id: Some("MacBook Pro".to_string()),
+            ..SyncConfig::default()
+        };
+        let temp = tempfile::tempdir().expect("temp directory");
+
+        assert_eq!(
+            config
+                .device_namespace_at(&temp.path().join("device-id"))
+                .expect("configured namespace"),
+            "macbook-pro"
+        );
+        assert_eq!(sanitize_device_namespace("---"), None);
+    }
+
+    #[test]
+    fn generated_device_namespace_is_persisted() {
+        let config = SyncConfig::default();
+        let temp = tempfile::tempdir().expect("temp directory");
+        let path = temp.path().join("state").join("device-id");
+
+        let first = config
+            .device_namespace_at(&path)
+            .expect("generate namespace");
+        let second = config.device_namespace_at(&path).expect("read namespace");
+
+        assert!(first.starts_with("device-"));
+        assert_eq!(first, second);
+        assert_eq!(std::fs::read_to_string(path).expect("stored ID"), first);
+    }
+}
+
 mod remote_config_tests {
     use super::super::RemoteConfig;
 

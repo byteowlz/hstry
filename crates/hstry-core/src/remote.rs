@@ -8,6 +8,7 @@ use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::Connection;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -563,8 +564,51 @@ pub async fn sync_from_remote(
     Ok((fetch_result, sync_result))
 }
 
+async fn validate_hstry_database(path: &Path) -> Result<()> {
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .create_if_missing(false);
+    let mut connection = sqlx::SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| {
+            Error::Remote(format!("Fetched remote database is not SQLite: {error}"))
+        })?;
+
+    let quick_check: String = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_one(&mut connection)
+        .await
+        .map_err(|error| Error::Remote(format!("Remote database check failed: {error}")))?;
+    if quick_check != "ok" {
+        return Err(Error::Remote(format!(
+            "Fetched remote database failed SQLite quick_check: {quick_check}"
+        )));
+    }
+
+    let has_conversations: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'conversations'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .map_err(|error| Error::Remote(format!("Remote database schema check failed: {error}")))?;
+    connection.close().await.map_err(|error| {
+        Error::Remote(format!("Could not close remote database check: {error}"))
+    })?;
+
+    if has_conversations != 1 {
+        return Err(Error::Remote(
+            "Fetched SQLite file is not a hstry database".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Push local database to remote and merge.
-pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Result<SyncResult> {
+pub async fn sync_to_remote(
+    local_db_path: &Path,
+    config: &RemoteConfig,
+    device_namespace: &str,
+) -> Result<SyncResult> {
     let transport = SshTransport::from_config(config);
 
     // Test connection
@@ -585,13 +629,15 @@ pub async fn sync_to_remote(local_db_path: &Path, config: &RemoteConfig) -> Resu
     let remote_exists = transport.file_exists(&expanded_path)?;
     if remote_exists {
         transport.fetch_file(&expanded_path, &temp_db_path)?;
+        validate_hstry_database(&temp_db_path).await?;
     }
 
     // Open/create the temp database
     let temp_db = Database::open(&temp_db_path).await?;
 
-    // Merge local into temp (with namespace "local" for tracking)
-    let sync_result = merge_databases(&temp_db, local_db_path, "local").await?;
+    // Namespace pushed sources by their originating device so multiple
+    // satellites cannot overwrite one another on the same hub.
+    let sync_result = merge_databases(&temp_db, local_db_path, device_namespace).await?;
 
     temp_db.close().await;
 
@@ -853,5 +899,109 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"no\n");
         assert!(!marker.exists());
+    }
+
+    async fn create_satellite(path: &Path, source_id: &str, external_id: &str) {
+        use crate::models::Source;
+
+        let database = Database::open(path).await.expect("open satellite");
+        database
+            .upsert_source(&Source {
+                id: source_id.to_string(),
+                adapter: "pi".to_string(),
+                path: Some(format!("/{source_id}/sessions")),
+                last_sync_at: None,
+                config: serde_json::json!({}),
+            })
+            .await
+            .expect("insert source");
+        database
+            .upsert_conversation(&Conversation {
+                id: Uuid::new_v4(),
+                source_id: source_id.to_string(),
+                external_id: Some(external_id.to_string()),
+                readable_id: None,
+                platform_id: None,
+                title: Some(format!("Session from {source_id}")),
+                created_at: Utc::now(),
+                updated_at: None,
+                model: None,
+                provider: None,
+                workspace: None,
+                tokens_in: None,
+                tokens_out: None,
+                cost_usd: None,
+                metadata: serde_json::json!({}),
+                harness: Some("pi".to_string()),
+                version: 0,
+                message_count: 0,
+                parent_conversation_id: None,
+                parent_message_idx: None,
+                fork_type: None,
+            })
+            .await
+            .expect("insert conversation");
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn device_namespaces_keep_satellite_pushes_distinct_and_idempotent() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let hub_path = temp.path().join("hub.db");
+        let alpha_path = temp.path().join("alpha.db");
+        let beta_path = temp.path().join("beta.db");
+        create_satellite(&alpha_path, "pi", "session-alpha").await;
+        create_satellite(&beta_path, "pi", "session-beta").await;
+        let hub = Database::open(&hub_path).await.expect("open hub");
+
+        let alpha = merge_databases(&hub, &alpha_path, "device-alpha")
+            .await
+            .expect("merge alpha");
+        let beta = merge_databases(&hub, &beta_path, "device-beta")
+            .await
+            .expect("merge beta");
+        let alpha_again = merge_databases(&hub, &alpha_path, "device-alpha")
+            .await
+            .expect("merge alpha again");
+
+        assert_eq!(alpha.conversations_added, 1);
+        assert_eq!(beta.conversations_added, 1);
+        assert_eq!(alpha_again.conversations_added, 0);
+        let source_ids: Vec<_> = hub
+            .list_sources()
+            .await
+            .expect("list sources")
+            .into_iter()
+            .map(|source| source.id)
+            .collect();
+        assert_eq!(source_ids, ["device-alpha:pi", "device-beta:pi"]);
+        assert_eq!(
+            hub.list_conversations(crate::db::ListConversationsOptions::default())
+                .await
+                .expect("list conversations")
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn fetched_remote_must_be_a_valid_hstry_database() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let valid_path = temp.path().join("valid.db");
+        Database::open(&valid_path)
+            .await
+            .expect("create database")
+            .close()
+            .await;
+        validate_hstry_database(&valid_path)
+            .await
+            .expect("valid hstry database");
+
+        let invalid_path = temp.path().join("invalid.db");
+        std::fs::write(&invalid_path, b"not a sqlite database").expect("write invalid database");
+        let error = validate_hstry_database(&invalid_path)
+            .await
+            .expect_err("reject invalid database");
+        assert!(matches!(error, Error::Remote(_)));
     }
 }

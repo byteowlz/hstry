@@ -852,8 +852,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn remote_path_expansion_treats_shell_metacharacters_as_data() {
-        let temp = tempfile::tempdir().expect("temp directory");
+    fn remote_path_expansion_treats_shell_metacharacters_as_data() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
         let marker = temp.path().join("injected");
         let path = format!(
             "~/history/$HSTRY_TEST_DIR/it's; touch {}; $(touch {})\n.db",
@@ -867,12 +867,11 @@ mod tests {
             .arg(command)
             .env("HOME", "/remote/home")
             .env("HSTRY_TEST_DIR", "folder with spaces")
-            .output()
-            .expect("run expansion command");
+            .output()?;
 
         assert!(output.status.success());
         assert_eq!(
-            String::from_utf8(output.stdout).expect("UTF-8 output"),
+            String::from_utf8(output.stdout)?,
             format!(
                 "/remote/home/history/folder with spaces/it's; touch {}; $(touch {})\n.db\n",
                 marker.display(),
@@ -880,31 +879,33 @@ mod tests {
             )
         );
         assert!(!marker.exists());
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn remote_file_check_treats_expanded_path_as_one_shell_word() {
-        let temp = tempfile::tempdir().expect("temp directory");
+    fn remote_file_check_treats_expanded_path_as_one_shell_word() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
         let marker = temp.path().join("injected");
         let malicious_path = format!("/missing; touch {}\nsecond", marker.display());
         let command = file_exists_command(&malicious_path);
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .output()
-            .expect("run file check command");
+        let output = Command::new("sh").arg("-c").arg(command).output()?;
 
         assert!(output.status.success());
         assert_eq!(output.stdout, b"no\n");
         assert!(!marker.exists());
+        Ok(())
     }
 
-    async fn create_satellite(path: &Path, source_id: &str, external_id: &str) {
+    async fn create_satellite(
+        path: &Path,
+        source_id: &str,
+        external_id: &str,
+    ) -> anyhow::Result<()> {
         use crate::models::Source;
 
-        let database = Database::open(path).await.expect("open satellite");
+        let database = Database::open(path).await?;
         database
             .upsert_source(&Source {
                 id: source_id.to_string(),
@@ -913,8 +914,7 @@ mod tests {
                 last_sync_at: None,
                 config: serde_json::json!({}),
             })
-            .await
-            .expect("insert source");
+            .await?;
         database
             .upsert_conversation(&Conversation {
                 id: Uuid::new_v4(),
@@ -939,69 +939,56 @@ mod tests {
                 parent_message_idx: None,
                 fork_type: None,
             })
-            .await
-            .expect("insert conversation");
+            .await?;
         database.close().await;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn device_namespaces_keep_satellite_pushes_distinct_and_idempotent() {
-        let temp = tempfile::tempdir().expect("temp directory");
+    async fn device_namespaces_keep_satellite_pushes_distinct_and_idempotent() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
         let hub_path = temp.path().join("hub.db");
         let alpha_path = temp.path().join("alpha.db");
         let beta_path = temp.path().join("beta.db");
-        create_satellite(&alpha_path, "pi", "session-alpha").await;
-        create_satellite(&beta_path, "pi", "session-beta").await;
-        let hub = Database::open(&hub_path).await.expect("open hub");
+        create_satellite(&alpha_path, "pi", "session-alpha").await?;
+        create_satellite(&beta_path, "pi", "session-beta").await?;
+        let hub = Database::open(&hub_path).await?;
 
-        let alpha = merge_databases(&hub, &alpha_path, "device-alpha")
-            .await
-            .expect("merge alpha");
-        let beta = merge_databases(&hub, &beta_path, "device-beta")
-            .await
-            .expect("merge beta");
-        let alpha_again = merge_databases(&hub, &alpha_path, "device-alpha")
-            .await
-            .expect("merge alpha again");
+        let alpha = merge_databases(&hub, &alpha_path, "device-alpha").await?;
+        let beta = merge_databases(&hub, &beta_path, "device-beta").await?;
+        let alpha_again = merge_databases(&hub, &alpha_path, "device-alpha").await?;
 
         assert_eq!(alpha.conversations_added, 1);
         assert_eq!(beta.conversations_added, 1);
         assert_eq!(alpha_again.conversations_added, 0);
         let source_ids: Vec<_> = hub
             .list_sources()
-            .await
-            .expect("list sources")
+            .await?
             .into_iter()
             .map(|source| source.id)
             .collect();
         assert_eq!(source_ids, ["device-alpha:pi", "device-beta:pi"]);
         assert_eq!(
             hub.list_conversations(crate::db::ListConversationsOptions::default())
-                .await
-                .expect("list conversations")
+                .await?
                 .len(),
             2
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn fetched_remote_must_be_a_valid_hstry_database() {
-        let temp = tempfile::tempdir().expect("temp directory");
+    async fn fetched_remote_must_be_a_valid_hstry_database() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
         let valid_path = temp.path().join("valid.db");
-        Database::open(&valid_path)
-            .await
-            .expect("create database")
-            .close()
-            .await;
-        validate_hstry_database(&valid_path)
-            .await
-            .expect("valid hstry database");
+        Database::open(&valid_path).await?.close().await;
+        validate_hstry_database(&valid_path).await?;
 
         let invalid_path = temp.path().join("invalid.db");
-        std::fs::write(&invalid_path, b"not a sqlite database").expect("write invalid database");
-        let error = validate_hstry_database(&invalid_path)
-            .await
-            .expect_err("reject invalid database");
-        assert!(matches!(error, Error::Remote(_)));
+        std::fs::write(&invalid_path, b"not a sqlite database")?;
+        let result = validate_hstry_database(&invalid_path).await;
+        assert!(matches!(result, Err(Error::Remote(_))));
+        Ok(())
     }
 }

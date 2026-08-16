@@ -19,7 +19,7 @@ if [[ -z "$BASE_REF" ]]; then
 fi
 
 mapfile -t changed_rs < <(git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD -- '*.rs' \
-  | rg -v '(^|/)(tests?|testdata|fixtures)/|_test\.rs$|/target/' || true)
+  | rg -v '(^|/)(tests?|testdata|fixtures)/|_tests?\.rs$|/target/' || true)
 
 if [[ ${#changed_rs[@]} -eq 0 ]]; then
   echo "No changed Rust files to lint against AI guardrails."

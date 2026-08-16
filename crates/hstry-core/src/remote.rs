@@ -83,6 +83,95 @@ impl std::fmt::Display for SyncDirection {
     }
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// Build one shell word that expands leading `~`, `$VAR`, and `${VAR}` while
+/// keeping every other character literal. Variable names are restricted to
+/// portable shell identifiers, so operators and command substitutions can
+/// never become executable syntax.
+fn remote_path_expression(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut expression = String::new();
+    let mut index = 0;
+
+    if path == "~" || path.starts_with("~/") {
+        expression.push_str("\"${HOME}\"");
+        index = 1;
+    }
+
+    let mut literal_start = index;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+
+        let (name_start, name_end, token_end) = if bytes.get(index + 1) == Some(&b'{') {
+            let name_start = index + 2;
+            let Some(relative_end) = bytes[name_start..].iter().position(|byte| *byte == b'}')
+            else {
+                index += 1;
+                continue;
+            };
+            let name_end = name_start + relative_end;
+            (name_start, name_end, name_end + 1)
+        } else {
+            let name_start = index + 1;
+            let mut name_end = name_start;
+            while bytes
+                .get(name_end)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                name_end += 1;
+            }
+            (name_start, name_end, name_end)
+        };
+
+        let name = &bytes[name_start..name_end];
+        let valid_name = name
+            .first()
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+            && name
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+        if !valid_name {
+            index += 1;
+            continue;
+        }
+
+        if literal_start < index {
+            expression.push_str(&shell_quote(&path[literal_start..index]));
+        }
+        expression.push('"');
+        expression.push_str(&path[index..token_end]);
+        expression.push('"');
+        index = token_end;
+        literal_start = index;
+    }
+
+    if literal_start < path.len() {
+        expression.push_str(&shell_quote(&path[literal_start..]));
+    }
+    if expression.is_empty() {
+        expression.push_str("''");
+    }
+
+    expression
+}
+
+fn expand_remote_path_command(path: &str) -> String {
+    format!("printf '%s\\n' {}", remote_path_expression(path))
+}
+
+fn file_exists_command(path: &str) -> String {
+    format!(
+        "test -f {} && printf 'yes\\n' || printf 'no\\n'",
+        shell_quote(path)
+    )
+}
+
 /// SSH transport for remote operations.
 pub struct SshTransport {
     host: String,
@@ -241,15 +330,13 @@ impl SshTransport {
 
     /// Check if a file exists on the remote.
     pub fn file_exists(&self, remote_path: &str) -> Result<bool> {
-        let cmd = format!("test -f {remote_path} && echo yes || echo no");
-        let output = self.exec(&cmd)?;
+        let output = self.exec(&file_exists_command(remote_path))?;
         Ok(output.trim() == "yes")
     }
 
     /// Get the expanded path on the remote (resolves ~ and env vars).
     pub fn expand_remote_path(&self, path: &str) -> Result<String> {
-        let cmd = format!("echo {path}");
-        let output = self.exec(&cmd)?;
+        let output = self.exec(&expand_remote_path_command(path))?;
         Ok(output.trim().to_string())
     }
 }
@@ -715,5 +802,54 @@ mod tests {
         let transport = SshTransport::from_config(&config);
         assert_eq!(transport.host, "user@example.com");
         assert_eq!(transport.port, Some(2222));
+    }
+
+    #[test]
+    fn remote_path_expansion_treats_shell_metacharacters_as_data() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let marker = temp.path().join("injected");
+        let path = format!(
+            "~/history/$HSTRY_TEST_DIR/it's; touch {}; $(touch {})\n.db",
+            marker.display(),
+            marker.display()
+        );
+        let command = expand_remote_path_command(&path);
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .env("HOME", "/remote/home")
+            .env("HSTRY_TEST_DIR", "folder with spaces")
+            .output()
+            .expect("run expansion command");
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).expect("UTF-8 output"),
+            format!(
+                "/remote/home/history/folder with spaces/it's; touch {}; $(touch {})\n.db\n",
+                marker.display(),
+                marker.display()
+            )
+        );
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn remote_file_check_treats_expanded_path_as_one_shell_word() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let marker = temp.path().join("injected");
+        let malicious_path = format!("/missing; touch {}\nsecond", marker.display());
+        let command = file_exists_command(&malicious_path);
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .expect("run file check command");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"no\n");
+        assert!(!marker.exists());
     }
 }

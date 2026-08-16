@@ -1,4 +1,12 @@
-import { chromium, firefox, webkit, request, type BrowserType, type APIRequestContext } from 'playwright';
+import {
+  chromium,
+  firefox,
+  webkit,
+  request,
+  type APIRequestContext,
+  type BrowserType,
+  type Page,
+} from 'playwright';
 import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
 
@@ -58,7 +66,7 @@ async function login(
   await page.goto(providerUrls[provider], { waitUntil: 'domcontentloaded' });
 
   if (provider === 'chatgpt') {
-    await page.waitForSelector('textarea', { timeout: 0 });
+    await waitForChatGPTAuthentication(page);
   } else if (provider === 'claude') {
     await page.waitForSelector('textarea, [data-testid="composer"]', { timeout: 0 });
   } else {
@@ -80,6 +88,7 @@ async function sync(
   if (provider === 'chatgpt') {
     const api = await request.newContext({
       storageState: storageStatePath,
+      baseURL: providerUrls.chatgpt,
     });
     const conversations = await fetchChatGPTConversations(api, providerUrls.chatgpt);
     await ensureDir(outputPath);
@@ -88,6 +97,26 @@ async function sync(
   } else {
     throw new Error(`${provider} sync not implemented yet`);
   }
+}
+
+async function waitForChatGPTAuthentication(page: Page): Promise<void> {
+  await page.waitForFunction(
+    async () => {
+      try {
+        const response = await fetch('/api/auth/session', {
+          cache: 'no-store',
+          credentials: 'include',
+        });
+        if (!response.ok) return false;
+        const session = await response.json();
+        return Boolean(session?.user || session?.accessToken);
+      } catch {
+        return false;
+      }
+    },
+    undefined,
+    { polling: 1000, timeout: 0 }
+  );
 }
 
 async function fetchChatGPTConversations(api: APIRequestContext, baseUrl: string): Promise<any[]> {

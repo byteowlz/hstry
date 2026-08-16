@@ -4332,6 +4332,26 @@ mod tests {
     }
 
     #[test]
+    fn embedded_web_runner_waits_for_an_authenticated_chatgpt_session() {
+        let runner = include_str!("../assets/web-runner.ts");
+
+        assert!(runner.contains("await waitForChatGPTAuthentication(page);"));
+        assert!(runner.contains("Boolean(session?.user || session?.accessToken)"));
+        assert!(
+            !runner.contains(
+                "if (provider === 'chatgpt') {\n    await page.waitForSelector('textarea'"
+            )
+        );
+    }
+
+    #[test]
+    fn embedded_web_runner_sets_chatgpt_api_base_url() {
+        let runner = include_str!("../assets/web-runner.ts");
+
+        assert!(runner.contains("baseURL: providerUrls.chatgpt,"));
+    }
+
+    #[test]
     fn parse_date_filter_accepts_relative_durations() {
         let now = chrono::Utc::now();
         let cases = [

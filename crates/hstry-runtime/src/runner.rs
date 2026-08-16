@@ -299,7 +299,7 @@ impl AdapterRunner {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        args.push(adapter_path.display().to_string());
+        args.push(normalize_adapter_script_path(adapter_path));
 
         // Use stdin for large requests (> 100KB) to avoid env var size limits
         let use_stdin = request_json.len() > 100_000;
@@ -441,6 +441,14 @@ impl AdapterRunner {
             _ => anyhow::bail!("Unexpected response type"),
         }
     }
+}
+
+fn normalize_adapter_script_path(path: &Path) -> String {
+    let displayed = path.display().to_string();
+    displayed
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&displayed)
+        .to_string()
 }
 
 #[cfg(test)]

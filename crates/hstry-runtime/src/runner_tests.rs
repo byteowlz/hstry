@@ -2,7 +2,8 @@
 
 #[cfg(test)]
 mod runtime_tests {
-    use super::super::{Runtime, RuntimeKind};
+    use super::super::{Runtime, RuntimeKind, normalize_adapter_script_path};
+    use std::path::Path;
 
     fn bun() -> Runtime {
         Runtime::from_kind(RuntimeKind::Bun)
@@ -12,6 +13,18 @@ mod runtime_tests {
     }
     fn node() -> Runtime {
         Runtime::from_kind(RuntimeKind::Node)
+    }
+
+    #[test]
+    fn adapter_script_path_removes_windows_extended_length_prefix() {
+        assert_eq!(
+            normalize_adapter_script_path(Path::new(r"\\?\C:\Users\test\adapter.ts")),
+            r"C:\Users\test\adapter.ts"
+        );
+        assert_eq!(
+            normalize_adapter_script_path(Path::new("/tmp/adapter.ts")),
+            "/tmp/adapter.ts"
+        );
     }
 
     #[test]

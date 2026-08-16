@@ -804,6 +804,7 @@ mod tests {
         assert_eq!(transport.port, Some(2222));
     }
 
+    #[cfg(unix)]
     #[test]
     fn remote_path_expansion_treats_shell_metacharacters_as_data() {
         let temp = tempfile::tempdir().expect("temp directory");
@@ -835,6 +836,7 @@ mod tests {
         assert!(!marker.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn remote_file_check_treats_expanded_path_as_one_shell_word() {
         let temp = tempfile::tempdir().expect("temp directory");

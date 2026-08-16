@@ -5,20 +5,23 @@
  * Location: ~/Library/Application Support/Cursor/User/workspaceStorage/<hash>/state.vscdb
  */
 
-import { readdir, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { basename, join } from 'path';
 import { homedir } from 'os';
+import { gunzipSync } from 'zlib';
 import type {
   Adapter,
   AdapterInfo,
   Conversation,
   Message,
   ParseOptions,
+  ToolCall,
 } from '../types/index.ts';
 import { runAdapter, textOnlyParts } from '../types/index.ts';
 
 interface SqliteStatement {
   get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
 }
 
 interface SqliteDatabase {
@@ -43,22 +46,54 @@ try {
   // SQLite is unavailable in this runtime; detection returns no match.
 }
 
+function statement(db: SqliteDatabase, sql: string): SqliteStatement {
+  const prepared = db.query?.(sql) ?? db.prepare?.(sql);
+  if (!prepared) throw new Error('SQLite runtime does not support prepared queries');
+  return prepared;
+}
+
 function getRow(db: SqliteDatabase, sql: string, parameter: string): StateRow | undefined {
-  const statement = db.query?.(sql) ?? db.prepare?.(sql);
-  if (!statement) throw new Error('SQLite runtime does not support prepared queries');
-  return statement.get(parameter) as StateRow | undefined;
+  return statement(db, sql).get(parameter) as StateRow | undefined;
+}
+
+function getJson<T>(db: SqliteDatabase, key: string): T | undefined {
+  for (const table of ['ItemTable', 'cursorDiskKV']) {
+    try {
+      const row = getRow(db, `SELECT value FROM ${table} WHERE key = ?`, key);
+      if (row?.value) return JSON.parse(row.value) as T;
+    } catch { /* table/key absent */ }
+  }
+  return undefined;
+}
+
+function listKeys(db: SqliteDatabase, prefix: string): string[] {
+  const keys = new Set<string>();
+  for (const table of ['ItemTable', 'cursorDiskKV']) {
+    try {
+      const rows = statement(db, `SELECT key FROM ${table} WHERE key LIKE ?`).all(`${prefix}%`) as StateRow[];
+      for (const row of rows) keys.add(row.key);
+    } catch { /* table absent */ }
+  }
+  return [...keys];
 }
 
 // Platform-specific paths
 const DEFAULT_PATHS = (() => {
   const home = homedir();
+  const snapshots = join(home, '.cursaves', 'snapshots');
   switch (process.platform) {
-    case 'darwin':
-      return [join(home, 'Library', 'Application Support', 'Cursor', 'User', 'workspaceStorage')];
-    case 'win32':
-      return [join(process.env.APPDATA || '', 'Cursor', 'User', 'workspaceStorage')];
-    default: // Linux
-      return [join(home, '.config', 'Cursor', 'User', 'workspaceStorage')];
+    case 'darwin': {
+      const user = join(home, 'Library', 'Application Support', 'Cursor', 'User');
+      return [join(user, 'globalStorage'), join(user, 'workspaceStorage'), snapshots];
+    }
+    case 'win32': {
+      const user = join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Cursor', 'User');
+      return [join(user, 'globalStorage'), join(user, 'workspaceStorage'), snapshots];
+    }
+    default: { // Linux
+      const user = join(home, '.config', 'Cursor', 'User');
+      return [join(user, 'globalStorage'), join(user, 'workspaceStorage'), snapshots];
+    }
   }
 })();
 
@@ -98,8 +133,46 @@ interface CursorPrompt {
   model?: string;
 }
 
+interface ComposerHeader {
+  composerId?: string;
+  name?: string;
+  createdAt?: number | string;
+  lastUpdatedAt?: number | string;
+  workspaceIdentifier?: { uri?: { fsPath?: string; path?: string } };
+}
+
+interface ComposerBubbleHeader {
+  bubbleId?: string;
+  type?: number;
+}
+
+interface ComposerBubble {
+  type?: number;
+  text?: string;
+  richText?: string;
+  createdAt?: number | string;
+  toolResults?: unknown;
+}
+
+interface ComposerData {
+  name?: string;
+  createdAt?: number | string;
+  lastUpdatedAt?: number | string;
+  fullConversationHeadersOnly?: ComposerBubbleHeader[];
+  conversationMap?: Record<string, ComposerBubble>;
+}
+
+interface ComposerSnapshot {
+  composerId?: string;
+  sourceProjectPath?: string;
+  composerData?: ComposerData;
+  bubbleEntries?: Record<string, ComposerBubble>;
+}
+
 const CHAT_DATA_KEY = 'workbench.panel.aichat.view.aichat.chatdata';
 const PROMPTS_KEY = 'aiService.prompts';
+const COMPOSER_HEADERS_KEY = 'composer.composerHeaders';
+const MAX_COMPOSER_TEXT = 20_000;
 
 const adapter: Adapter = {
   info(): AdapterInfo {
@@ -114,6 +187,9 @@ const adapter: Adapter = {
   async detect(path: string): Promise<number | null> {
     if (!openDatabase) return null;
 
+    const snapshotFiles = await findSnapshotFiles(path);
+    if (snapshotFiles.length > 0) return 0.9;
+
     const dbFiles = await findStateFiles(path);
     if (dbFiles.length === 0) return null;
 
@@ -121,9 +197,18 @@ const adapter: Adapter = {
     for (const dbPath of dbFiles.slice(0, 3)) {
       try {
         const db = openDatabase(dbPath);
-        const row = getRow(db, 'SELECT value FROM ItemTable WHERE key = ?', CHAT_DATA_KEY);
+        const hasLegacyChat = getRow(
+          db,
+          'SELECT value FROM ItemTable WHERE key = ?',
+          CHAT_DATA_KEY,
+        );
+        const hasComposer = getJson<{ allComposers?: ComposerHeader[] }>(
+          db,
+          COMPOSER_HEADERS_KEY,
+        ) || listKeys(db, 'composerData:').length > 0;
         db.close();
-        if (row) return 0.9;
+        if (hasComposer) return 0.95;
+        if (hasLegacyChat) return 0.9;
       } catch { /* continue */ }
     }
 
@@ -134,12 +219,22 @@ const adapter: Adapter = {
     if (!openDatabase) return [];
 
     const dbFiles = await findStateFiles(path);
-    if (dbFiles.length === 0) return [];
+    const snapshotFiles = await findSnapshotFiles(path);
+    if (dbFiles.length === 0 && snapshotFiles.length === 0) return [];
 
     const conversations: Conversation[] = [];
     const seenIds = new Set<string>();
 
+    for (const snapshotPath of snapshotFiles) {
+      const conversation = await parseComposerSnapshot(snapshotPath, opts);
+      if (!conversation || !conversation.externalId || seenIds.has(conversation.externalId)) continue;
+      seenIds.add(conversation.externalId);
+      conversations.push(conversation);
+      if (opts?.limit && conversations.length >= opts.limit) break;
+    }
+
     for (const dbPath of dbFiles) {
+      if (opts?.limit && conversations.length >= opts.limit) break;
       const workspaceId = basename(dbPath.replace(/\/state\.vscdb$/, ''));
       const convs = await parseStateDb(dbPath, workspaceId, opts);
       
@@ -198,7 +293,9 @@ async function parseStateDb(dbPath: string, workspaceId: string, opts?: ParseOpt
     if (!openDatabase) return conversations;
     const db = openDatabase(dbPath);
 
-    // Try to get chat data
+    conversations.push(...parseComposerData(db, dbPath, opts));
+
+    // Try to get legacy chat data.
     const chatRow = getRow(db, 'SELECT value FROM ItemTable WHERE key = ?', CHAT_DATA_KEY);
     if (chatRow) {
       const chatConvs = parseChatData(chatRow.value, workspaceId, opts);
@@ -218,6 +315,190 @@ async function parseStateDb(dbPath: string, workspaceId: string, opts?: ParseOpt
   }
 
   return conversations;
+}
+
+function toMilliseconds(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.floor(value < 1e12 ? value * 1000 : value);
+  }
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return Math.floor(numeric < 1e12 ? numeric * 1000 : numeric);
+    }
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return Math.floor(parsed);
+  }
+  return undefined;
+}
+
+function composerText(bubble?: ComposerBubble): string {
+  const text = bubble?.text?.trim() || bubble?.richText?.trim() || '';
+  return text.length > MAX_COMPOSER_TEXT
+    ? `${text.slice(0, MAX_COMPOSER_TEXT - 1)}…`
+    : text;
+}
+
+function composerToolCalls(bubble?: ComposerBubble): ToolCall[] {
+  if (!bubble?.toolResults) return [];
+  const rawTools = Array.isArray(bubble.toolResults) ? bubble.toolResults : [bubble.toolResults];
+  return rawTools.flatMap(raw => {
+    if (!raw || typeof raw !== 'object') return [];
+    const tool = raw as Record<string, unknown>;
+    const toolName = typeof tool.name === 'string'
+      ? tool.name
+      : typeof tool.toolName === 'string' ? tool.toolName : 'tool';
+    const output = typeof tool.result === 'string'
+      ? tool.result
+      : JSON.stringify(tool.result ?? tool.output ?? '');
+    return [{
+      toolName,
+      input: tool.params ?? tool.input,
+      output: output.slice(0, 8_000),
+      status: 'success' as const,
+    }];
+  });
+}
+
+function composerConversation(
+  composerId: string,
+  data: ComposerData,
+  bubbles: Record<string, ComposerBubble>,
+  header: ComposerHeader | undefined,
+  dbPath: string,
+  opts?: ParseOptions,
+): Conversation | null {
+  const messages: Message[] = [];
+  let firstTimestamp: number | undefined;
+  let lastTimestamp: number | undefined;
+
+  const append = (bubbleHeader: ComposerBubbleHeader, bubble?: ComposerBubble) => {
+    const content = composerText(bubble);
+    if (!content) return;
+    const createdAt = toMilliseconds(bubble?.createdAt) ?? toMilliseconds(data.createdAt);
+    if (createdAt !== undefined) {
+      firstTimestamp = firstTimestamp === undefined ? createdAt : Math.min(firstTimestamp, createdAt);
+      lastTimestamp = lastTimestamp === undefined ? createdAt : Math.max(lastTimestamp, createdAt);
+    }
+    const type = bubbleHeader.type ?? bubble?.type;
+    if (type === 1) {
+      messages.push({ role: 'user', content, parts: textOnlyParts(content), createdAt });
+    } else if (type === 2) {
+      const toolCalls = composerToolCalls(bubble);
+      messages.push({
+        role: 'assistant',
+        content,
+        parts: textOnlyParts(content),
+        createdAt,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      });
+    }
+  };
+
+  const headers = data.fullConversationHeadersOnly ?? [];
+  if (headers.length > 0) {
+    for (const bubbleHeader of headers) {
+      if (!bubbleHeader.bubbleId) continue;
+      append(bubbleHeader, bubbles[bubbleHeader.bubbleId] ?? data.conversationMap?.[bubbleHeader.bubbleId]);
+    }
+  } else {
+    for (const [bubbleId, bubble] of Object.entries(data.conversationMap ?? bubbles)) {
+      append({ bubbleId, type: bubble.type }, bubble);
+    }
+  }
+  if (messages.length === 0) return null;
+
+  const createdAt = firstTimestamp
+    ?? toMilliseconds(data.createdAt)
+    ?? toMilliseconds(header?.createdAt)
+    ?? Date.now();
+  const updatedAt = lastTimestamp
+    ?? toMilliseconds(data.lastUpdatedAt)
+    ?? toMilliseconds(header?.lastUpdatedAt)
+    ?? createdAt;
+  if (opts?.since && createdAt < opts.since && updatedAt < opts.since) return null;
+
+  return {
+    externalId: composerId,
+    title: data.name ?? header?.name ?? deriveTitle(messages),
+    createdAt,
+    updatedAt,
+    provider: 'cursor',
+    workspace: header?.workspaceIdentifier?.uri?.fsPath
+      ?? header?.workspaceIdentifier?.uri?.path
+      ?? basename(dbPath.replace(/[/\\]state\.vscdb$/, '')),
+    messages,
+    metadata: { source: 'cursor-composer', composerId, file: dbPath },
+  };
+}
+
+function parseComposerData(
+  db: SqliteDatabase,
+  dbPath: string,
+  opts?: ParseOptions,
+): Conversation[] {
+  const headers = getJson<{ allComposers?: ComposerHeader[] }>(db, COMPOSER_HEADERS_KEY)
+    ?.allComposers ?? [];
+  const composerIds = new Set(headers.flatMap(header => header.composerId ? [header.composerId] : []));
+  for (const key of listKeys(db, 'composerData:')) {
+    composerIds.add(key.slice('composerData:'.length));
+  }
+
+  const conversations: Conversation[] = [];
+  for (const composerId of composerIds) {
+    const data = getJson<ComposerData>(db, `composerData:${composerId}`);
+    if (!data) continue;
+    const bubbles = { ...(data.conversationMap ?? {}) };
+    for (const key of listKeys(db, `bubbleId:${composerId}:`)) {
+      const bubbleId = key.slice(`bubbleId:${composerId}:`.length);
+      const bubble = getJson<ComposerBubble>(db, key);
+      if (bubble) bubbles[bubbleId] = bubble;
+    }
+    const conversation = composerConversation(
+      composerId,
+      data,
+      bubbles,
+      headers.find(header => header.composerId === composerId),
+      dbPath,
+      opts,
+    );
+    if (conversation) conversations.push(conversation);
+  }
+  return conversations;
+}
+
+async function parseComposerSnapshot(
+  snapshotPath: string,
+  opts?: ParseOptions,
+): Promise<Conversation | null> {
+  try {
+    const bytes = await readFile(snapshotPath);
+    const decoded = snapshotPath.endsWith('.gz') ? gunzipSync(bytes) : bytes;
+    const snapshot = JSON.parse(decoded.toString('utf8')) as ComposerSnapshot;
+    const composerId = snapshot.composerId
+      ?? basename(snapshotPath).replace(/\.json(?:\.gz)?$/i, '').replace(/\.\d+$/, '');
+    const header: ComposerHeader | undefined = snapshot.sourceProjectPath
+      ? { workspaceIdentifier: { uri: { fsPath: snapshot.sourceProjectPath } } }
+      : undefined;
+    const conversation = composerConversation(
+      composerId,
+      snapshot.composerData ?? {},
+      snapshot.bubbleEntries ?? {},
+      header,
+      snapshotPath,
+      opts,
+    );
+    if (conversation) {
+      conversation.metadata = {
+        ...conversation.metadata,
+        source: 'cursor-composer-snapshot',
+        file: snapshotPath,
+      };
+    }
+    return conversation;
+  } catch {
+    return null;
+  }
 }
 
 function parseChatData(value: string, workspaceId: string, opts?: ParseOptions): Conversation[] {
@@ -400,6 +681,27 @@ function conversationsToMarkdown(conversations: Conversation[]): string {
   return blocks.join('\n').trim() + '\n';
 }
 
+async function findSnapshotFiles(path: string, depth = 4): Promise<string[]> {
+  const stats = await stat(path).catch(() => null);
+  if (!stats) return [];
+  if (stats.isFile()) {
+    return /\.json(?:\.gz)?$/i.test(path) ? [path] : [];
+  }
+  if (!stats.isDirectory() || depth <= 0) return [];
+
+  const files: string[] = [];
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await findSnapshotFiles(entryPath, depth - 1));
+    } else if (entry.isFile() && /\.json(?:\.gz)?$/i.test(entry.name)) {
+      files.push(entryPath);
+    }
+  }
+  return files.sort();
+}
+
 async function findStateFiles(path: string): Promise<string[]> {
   const files: string[] = [];
   const stats = await stat(path).catch(() => null);
@@ -414,7 +716,13 @@ async function findStateFiles(path: string): Promise<string[]> {
 
   if (!stats.isDirectory()) return files;
 
-  // Look for workspace directories containing state.vscdb
+  // globalStorage itself contains state.vscdb; workspaceStorage contains
+  // one state database per child directory.
+  const rootDatabase = join(path, 'state.vscdb');
+  if ((await stat(rootDatabase).catch(() => null))?.isFile()) {
+    files.push(rootDatabase);
+  }
+
   const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;

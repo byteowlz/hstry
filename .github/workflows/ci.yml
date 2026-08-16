@@ -47,3 +47,13 @@ jobs:
 
       - name: Test workspace
         run: cargo test --workspace
+
+  adapter-tests:
+    name: Adapter fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun run adapters/cursor/test.js
+      - run: bun run adapters/gemini-cli/test.js
+      - run: bun run adapters/workbuddy/test.js

@@ -1,0 +1,6 @@
+{"id":"title","timestamp":1782900000000,"type":"ai-title","aiTitle":"WorkBuddy deployment"}
+{"id":"reason","timestamp":1782900000100,"type":"reasoning","rawContent":[{"type":"reasoning_text","text":"Check the environment first."}],"cwd":"/projects/demo"}
+{"id":"user","timestamp":1782900000200,"type":"message","role":"user","content":[{"type":"input_text","text":"<system-reminder>private setup</system-reminder><user_query>Deploy the service</user_query>"}]}
+{"id":"call","timestamp":1782900000300,"type":"function_call","callId":"call-1","name":"shell","arguments":"{\"command\":\"deploy\"}","providerData":{"model":"workbuddy-model"}}
+{"id":"result","timestamp":1782900000400,"type":"function_call_result","callId":"call-1","name":"shell","output":{"type":"text","text":"deployed"},"status":"success"}
+{"id":"assistant","timestamp":1782900000500,"type":"message","role":"assistant","content":[{"type":"output_text","text":"Deployment complete."}],"providerData":{"model":"workbuddy-model"}}

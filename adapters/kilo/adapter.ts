@@ -1,12 +1,12 @@
 /**
- * OpenCode adapter for hstry
+ * Kilo Code adapter for hstry
  * 
- * Parses OpenCode session history from ~/.local/share/opencode/
+ * Parses Kilo Code session history from ~/.local/share/kilo/
  * 
  * Supports three layouts:
  * 
  * SQLITE (v1.1.45+):
- *   opencode.db (SQLite database with session, message, part, project tables)
+ *   kilo.db (SQLite database with session, message, part, project tables)
  * 
  * NEW (v1.1.25+): 
  *   storage/session/<project-id>/<session-id>.json
@@ -71,7 +71,7 @@ try {
 
 declare const Bun: unknown;
 
-// OpenCode storage structures
+// Kilo Code storage structures
 interface SessionInfo {
   id: string;
   version?: string;
@@ -133,7 +133,7 @@ interface PartInfo {
   hash?: string;
 }
 
-const DEFAULT_OPENCODE_PATH = join(homedir(), '.local/share/opencode');
+const DEFAULT_KILO_PATH = join(homedir(), '.local/share/kilo');
 
 /** A lightweight reference to a session, used for streaming enumeration. */
 interface SessionRef {
@@ -203,7 +203,7 @@ type LayoutType = 'sqlite' | 'new' | 'old' | 'none';
 
 async function detectLayout(basePath: string): Promise<LayoutType> {
   // Check SQLite layout first (newest, v1.1.45+)
-  if (openDb && existsSync(join(basePath, 'opencode.db'))) {
+  if (openDb && existsSync(join(basePath, 'kilo.db'))) {
     return 'sqlite';
   }
 
@@ -253,16 +253,16 @@ async function detectLayout(basePath: string): Promise<LayoutType> {
 const adapter: Adapter = {
   info(): AdapterInfo {
     return {
-      name: 'opencode',
-      displayName: 'OpenCode',
+      name: 'kilo',
+      displayName: 'Kilo Code',
       version: '3.0.0',
-      defaultPaths: [DEFAULT_OPENCODE_PATH],
+      defaultPaths: [DEFAULT_KILO_PATH],
     };
   },
 
   async detect(path: string): Promise<number | null> {
-    // trx-gzfh defense in depth: opencode owns ~/.local/share/opencode.
-    if (!isUnderCanonicalRoot(path, DEFAULT_OPENCODE_PATH)) {
+    // trx-gzfh defense in depth: kilo owns ~/.local/share/kilo.
+    if (!isUnderCanonicalRoot(path, DEFAULT_KILO_PATH)) {
       return null;
     }
     const layout = await detectLayout(path);
@@ -348,13 +348,13 @@ const adapter: Adapter = {
       };
     }
 
-    if (opts.format !== 'opencode') {
+    if (opts.format !== 'kilo') {
       throw new Error(`Unsupported export format: ${opts.format}`);
     }
 
-    const files = buildOpenCodeFiles(conversations);
+    const files = buildKiloCodeFiles(conversations);
     return {
-      format: 'opencode',
+      format: 'kilo',
       files,
       mimeType: 'application/json',
       metadata: {
@@ -373,7 +373,7 @@ const adapter: Adapter = {
 // SQLite layout (v1.1.45+)
 // ============================================================================
 
-/** SQLite row types matching the opencode schema */
+/** SQLite row types matching the kilo schema */
 interface SqliteSessionRow {
   id: string;
   project_id: string;
@@ -427,7 +427,7 @@ async function parseSqliteStream(basePath: string, opts?: ParseOptions): Promise
     return { conversations: [], done: true };
   }
 
-  const dbPath = join(basePath, 'opencode.db');
+  const dbPath = join(basePath, 'kilo.db');
   const batchSize = opts?.batchSize ?? 25;
   const cursor = opts?.cursor as { offset: number } | undefined;
   const offset = cursor?.offset ?? 0;
@@ -658,7 +658,7 @@ function buildSqliteConversation(
   );
 }
 
-/** Map opencode tool status to hstry ToolStatus. */
+/** Map kilo tool status to hstry ToolStatus. */
 function mapToolStatus(status?: string): 'pending' | 'success' | 'error' | undefined {
   switch (status) {
     case 'completed': return 'success';
@@ -1097,7 +1097,7 @@ async function parseOldLayout(basePath: string, opts?: ParseOptions): Promise<Co
 }
 
 /**
- * Convert OpenCode project name to filesystem path
+ * Convert Kilo Code project name to filesystem path
  * e.g., "home-wismut-byteowlz-kittenx" -> "/home/wismut/byteowlz/kittenx"
  */
 function projectNameToPath(projectName: string): string {
@@ -1234,37 +1234,7 @@ async function loadPartsOld(
   return parts;
 }
 
-/** Build CanonPart[] from opencode PartInfo[]. */
-function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean): CanonPart[] | undefined {
-  const canon: CanonPart[] = [];
-  for (const p of oparts) {
-    if (p.type === 'text' && p.text) {
-      canon.push(textPart(p.text));
-    } else if (p.type === 'reasoning' && p.text) {
-      // Assistant turns are split into per-step rows; early rows often carry
-      // only reasoning. Preserve it or the step reads as an empty reply.
-      canon.push(thinkingPart(p.text));
-    } else if (p.type === 'tool' && p.tool && includeTools) {
-      // Tool parts in opencode represent both the call and result.
-      // The state has input, output, status.
-      const callId = p.id || p.tool;
-      canon.push(toolCallPart(callId, p.tool, p.state?.input));
-      if (p.state?.output !== undefined || p.state?.status === 'error') {
-        canon.push(toolResultPart(callId, p.state?.output, { name: p.tool, isError: p.state?.status === 'error' }));
-      }
-    } else if (p.type === 'patch') {
-      canon.push({ id: `x-patch-${p.id}`, type: 'x-patch', payload: { hash: p.hash, files: p.files } });
-    }
-    // step-start / step-finish are bookkeeping and carry no content.
-  }
-  return canon.length > 0 ? canon : undefined;
-}
-
-/**
- * Compact textual projection of non-text parts, used as message content when
- * a step row has no text part of its own. Keeps content-only readers
- * (`hstry show`, peek bundles, FTS) useful instead of showing empty replies.
- */
+/** Build CanonPart[] from kilo PartInfo[]. */
 function projectPartsToContent(canon: CanonPart[] | undefined): string {
   if (!canon) return '';
   const lines: string[] = [];
@@ -1289,6 +1259,29 @@ function projectPartsToContent(canon: CanonPart[] | undefined): string {
     }
   }
   return lines.join('\n').slice(0, 8000);
+}
+
+function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean): CanonPart[] | undefined {
+  const canon: CanonPart[] = [];
+  for (const p of oparts) {
+    if (p.type === 'text' && p.text) {
+      canon.push(textPart(p.text));
+    } else if (p.type === 'reasoning' && p.text) {
+      canon.push(thinkingPart(p.text));
+    } else if (p.type === 'tool' && p.tool && includeTools) {
+      // Tool parts in kilo represent both the call and result.
+      // The state has input, output, status.
+      const callId = p.id || p.tool;
+      canon.push(toolCallPart(callId, p.tool, p.state?.input));
+      if (p.state?.output !== undefined || p.state?.status === 'error') {
+        canon.push(toolResultPart(callId, p.state?.output, { name: p.tool, isError: p.state?.status === 'error' }));
+      }
+    } else if (p.type === 'patch') {
+      canon.push({ id: `x-patch-${p.id}`, type: 'x-patch', payload: { hash: p.hash, files: p.files } });
+    }
+    // step-start / step-finish are bookkeeping and carry no content.
+  }
+  return canon.length > 0 ? canon : undefined;
 }
 
 function mapRole(role: string): Message['role'] {
@@ -1338,7 +1331,7 @@ function conversationsToMarkdown(conversations: Conversation[]): string {
   return blocks.join('\n').trim() + '\n';
 }
 
-function buildOpenCodeFiles(conversations: Conversation[]): { path: string; content: string }[] {
+function buildKiloCodeFiles(conversations: Conversation[]): { path: string; content: string }[] {
   const files: { path: string; content: string }[] = [];
 
   for (const conv of conversations) {

@@ -377,24 +377,29 @@ function buildPiFiles(conversations: Conversation[], opts: ExportOptions): Expor
         }
       }
 
+      const piRole = mapRoleToPi(msg.role);
       const piMessage: PiMessage = {
-        role: mapRoleToPi(msg.role),
+        role: piRole,
         content: contentBlocks.length > 0 ? contentBlocks : undefined,
         timestamp: msg.createdAt,
         model: msg.model,
-        usage: msg.tokens ? {
+        // Pi's interactive footer unconditionally reads usage and usage.cost
+        // from every assistant entry. Converted histories often lack token or
+        // cost data, so emit a complete zero-valued structure rather than
+        // omitting fields required by the native session schema.
+        usage: piRole === 'assistant' ? {
           input: 0,
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: msg.tokens,
-          cost: msg.costUsd ? {
+          totalTokens: msg.tokens ?? 0,
+          cost: {
             input: 0,
             output: 0,
             cacheRead: 0,
             cacheWrite: 0,
-            total: msg.costUsd,
-          } : undefined as unknown as PiUsage['cost'],
+            total: msg.costUsd ?? 0,
+          },
         } : undefined,
       };
 

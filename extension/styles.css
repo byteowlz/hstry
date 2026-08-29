@@ -1,0 +1,71 @@
+:root {
+  color-scheme: light dark;
+  --page: #f3f1ea;
+  --panel: #faf9f5;
+  --ink: #1c211e;
+  --muted: #686d69;
+  --faint: #8c918d;
+  --rule: #c9cbc5;
+  --rule-strong: #90958f;
+  --accent: #245e4b;
+  --accent-hover: #194738;
+  --success: #287258;
+  --warning: #8a611a;
+  --danger: #a33e35;
+  --danger-bg: #f3e5e1;
+  --focus: rgb(36 94 75 / 20%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #111512;
+    --panel: #171c18;
+    --ink: #eceeea;
+    --muted: #a7aca7;
+    --faint: #7f8580;
+    --rule: #394039;
+    --rule-strong: #697069;
+    --accent: #78b99f;
+    --accent-hover: #96cbb5;
+    --success: #78b99f;
+    --warning: #d0aa65;
+    --danger: #e58c82;
+    --danger-bg: #34221f;
+    --focus: rgb(120 185 159 / 20%);
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--page);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+button, input { font: inherit; }
+button { cursor: pointer; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: 4px; font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; }
+h2 { margin-bottom: 4px; font-size: 14px; font-weight: 700; }
+.muted { color: var(--muted); }
+.button-primary, .button-secondary, .button-quiet {
+  min-height: 38px;
+  padding: 0 15px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.button-primary { color: var(--panel); background: var(--accent); border: 1px solid var(--accent); }
+.button-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.button-secondary { color: var(--ink); background: transparent; border: 1px solid var(--rule-strong); }
+.button-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.button-quiet { min-height: 30px; padding: 0 7px; color: var(--accent); background: transparent; border: 0; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+button:disabled { cursor: wait; opacity: .55; }
+.status-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--faint); }
+.status-dot.success { background: var(--success); }
+.status-dot.error { background: var(--danger); }
+.status-dot.idle { background: var(--warning); }
+.status-dot.checking, .status-dot.syncing { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

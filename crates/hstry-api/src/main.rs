@@ -73,6 +73,7 @@ async fn try_main() -> Result<()> {
         .route("/health", get(health))
         .route("/config", get(get_config))
         .route("/search", get(search))
+        .route("/sources", post(register_source))
         .route(
             "/ingest",
             post(ingest).layer(DefaultBodyLimit::max(INGEST_BODY_LIMIT)),
@@ -90,7 +91,11 @@ async fn try_main() -> Result<()> {
     let _ = writeln!(
         io::stderr(),
         "hstry-api listening on http://{addr}  (ingest auth: {}, set RUST_LOG=info,tower_http=debug for request logs)",
-        if has_token { "token required" } else { "open on loopback" }
+        if has_token {
+            "token required"
+        } else {
+            "open on loopback"
+        }
     );
     axum::serve(listener, app).await?;
 
@@ -242,7 +247,82 @@ struct IngestRequest {
 struct IngestResponse {
     source: String,
     conversations: usize,
+    created: usize,
+    updated: usize,
     messages: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterSourceRequest {
+    source: String,
+    adapter: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterSourceResponse {
+    source: String,
+    adapter: String,
+    created: bool,
+}
+
+fn authorize_ingest(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
+    if let Some(expected) = state.ingest_token.as_ref() {
+        let provided = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        if provided != Some(expected.as_str()) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+    Ok(())
+}
+
+fn valid_source_id(source_id: &str) -> bool {
+    !source_id.is_empty()
+        && source_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+}
+
+async fn register_source(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RegisterSourceRequest>,
+) -> Result<Json<RegisterSourceResponse>, StatusCode> {
+    authorize_ingest(&state, &headers)?;
+    let source_id = req.source.trim();
+    let adapter = req.adapter.trim();
+    if !valid_source_id(source_id) || adapter.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let existing = state
+        .db
+        .get_source(source_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let created = existing.is_none();
+    let source = existing.unwrap_or_else(|| Source {
+        id: source_id.to_string(),
+        adapter: adapter.to_string(),
+        path: None,
+        last_sync_at: None,
+        config: serde_json::json!({}),
+    });
+    state
+        .db
+        .upsert_source(&source)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(RegisterSourceResponse {
+        source: source.id,
+        adapter: source.adapter,
+        created,
+    }))
 }
 
 async fn ingest(
@@ -250,22 +330,10 @@ async fn ingest(
     headers: HeaderMap,
     Json(req): Json<IngestRequest>,
 ) -> Result<Json<IngestResponse>, StatusCode> {
-    if let Some(expected) = state.ingest_token.as_ref() {
-        let provided = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-        if provided != Some(expected.as_str()) {
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-    }
+    authorize_ingest(&state, &headers)?;
 
     let source_id = req.source.trim();
-    if source_id.is_empty()
-        || !source_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    if !valid_source_id(source_id) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -307,6 +375,8 @@ async fn ingest(
     Ok(Json(IngestResponse {
         source: source_id.to_string(),
         conversations: outcome.conversations,
+        created: outcome.created,
+        updated: outcome.updated,
         messages: outcome.messages,
     }))
 }

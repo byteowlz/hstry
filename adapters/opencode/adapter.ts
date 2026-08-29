@@ -36,6 +36,7 @@ import type {
 import {
   runAdapter,
   textPart,
+  thinkingPart,
   toolCallPart,
   toolResultPart,
   textOnlyParts,
@@ -126,6 +127,10 @@ interface PartInfo {
     output?: string;
     title?: string;
   };
+  /** patch parts: edited file paths */
+  files?: string[];
+  /** patch parts: snapshot hash */
+  hash?: string;
 }
 
 const DEFAULT_OPENCODE_PATH = join(homedir(), '.local/share/opencode');
@@ -577,6 +582,8 @@ function buildSqliteConversation(
             text: partData.text,
             tool: partData.tool,
             state: partData.state,
+            files: Array.isArray(partData.files) ? partData.files : undefined,
+            hash: typeof partData.hash === 'string' ? partData.hash : undefined,
           });
         } catch {
           // Skip corrupted part
@@ -600,13 +607,14 @@ function buildSqliteConversation(
       }
 
       const canonParts = buildCanonParts(parts, role, opts?.includeTools !== false) ?? textOnlyParts(content);
+      const effectiveContent = content || projectPartsToContent(canonParts);
 
       // Extract token info from assistant message data
       const tokens = (msgData.tokens?.input || 0) + (msgData.tokens?.output || 0) + (msgData.tokens?.reasoning || 0);
 
       messages.push({
         role: mapRole(role),
-        content,
+        content: effectiveContent,
         parts: canonParts,
         createdAt: msgData.time?.created ?? msgRow.time_created,
         model: msgData.modelID || undefined,
@@ -913,7 +921,7 @@ async function loadMessagesNew(
 
         messages.push({
           role: mapRole(msgInfo.role),
-          content,
+          content: content || projectPartsToContent(canonParts),
           parts: canonParts,
           createdAt: msgInfo.time.created,
           model: msgInfo.modelID || undefined,
@@ -1150,7 +1158,7 @@ async function loadMessagesOld(
 
         const msg: Message = {
           role: mapRole(msgInfo.role),
-          content,
+          content: content || projectPartsToContent(canonParts),
           parts: canonParts,
           createdAt: msgInfo.time.created,
           model: msgInfo.modelID || undefined,
@@ -1232,6 +1240,10 @@ function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean
   for (const p of oparts) {
     if (p.type === 'text' && p.text) {
       canon.push(textPart(p.text));
+    } else if (p.type === 'reasoning' && p.text) {
+      // Assistant turns are split into per-step rows; early rows often carry
+      // only reasoning. Preserve it or the step reads as an empty reply.
+      canon.push(thinkingPart(p.text));
     } else if (p.type === 'tool' && p.tool && includeTools) {
       // Tool parts in opencode represent both the call and result.
       // The state has input, output, status.
@@ -1240,9 +1252,43 @@ function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean
       if (p.state?.output !== undefined || p.state?.status === 'error') {
         canon.push(toolResultPart(callId, p.state?.output, { name: p.tool, isError: p.state?.status === 'error' }));
       }
+    } else if (p.type === 'patch') {
+      canon.push({ id: `x-patch-${p.id}`, type: 'x-patch', payload: { hash: p.hash, files: p.files } });
     }
+    // step-start / step-finish are bookkeeping and carry no content.
   }
   return canon.length > 0 ? canon : undefined;
+}
+
+/**
+ * Compact textual projection of non-text parts, used as message content when
+ * a step row has no text part of its own. Keeps content-only readers
+ * (`hstry show`, peek bundles, FTS) useful instead of showing empty replies.
+ */
+function projectPartsToContent(canon: CanonPart[] | undefined): string {
+  if (!canon) return '';
+  const lines: string[] = [];
+  for (const part of canon) {
+    if (part.type === 'thinking' && part.text) {
+      lines.push(part.text);
+    } else if (part.type === 'tool_call') {
+      const input = (part as { input?: unknown }).input;
+      let hint = '';
+      if (input && typeof input === 'object') {
+        for (const key of ['command', 'file_path', 'path', 'filePath', 'pattern', 'query', 'url']) {
+          const v = (input as Record<string, unknown>)[key];
+          if (typeof v === 'string' && v) { hint = v.slice(0, 200); break; }
+        }
+      }
+      lines.push(hint ? `\u{2699} ${part.name}: ${hint}` : `\u{2699} ${part.name}`);
+    } else if (part.type === 'x-patch') {
+      const files = ((part as { payload?: { files?: string[] } }).payload?.files ?? [])
+        .map(f => f.split('/').pop() ?? f)
+        .slice(0, 5);
+      if (files.length) lines.push(`\u{270E} ${files.join(', ')}`);
+    }
+  }
+  return lines.join('\n').slice(0, 8000);
 }
 
 function mapRole(role: string): Message['role'] {

@@ -18,12 +18,18 @@ const OVERLAP_MS = 5 * 60 * 1000;
 const THROTTLE_MS = 400;
 
 async function listOrganizations() {
-  const orgs = await fetchJson(`${BASE}/api/organizations`);
-  if (!Array.isArray(orgs)) return [];
-  return orgs
-    .filter(org => org?.uuid)
-    .filter(org => !Array.isArray(org.capabilities) || org.capabilities.includes('chat'))
-    .map(org => ({ id: org.uuid, name: org.name ?? 'organization' }));
+  const data = await fetchJson(`${BASE}/api/organizations`);
+  const orgs = Array.isArray(data) ? data : (data?.organizations ?? data?.data);
+  if (!Array.isArray(orgs)) {
+    throw new Error('Claude returned an unreadable organizations response');
+  }
+  const available = orgs
+    .map(org => ({ id: org?.uuid ?? org?.id, name: org?.name ?? 'organization' }))
+    .filter(org => org.id);
+  if (available.length === 0) {
+    throw new Error('Claude returned no available organizations');
+  }
+  return available;
 }
 
 async function* listUpdatedConversations(orgId, sinceMs) {
@@ -101,15 +107,19 @@ function toParsedConversation(detail, orgId) {
   };
 }
 
-export async function syncClaude({ state, push, log }) {
+export async function syncClaude({ state, push, register = async () => {}, log, report = async () => {} }) {
+  await report({ phase: 'discovering' });
   const orgs = await listOrganizations();
   const newState = { ...state, orgs: {} };
   let total = 0;
+  let detected = 0;
+  let processed = 0;
   const multiOrg = orgs.length > 1;
 
   for (const org of orgs) {
     const key = shortId(org.id);
     const sourceId = multiOrg ? `claude-web-${key}` : 'claude-web';
+    await register(sourceId, 'claude-web');
     const lastSyncMs = state?.orgs?.[key]?.lastSyncMs ?? null;
     const since = lastSyncMs ? lastSyncMs - OVERLAP_MS : null;
     const runStartedMs = Date.now();
@@ -117,23 +127,32 @@ export async function syncClaude({ state, push, log }) {
 
     let batch = [];
     let first = true;
-    for await (const item of listUpdatedConversations(org.id, since)) {
-      if (!first) await sleep(THROTTLE_MS);
-      first = false;
-      try {
-        const detail = await fetchJson(
-          `${BASE}/api/organizations/${org.id}/chat_conversations/${item.uuid}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual`
-        );
-        const conv = toParsedConversation(detail, org.id);
-        if (conv) batch.push(conv);
-      } catch (err) {
-        failures++;
-        log(`claude: skipping conversation ${item.uuid}: ${err.message}`);
+    try {
+      for await (const item of listUpdatedConversations(org.id, since)) {
+        detected++;
+        await report({ phase: 'importing', detected, processed });
+        if (!first) await sleep(THROTTLE_MS);
+        first = false;
+        try {
+          const detail = await fetchJson(
+            `${BASE}/api/organizations/${org.id}/chat_conversations/${item.uuid}?tree=True&rendering_mode=messages&render_all_tools=true&consistency=eventual`
+          );
+          const conv = toParsedConversation(detail, org.id);
+          if (conv) batch.push(conv);
+        } catch (err) {
+          failures++;
+          log(`claude: skipping conversation ${item.uuid}: ${err.message}`);
+        }
+        processed++;
+        await report({ detected, processed });
+        if (batch.length >= 10) {
+          total += await push(sourceId, 'claude-web', batch);
+          batch = [];
+        }
       }
-      if (batch.length >= 10) {
-        total += await push(sourceId, 'claude-web', batch);
-        batch = [];
-      }
+    } catch (err) {
+      failures++;
+      log(`claude: skipping organization ${key}: ${err.message}`);
     }
     if (batch.length > 0) {
       total += await push(sourceId, 'claude-web', batch);
@@ -148,6 +167,8 @@ export async function syncClaude({ state, push, log }) {
       name: org.name,
     };
   }
+
+  await report({ phase: 'complete', detected, processed });
 
   return { state: newState, conversations: total };
 }

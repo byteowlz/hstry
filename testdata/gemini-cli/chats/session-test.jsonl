@@ -1,0 +1,6 @@
+{"kind":"main","sessionId":"gemini-cli-session-1","startTime":"2026-07-01T10:00:00.000Z","lastUpdated":"2026-07-01T10:00:05.000Z"}
+{"id":"bootstrap","timestamp":"2026-07-01T10:00:00.500Z","type":"user","content":"<session_context>internal setup</session_context>"}
+{"id":"user-1","timestamp":"2026-07-01T10:00:01.000Z","type":"user","content":"Explain the deployment plan"}
+{"id":"assistant-1","timestamp":"2026-07-01T10:00:02.000Z","type":"gemini","content":[{"text":"Deploy in two stages."}],"thoughts":[{"subject":"Plan","description":"Minimize downtime"}],"model":"gemini-2.5-pro"}
+{"type":"warning","content":"rate warning"}
+{"$set":{"messages":[{"id":"assistant-1","timestamp":"2026-07-01T10:00:02.000Z","type":"gemini","content":"duplicate"},{"id":"user-2","timestamp":"2026-07-01T10:00:04.000Z","type":"user","content":"Proceed"}]}}

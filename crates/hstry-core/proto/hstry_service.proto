@@ -82,6 +82,7 @@ message SearchHit {
   string source_adapter = 15;
   string source_path = 16;
   string host = 17;
+  string readable_id = 18;
 }
 
 message SearchResponse {

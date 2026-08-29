@@ -309,6 +309,8 @@ hstry search "auth error" --scope remote --remote laptop
 hstry remote sync --remote laptop --direction pull
 ```
 
+See [Remote sync](docs/remote-sync.md) for device namespaces, hub safety checks, and concurrency guidance.
+
 ## Terminal UI
 
 Use the optional `hstry-tui` binary for an interactive, three-pane browser.
@@ -329,6 +331,8 @@ hstry-tui
 | `cursor` | `Cursor workspaceStorage` (platform-specific) | Cursor (state.vscdb) |
 | `opencode` | `~/.local/share/opencode` | OpenCode |
 | `pi` | `~/.pi/agent/sessions` | Pi coding agent |
+| `gemini-cli` | `~/.gemini/tmp` | Gemini CLI sessions |
+| `workbuddy` | `~/.workbuddy/projects` | WorkBuddy project sessions |
 | `aider` | Project directories | Aider (finds `.aider.chat.history.md`) |
 | `goose` | `~/.local/share/goose/sessions` | Goose (SQLite/JSONL) |
 | `jan` | `~/jan/threads` | Jan.ai |

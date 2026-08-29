@@ -18,6 +18,7 @@ const SYSTEM_CONTEXT_MARKERS = [
   'Guidance for coding agents',
   '<SYSTEM_PROMPT>',
   '</SYSTEM_PROMPT>',
+  'The conversation history before this point was compacted',
 ];
 
 /** Returns true if `content` looks like a system bootstrap, not a real user request. */

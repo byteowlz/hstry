@@ -1,4 +1,4 @@
-"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
+#:schema https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json
 
 # Example hstry configuration
 

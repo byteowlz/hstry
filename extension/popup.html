@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>hstry web sync</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body { width: 360px; min-height: 410px; background: var(--panel); }
+      main { padding: 20px; }
+      header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--rule-strong); }
+      header h1 { margin: 0; font-size: 22px; }
+      header span { color: var(--faint); font-size: 11px; }
+      .connection { display: grid; grid-template-columns: 8px 1fr auto; align-items: center; gap: 9px; min-height: 50px; border-bottom: 1px solid var(--rule); }
+      .connection-copy strong, .connection-copy span { display: block; }
+      .connection-copy strong { font-size: 13px; }
+      .connection-copy span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .providers { border-top: 1px solid var(--rule); margin-top: 19px; }
+      .provider { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+      .provider h2 { margin: 0; font-size: 13px; }
+      .provider p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+      .provider-meta { text-align: right; }
+      .provider-meta strong { display: block; font-size: 11px; }
+      .provider-meta span { color: var(--faint); font-size: 11px; }
+      .error-copy { color: var(--danger) !important; }
+      .actions { display: flex; align-items: center; gap: 8px; padding-top: 18px; }
+      .actions .button-primary { flex: 1; }
+      #notice { min-height: 18px; margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+      footer { display: flex; justify-content: space-between; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--rule); color: var(--faint); font-size: 10px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><h1>hstry web sync</h1><span>v0.3.2</span></header>
+      <section class="connection" aria-live="polite">
+        <span id="api-dot" class="status-dot checking"></span>
+        <div class="connection-copy"><strong id="api-title">Checking endpoint…</strong><span id="api-detail">http://127.0.0.1:3000</span></div>
+        <button id="retry" class="button-quiet">Check</button>
+      </section>
+      <div id="providers" class="providers"></div>
+      <div class="actions"><button id="sync" class="button-primary">Sync now</button><button id="settings" class="button-secondary">Settings</button></div>
+      <p id="notice" role="status"></p>
+      <footer><span id="schedule">Every 15 minutes</span><span>Local database</span></footer>
+    </main>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

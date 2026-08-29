@@ -1,15 +1,9 @@
 //! Pretty terminal output formatting for hstry CLI.
 
 use chrono::{DateTime, Utc};
-use console::{Style, Term, style};
 use hstry_core::models::SearchHit;
-
-/// Icons - Nerd Font or ASCII fallback
-struct Icons {
-    folder: &'static str,
-    clock: &'static str,
-    host: &'static str,
-}
+use std::io::{self, IsTerminal};
+use std::path::Path;
 
 /// Conversation display data for list output.
 #[derive(Debug, Clone)]
@@ -19,52 +13,9 @@ pub struct ConversationDisplay {
     pub workspace: Option<String>,
     pub created_at: DateTime<Utc>,
     pub title: String,
-}
-
-impl Icons {
-    fn detect() -> Self {
-        if Self::has_nerd_font() {
-            Self {
-                folder: "\u{f07b}", // nf-fa-folder
-                clock: "\u{f017}",  // nf-fa-clock_o
-                host: "\u{f108}",   // nf-fa-desktop
-            }
-        } else {
-            Self {
-                folder: "",
-                clock: "",
-                host: "@",
-            }
-        }
-    }
-
-    fn has_nerd_font() -> bool {
-        if let Ok(val) = std::env::var("NERD_FONT") {
-            return val != "0" && !val.is_empty();
-        }
-        if let Ok(term_prog) = std::env::var("TERM_PROGRAM") {
-            let modern = [
-                "WezTerm",
-                "Alacritty",
-                "kitty",
-                "iTerm.app",
-                "Hyper",
-                "ghostty",
-            ];
-            if modern.iter().any(|t| term_prog.contains(t)) {
-                return true;
-            }
-        }
-        if std::env::var("STARSHIP_SESSION_KEY").is_ok() {
-            return true;
-        }
-        false
-    }
-}
-
-/// Terminal width for formatting, with fallback.
-fn term_width() -> usize {
-    Term::stdout().size().1 as usize
+    /// Human-readable id (adjective-noun) when available; shown in the id
+    /// column in preference to the UUID prefix.
+    pub readable_id: Option<String>,
 }
 
 /// Format a short relative time string.
@@ -84,31 +35,10 @@ pub fn relative_time_short(dt: DateTime<Utc>) -> String {
     if duration.num_weeks() < 8 {
         return format!("{}w", duration.num_weeks());
     }
-    dt.format("%Y-%m-%d").to_string()
-}
-
-/// Create a compact score bar with score embedded.
-fn score_bar(score: f32) -> String {
-    let abs_score = score.abs();
-    let clamped = (abs_score - 5.0).clamp(0.0, 10.0);
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let filled = ((clamped / 10.0) * 8.0) as usize; // 8 chars for the bar portion
-
-    // Use thin bar characters: ▰ (filled) ▱ (empty)
-    let score_str = format!("{:>4.1}", abs_score);
-    let bar = "▰".repeat(filled) + &"▱".repeat(8 - filled);
-    format!("{} {}", bar, score_str)
-}
-
-/// Style for role.
-fn role_style(role: &str) -> Style {
-    match role.to_lowercase().as_str() {
-        "user" => Style::new().cyan(),
-        "assistant" => Style::new().green(),
-        "system" => Style::new().magenta(),
-        "tool" => Style::new().yellow(),
-        _ => Style::new().white(),
+    if duration.num_days() < 365 {
+        return format!("{}mo", duration.num_days() / 30);
     }
+    format!("{}y", duration.num_days() / 365)
 }
 
 /// Decode HTML entities and clean up snippet text.
@@ -142,501 +72,207 @@ fn clean_snippet(s: &str) -> String {
     result.trim().to_string()
 }
 
-/// Colorize <b> tags in snippet.
-fn colorize_snippet(s: &str) -> String {
-    if !console::colors_enabled() {
-        return s.replace("<b>", "").replace("</b>", "");
-    }
-
-    let mut result = s.replace("<b>", "\x1b[1;33m").replace("</b>", "\x1b[0m");
-
-    // Clean up broken tags
-    result = result.replace("<b", "").replace("</b", "\x1b[0m");
-
-    if result.contains("\x1b[1;33m") && !result.ends_with("\x1b[0m") {
-        result.push_str("\x1b[0m");
-    }
-
-    result
+fn single_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Shorten a path for display.
-pub fn short_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-        return path.to_string();
-    }
-    let parts: Vec<_> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() <= 2 {
-        return format!("...{}", &path[path.len().saturating_sub(max_len - 3)..]);
-    }
-    // Show last 2 components
-    let tail = parts[parts.len() - 2..].join("/");
-    if tail.len() + 4 <= max_len {
-        format!(".../{tail}")
-    } else {
-        format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
-    }
+fn display_workspace(workspace: Option<&str>) -> String {
+    workspace
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-")
+        .to_string()
 }
 
-/// Pad a line to width and add right border.
-fn pad_line(content: &str, width: usize) -> String {
-    let visible_len = console::measure_text_width(content);
-    // width includes both borders, so inner content width is width - 2
-    // but left border is already in content, so we need width - 1 for content + right border
-    let target = width - 1;
-    let padding = target.saturating_sub(visible_len);
-    format!("{}{}{}", content, " ".repeat(padding), style("│").dim())
+fn display_source(source: &str) -> &str {
+    source
+        .rsplit_once('-')
+        .filter(|(_, suffix)| suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit()))
+        .map_or(source, |(base, _)| base)
 }
 
-fn pad_visible(value: &str, width: usize) -> String {
-    let visible_len = console::measure_text_width(value);
-    if visible_len >= width {
+/// Stable origin color per source adapter, matching the TUI's mapping.
+fn adapter_style(adapter: &str) -> console::Style {
+    use console::Color;
+    let key = adapter.to_lowercase();
+    let color = match key.as_str() {
+        a if a.contains("claude") => Color::Yellow,
+        a if a.contains("pi") => Color::Magenta,
+        a if a.contains("codex") => Color::Cyan,
+        a if a.contains("opencode") => Color::Green,
+        a if a.contains("goose") => Color::Color256(12),
+        a if a.contains("chatgpt") || a.contains("openai") => Color::Color256(10),
+        a if a.contains("gemini") => Color::Color256(13),
+        a if a.contains("octo") => Color::Color256(14),
+        _ => {
+            const PALETTE: [Color; 6] = [
+                Color::Color256(11),
+                Color::Color256(9),
+                Color::Cyan,
+                Color::Magenta,
+                Color::Green,
+                Color::Color256(12),
+            ];
+            let hash: usize = key.bytes().fold(0usize, |acc, b| {
+                acc.wrapping_mul(31).wrapping_add(b as usize)
+            });
+            PALETTE[hash % PALETTE.len()]
+        }
+    };
+    console::Style::new().fg(color)
+}
+
+fn truncate(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
         return value.to_string();
     }
-    format!("{}{}", value, " ".repeat(width - visible_len))
+    if width <= 1 {
+        return "…".to_string();
+    }
+    format!("{}…", value.chars().take(width - 1).collect::<String>())
 }
 
-fn truncate_end(value: &str, max_len: usize) -> String {
-    let length = value.chars().count();
-    if length <= max_len {
-        return value.to_string();
+fn print_rows(rows: &[(String, String, String, String, String)], empty: &str) {
+    if rows.is_empty() {
+        println!("{empty}");
+        return;
     }
-    if max_len <= 3 {
-        return "...".to_string();
-    }
-    let head: String = value.chars().take(max_len - 3).collect();
-    format!("{head}...")
-}
 
-/// Keep the tail; prefix with "..." when truncated. Useful for paths where
-/// the meaningful project name is at the end.
-fn truncate_start(value: &str, max_len: usize) -> String {
-    let length = value.chars().count();
-    if length <= max_len {
-        return value.to_string();
+    if !io::stdout().is_terminal() {
+        for (title, workspace, source, age, id) in rows {
+            println!("{title}\t{workspace}\t{source}\t{age}\t{id}");
+        }
+        return;
     }
-    if max_len <= 3 {
-        return "...".to_string();
+
+    let terminal_width = console::Term::stdout().size().1 as usize;
+    let workspace_width = rows
+        .iter()
+        .map(|row| row.1.chars().count())
+        .max()
+        .unwrap_or(9)
+        .clamp(9, 18);
+    let source_width = rows
+        .iter()
+        .map(|row| row.2.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 16);
+    let age_width = rows
+        .iter()
+        .map(|row| row.3.chars().count())
+        .max()
+        .unwrap_or(3)
+        .clamp(3, 10);
+    let id_width = rows
+        .iter()
+        .map(|row| row.4.chars().count())
+        .max()
+        .unwrap_or(2)
+        .clamp(8, 20);
+    let fixed_width = workspace_width + source_width + age_width + id_width + 8;
+    let available = terminal_width.saturating_sub(fixed_width).clamp(24, 72);
+    let longest_title = rows
+        .iter()
+        .map(|row| row.0.chars().count())
+        .max()
+        .unwrap_or(available);
+    let title_width = longest_title.min(available).max("TITLE".len());
+
+    let header = format!(
+        "{:<title_width$}  {:<workspace_width$}  {:<source_width$}  {:>age_width$}  {:<id_width$}",
+        "TITLE", "WORKSPACE", "SOURCE", "AGE", "ID"
+    );
+    println!("{}", console::style(header).bold().dim());
+    for (title, workspace, source, age, id) in rows {
+        // Pad each cell before styling so ANSI codes don't break alignment.
+        let title_cell = format!("{:<title_width$}", truncate(title, title_width));
+        let workspace_cell = format!("{:<workspace_width$}", truncate(workspace, workspace_width));
+        let source_cell = format!("{:<source_width$}", truncate(source, source_width));
+        let age_cell = format!("{age:>age_width$}");
+        let id_cell = format!("{:<id_width$}", truncate(id, id_width));
+        println!(
+            "{title_cell}  {workspace_cell}  {}  {}  {}",
+            adapter_style(source).apply_to(source_cell),
+            console::style(age_cell).dim(),
+            console::style(id_cell).dim(),
+        );
     }
-    let tail: String = value
-        .chars()
-        .rev()
-        .take(max_len - 3)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!("...{tail}")
 }
 
 /// Print search results in a compact format.
 pub fn print_search_results(hits: &[SearchHit]) {
-    if hits.is_empty() {
-        println!("{}", style("No results found.").dim());
-        return;
-    }
-
-    let width = term_width();
-    let inner = width - 2;
-    let header_text = format!(" Found {} result(s) ", hits.len());
-    let padding = inner.saturating_sub(header_text.len());
-
-    // Header
-    println!(
-        "{}{}{}",
-        style("╭").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╮").dim()
-    );
-    println!(
-        "{}{}{}{}",
-        style("│").dim(),
-        style(&header_text).bold(),
-        " ".repeat(padding),
-        style("│").dim()
-    );
-    println!(
-        "{}{}{}",
-        style("├").dim(),
-        style("─".repeat(inner)).dim(),
-        style("┤").dim()
-    );
-
-    for (i, hit) in hits.iter().enumerate() {
-        // Separator between items
-        if i > 0 {
-            println!(
-                "{}{}{}",
-                style("├").dim(),
-                style("─".repeat(inner)).dim(),
-                style("┤").dim()
-            );
-        }
-
-        // Line 1: metadata (score bar with score, role, adapter, workspace, date)
-        let icons = Icons::detect();
-        let bar = score_bar(hit.score);
-        let role_str = hit.role.to_string();
-        let role = role_style(&role_str).apply_to(&role_str);
-        let adapter = style(&hit.source_adapter).cyan();
-        let date = relative_time_short(hit.conv_created_at);
-
-        let ws_max = width.saturating_sub(60).max(20);
-        let ws = hit
-            .workspace
-            .as_ref()
-            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
-            .unwrap_or_default();
-
-        let host_str = hit
-            .host
-            .as_ref()
-            .map(|h| format!("{} {} ", icons.host, h))
-            .unwrap_or_default();
-
-        let date_str = format!("{} {}", icons.clock, date);
-
-        let line1 = format!(
-            "{} {} {} {} {} {}{}",
-            style("│").dim(),
-            style(bar).yellow(),
-            role,
-            adapter,
-            style(&ws).dim(),
-            style(host_str).dim(),
-            style(date_str).dim().italic()
-        );
-        println!("{}", pad_line(&line1, width));
-
-        // Line 2: title (if present, truncated)
-        if let Some(title) = &hit.title {
-            let clean: String = title
-                .chars()
-                .map(|c| if c.is_whitespace() { ' ' } else { c })
-                .collect::<String>()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let max_title = inner.saturating_sub(2);
-            let display = if clean.len() > max_title {
-                format!("{}...", &clean[..max_title - 3])
-            } else {
-                clean
-            };
-            let line2 = format!("{} {}", style("│").dim(), style(display).bold());
-            println!("{}", pad_line(&line2, width));
-        }
-
-        // Line 3: snippet (cleaned, single line, highlighted)
-        let snippet = clean_snippet(&hit.snippet);
-        let snippet = colorize_snippet(&snippet);
-        let max_snippet = inner.saturating_sub(2);
-        let display = if console::measure_text_width(&snippet) > max_snippet {
-            // Truncate by visible width
-            let mut truncated = String::new();
-            let mut vis_len = 0;
-            let mut in_escape = false;
-            for c in snippet.chars() {
-                if c == '\x1b' {
-                    in_escape = true;
-                }
-                if in_escape {
-                    truncated.push(c);
-                    if c == 'm' {
-                        in_escape = false;
-                    }
-                } else {
-                    if vis_len >= max_snippet - 3 {
-                        break;
-                    }
-                    truncated.push(c);
-                    vis_len += 1;
-                }
-            }
-            truncated + "..."
-        } else {
-            snippet
-        };
-        let line3 = format!("{} {}", style("│").dim(), display);
-        println!("{}", pad_line(&line3, width));
-    }
-
-    // Footer
-    println!(
-        "{}{}{}",
-        style("╰").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╯").dim()
-    );
+    let rows = hits
+        .iter()
+        .map(|hit| {
+            let id = hit
+                .readable_id
+                .clone()
+                .unwrap_or_else(|| hit.conversation_id.to_string()[..8].to_string());
+            let title = single_line(hit.title.as_deref().unwrap_or("(untitled)"));
+            let snippet = single_line(&clean_snippet(&hit.snippet));
+            (
+                format!("{title} \u{2014} {snippet}"),
+                display_workspace(hit.workspace.as_deref()),
+                display_source(&hit.source_adapter).to_string(),
+                relative_time_short(hit.conv_created_at),
+                id,
+            )
+        })
+        .collect::<Vec<_>>();
+    print_rows(&rows, "No results found.");
 }
 
 /// Print conversations in a nice table format.
 pub fn print_conversations(conversations: &[ConversationDisplay]) {
-    if conversations.is_empty() {
-        println!("{}", style("No conversations found.").dim());
-        return;
-    }
-
-    let width = term_width();
-    let inner = width - 2;
-    let header_text = format!(" {} conversation(s) ", conversations.len());
-    let padding = inner.saturating_sub(header_text.len());
-
-    // Header
-    println!(
-        "{}{}{}",
-        style("╭").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╮").dim()
-    );
-    println!(
-        "{}{}{}{}",
-        style("│").dim(),
-        style(&header_text).bold(),
-        " ".repeat(padding),
-        style("│").dim()
-    );
-    println!(
-        "{}{}{}",
-        style("├").dim(),
-        style("─".repeat(inner)).dim(),
-        style("┤").dim()
-    );
-
-    let icons = Icons::detect();
-
-    for (i, conv) in conversations.iter().enumerate() {
-        // Separator between items
-        if i > 0 {
-            println!(
-                "{}{}{}",
-                style("├").dim(),
-                style("─".repeat(inner)).dim(),
-                style("┤").dim()
-            );
-        }
-
-        // Single line: title | workdir | time | agent | id
-        let date = relative_time_short(conv.created_at);
-        let date_str = format!("{} {}", icons.clock, date);
-        let id_short = conv.id.to_string()[..8].to_string();
-
-        let workdir_raw = conv
-            .workspace
-            .as_ref()
-            .map(|w| format!("{} {}", icons.folder, w))
-            .unwrap_or_else(|| "-".to_string());
-
-        let clean_title: String = conv
-            .title
-            .chars()
-            .map(|c| if c.is_whitespace() { ' ' } else { c })
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let time_width = 8usize;
-        let agent_width = 12usize;
-        let id_width = 8usize;
-        let separator_width = 3usize * 4; // " | " * 4
-        let reserved = time_width + agent_width + id_width + separator_width + 2; // left border + space
-        let available = inner.saturating_sub(reserved).max(20);
-        let title_max = (available * 2 / 3).max(12);
-        let workdir_max = available.saturating_sub(title_max).max(10);
-
-        let title_display = if clean_title.chars().count() > title_max {
-            format!(
-                "{}...",
-                clean_title
-                    .chars()
-                    .take(title_max.saturating_sub(3))
-                    .collect::<String>()
+    let rows = conversations
+        .iter()
+        .map(|conversation| {
+            let id = conversation
+                .readable_id
+                .clone()
+                .unwrap_or_else(|| conversation.id.to_string()[..8].to_string());
+            (
+                single_line(&conversation.title),
+                display_workspace(conversation.workspace.as_deref()),
+                display_source(&conversation.source_id).to_string(),
+                relative_time_short(conversation.created_at),
+                id,
             )
-        } else {
-            clean_title
-        };
-        let workdir_display = truncate_start(&workdir_raw, workdir_max);
-
-        let title_cell = pad_visible(&title_display, title_max);
-        let workdir_cell = pad_visible(&workdir_display, workdir_max);
-        let time_cell = pad_visible(&date_str, time_width);
-        let agent_cell = pad_visible(&truncate_end(&conv.source_id, agent_width), agent_width);
-        let id_cell = pad_visible(&truncate_end(&id_short, id_width), id_width);
-
-        let line = format!(
-            "{} {} | {} | {} | {} | {}",
-            style("│").dim(),
-            style(title_cell).bold(),
-            style(workdir_cell).dim(),
-            style(time_cell).dim().italic(),
-            style(agent_cell).cyan(),
-            style(id_cell).dim()
-        );
-        println!("{}", pad_line(&line, width));
-    }
-
-    // Footer
-    println!(
-        "{}{}{}",
-        style("╰").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╯").dim()
-    );
+        })
+        .collect::<Vec<_>>();
+    print_rows(&rows, "No conversations found.");
 }
 
 /// Print compact search results (one per session with occurrence count).
 pub fn print_search_results_compact(hits: &[SearchHit]) {
-    if hits.is_empty() {
-        println!("{}", style("No results found.").dim());
-        return;
-    }
-
-    let width = term_width();
-    let inner = width - 2;
-    let header_text = format!(" Found {} session(s) ", hits.len());
-    let padding = inner.saturating_sub(header_text.len());
-
-    // Header
-    println!(
-        "{}{}{}",
-        style("╭").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╮").dim()
-    );
-    println!(
-        "{}{}{}{}",
-        style("│").dim(),
-        style(&header_text).bold(),
-        " ".repeat(padding),
-        style("│").dim()
-    );
-    println!(
-        "{}{}{}",
-        style("├").dim(),
-        style("─".repeat(inner)).dim(),
-        style("┤").dim()
-    );
-
-    for (i, hit) in hits.iter().enumerate() {
-        // Separator between items
-        if i > 0 {
-            println!(
-                "{}{}{}",
-                style("├").dim(),
-                style("─".repeat(inner)).dim(),
-                style("┤").dim()
-            );
-        }
-
-        // Line 1: score bar, role, adapter, workspace, date
-        let icons = Icons::detect();
-        let bar = score_bar(hit.score);
-        let role_str = hit.role.to_string();
-        let role = role_style(&role_str).apply_to(&role_str);
-        let adapter = style(&hit.source_adapter).cyan();
-        let date = relative_time_short(hit.conv_created_at);
-
-        let ws_max = width.saturating_sub(70).max(20);
-        let ws = hit
-            .workspace
-            .as_ref()
-            .map(|w| format!("{} {}", icons.folder, short_path(w, ws_max)))
-            .unwrap_or_default();
-
-        let host_str = hit
-            .host
-            .as_ref()
-            .map(|h| format!("{} {} ", icons.host, h))
-            .unwrap_or_default();
-
-        let date_str = format!("{} {}", icons.clock, date);
-
-        let line1 = format!(
-            "{} {} {} {} {} {}{}",
-            style("│").dim(),
-            style(bar).yellow(),
-            role,
-            adapter,
-            style(&ws).dim(),
-            style(host_str).dim(),
-            style(date_str).dim().italic()
-        );
-        println!("{}", pad_line(&line1, width));
-
-        // Line 2: title (if present, truncated)
-        if let Some(title) = &hit.title {
-            let clean: String = title
-                .chars()
-                .map(|c| if c.is_whitespace() { ' ' } else { c })
-                .collect::<String>()
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            let max_title = inner.saturating_sub(2);
-            let display = if clean.len() > max_title {
-                format!("{}...", &clean[..max_title - 3])
+    let rows = hits
+        .iter()
+        .map(|hit| {
+            let id = hit
+                .readable_id
+                .clone()
+                .unwrap_or_else(|| hit.conversation_id.to_string()[..8].to_string());
+            let title = single_line(hit.title.as_deref().unwrap_or("(untitled)"));
+            let snippet = single_line(&clean_snippet(&hit.snippet));
+            let occurrences = hit.occurrences.unwrap_or(1);
+            let lead = if occurrences > 1 {
+                format!("{title} ({occurrences}\u{d7}) \u{2014} {snippet}")
             } else {
-                clean
+                format!("{title} \u{2014} {snippet}")
             };
-            let line2 = format!("{} {}", style("│").dim(), style(display).bold());
-            println!("{}", pad_line(&line2, width));
-        }
-
-        // Line 3: snippet (cleaned, single line, highlighted)
-        let snippet = clean_snippet(&hit.snippet);
-        let snippet = colorize_snippet(&snippet);
-        let max_snippet = inner.saturating_sub(2);
-        let display = if console::measure_text_width(&snippet) > max_snippet {
-            // Truncate by visible width
-            let mut truncated = String::new();
-            let mut vis_len = 0;
-            let mut in_escape = false;
-            for c in snippet.chars() {
-                if c == '\x1b' {
-                    in_escape = true;
-                }
-                if in_escape {
-                    truncated.push(c);
-                    if c == 'm' {
-                        in_escape = false;
-                    }
-                } else {
-                    if vis_len >= max_snippet - 3 {
-                        break;
-                    }
-                    truncated.push(c);
-                    vis_len += 1;
-                }
-            }
-            truncated + "..."
-        } else {
-            snippet
-        };
-        let line3 = format!("{} {}", style("│").dim(), display);
-        println!("{}", pad_line(&line3, width));
-
-        // Line 4: occurrence count if > 1
-        if let Some(occurrences) = hit.occurrences
-            && occurrences > 1
-        {
-            let occ_text = format!("+{} more occurrences", occurrences - 1);
-            let line4 = format!("{} {}", style("│").dim(), style(occ_text).dim().italic());
-            println!("{}", pad_line(&line4, width));
-        }
-    }
-
-    // Footer
-    println!(
-        "{}{}{}",
-        style("╰").dim(),
-        style("─".repeat(inner)).dim(),
-        style("╯").dim()
-    );
+            (
+                lead,
+                display_workspace(hit.workspace.as_deref()),
+                display_source(&hit.source_adapter).to_string(),
+                relative_time_short(hit.conv_created_at),
+                id,
+            )
+        })
+        .collect::<Vec<_>>();
+    print_rows(&rows, "No results found.");
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,23 +284,16 @@ mod tests {
     }
 
     #[test]
-    fn test_score_bar() {
-        let bar = score_bar(10.0);
-        assert!(bar.contains('▰'));
-        assert!(bar.contains("10.0"));
-    }
-
-    #[test]
     fn test_clean_snippet() {
         let input = "hello\n\t  world   foo";
         assert_eq!(clean_snippet(input), "hello world foo");
     }
 
     #[test]
-    fn test_short_path() {
-        assert_eq!(short_path("/home/user/code", 20), "/home/user/code");
-        let short = short_path("/home/user/very/long/path/to/project", 20);
-        assert!(short.starts_with("..."));
-        assert!(short.len() <= 20);
+    fn single_line_preserves_words_without_truncation() {
+        assert_eq!(
+            single_line("Central Server\nfor ROMs"),
+            "Central Server for ROMs"
+        );
     }
 }

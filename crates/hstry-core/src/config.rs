@@ -1,5 +1,6 @@
 //! Configuration types and loading for hstry.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -478,6 +479,80 @@ impl Default for SyncConfig {
             auto_sync_interval_secs: 300,
         }
     }
+}
+
+/// Normalize a device label for use in `{device}:{source}` merge namespaces.
+pub fn sanitize_device_namespace(value: &str) -> Option<String> {
+    let sanitized: String = value
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('-');
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+impl SyncConfig {
+    /// Resolve a stable namespace, preferring an explicit device ID and
+    /// otherwise persisting a generated ID in the application state directory.
+    pub fn device_namespace(&self) -> Result<String> {
+        let state_root = std::env::var_os("XDG_STATE_HOME").map_or_else(
+            || {
+                dirs::state_dir()
+                    .or_else(dirs::data_local_dir)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            },
+            PathBuf::from,
+        );
+        self.device_namespace_at(&state_root.join("hstry").join("device-id"))
+    }
+
+    fn device_namespace_at(&self, path: &Path) -> Result<String> {
+        if let Some(configured) = self.device_id.as_deref() {
+            return sanitize_device_namespace(configured).ok_or_else(|| {
+                Error::Config("sync.device_id must contain a letter or number".to_string())
+            });
+        }
+
+        if path.exists() {
+            return read_device_namespace(path);
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let generated = format!("device-{}", uuid::Uuid::new_v4());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                file.write_all(generated.as_bytes())?;
+                Ok(generated)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                read_device_namespace(path)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+fn read_device_namespace(path: &Path) -> Result<String> {
+    let stored = std::fs::read_to_string(path)?;
+    sanitize_device_namespace(&stored).ok_or_else(|| {
+        Error::Config(format!(
+            "Stored device ID at {} is invalid; delete it to regenerate",
+            path.display()
+        ))
+    })
 }
 
 impl Config {

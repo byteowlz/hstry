@@ -136,6 +136,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Disable colored output (also honors NO_COLOR)
+    #[arg(long, global = true)]
+    no_color: bool,
+
     /// Increase verbosity
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
@@ -294,11 +298,16 @@ enum Command {
         /// Truncate `last_assistant` to N chars in peek bundles (default 400).
         #[arg(long, requires = "peek")]
         peek_chars: Option<usize>,
+
+        /// Include continuation fragments (resume/compaction sessions) that are
+        /// hidden by default. Their content is always searchable regardless.
+        #[arg(short, long)]
+        all: bool,
     },
 
     /// Show a conversation
     Show {
-        /// Conversation ID
+        /// Conversation ID, unique prefix, or external ID
         id: String,
 
         /// Read JSON input from file or "-" for stdin
@@ -308,12 +317,26 @@ enum Command {
 
     /// Show a token-efficient peek bundle for a single conversation
     Peek {
-        /// Conversation ID
+        /// Conversation ID, unique prefix, or external ID
         id: String,
 
         /// Truncate `last_assistant` to N chars (default 400).
         #[arg(long)]
         chars: Option<usize>,
+    },
+
+    /// Remove one conversation and its related data
+    Remove {
+        /// Conversation UUID, unique prefix, or external ID
+        id: String,
+
+        /// Delete without prompting; otherwise only preview the removal
+        #[arg(long)]
+        yes: bool,
+
+        /// Preview the removal without changing the database
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
     },
 
     /// Manage sources
@@ -902,6 +925,10 @@ fn default_log_filter(verbose: u8) -> &'static str {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Initialize logging
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_log_filter(cli.verbose)));
@@ -1020,6 +1047,7 @@ async fn main() -> Result<()> {
             input,
             peek,
             peek_chars,
+            all,
         } => {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
@@ -1040,7 +1068,10 @@ async fn main() -> Result<()> {
                 )
                 .await
             } else {
-                cmd_list(&db, source, workspace, limit, after_dt, before_dt, cli.json).await
+                cmd_list(
+                    &db, source, workspace, limit, after_dt, before_dt, all, cli.json,
+                )
+                .await
             }
         }
         Command::Show { id, input } => {
@@ -1054,6 +1085,11 @@ async fn main() -> Result<()> {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             cmd_peek(&db, &id, chars, cli.json).await
+        }
+        Command::Remove { id, yes, dry_run } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            cmd_remove(&db, &id, yes, dry_run, cli.json).await
         }
         Command::Source { command } => {
             let db = Database::open(&config.database).await?;
@@ -2163,6 +2199,17 @@ fn is_system_context(content: &str) -> bool {
     false
 }
 
+/// Detect a resume/compaction continuation fragment whose first user message is
+/// the synthetic "conversation history ... compacted" summary Claude Code
+/// injects. These are hidden from `list` by default but stay fully searchable.
+fn is_continuation_fragment(first_user: Option<&str>) -> bool {
+    first_user.is_some_and(|content| {
+        content
+            .trim_start()
+            .starts_with("The conversation history before this point was compacted")
+    })
+}
+
 #[derive(Serialize)]
 struct SearchApiQuery<'a> {
     query: &'a str,
@@ -2344,6 +2391,7 @@ async fn cmd_list(
     limit: i64,
     after: Option<chrono::DateTime<chrono::Utc>>,
     before: Option<chrono::DateTime<chrono::Utc>>,
+    include_all: bool,
     json: bool,
 ) -> Result<()> {
     let dedup_across_sources = source.is_none();
@@ -2360,34 +2408,28 @@ async fn cmd_list(
         }),
     };
 
-    if json {
-        let previews = if dedup_across_sources {
-            let mut deduped =
-                dedup_conversation_previews(db.list_conversation_previews(opts).await?);
-            if limit > 0 {
-                deduped.truncate(limit as usize);
-            }
-            deduped
-        } else {
-            db.list_conversation_previews(opts).await?
-        };
+    let mut fetched = db.list_conversation_previews(opts).await?;
+    if !include_all {
+        fetched.retain(|preview| !is_continuation_fragment(preview.first_user_message.as_deref()));
+    }
 
+    let previews = if dedup_across_sources {
+        let mut deduped = dedup_conversation_previews(fetched);
+        if limit > 0 {
+            deduped.truncate(limit as usize);
+        }
+        deduped
+    } else {
+        fetched
+    };
+
+    if json {
         return emit_json(JsonResponse {
             ok: true,
             result: Some(previews),
             error: None,
         });
     }
-
-    let previews = if dedup_across_sources {
-        let mut deduped = dedup_conversation_previews(db.list_conversation_previews(opts).await?);
-        if limit > 0 {
-            deduped.truncate(limit as usize);
-        }
-        deduped
-    } else {
-        db.list_conversation_previews(opts).await?
-    };
 
     let display = previews
         .into_iter()
@@ -2402,6 +2444,7 @@ async fn cmd_list(
                 workspace: preview.conversation.workspace,
                 created_at: preview.conversation.created_at,
                 title,
+                readable_id: preview.conversation.readable_id,
             }
         })
         .collect::<Vec<_>>();
@@ -2464,12 +2507,8 @@ async fn cmd_list_peek(
 }
 
 async fn cmd_peek(db: &Database, id: &str, chars: Option<usize>, json: bool) -> Result<()> {
-    let uuid = uuid::Uuid::parse_str(id)?;
-    let conv = db
-        .get_conversation(uuid)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
-    let messages = db.get_messages(uuid).await?;
+    let conv = resolve_conversation_by_id(db, id).await?;
+    let messages = db.get_messages(conv.id).await?;
 
     let mut cfg = hstry_core::peek::PeekConfig::default();
     if let Some(n) = chars {
@@ -2527,10 +2566,10 @@ fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
     if let Some(s) = &b.first_user {
         println!("\nFirst user: {s}");
     }
-    if let Some(s) = &b.last_user {
-        if Some(s) != b.first_user.as_ref() {
-            println!("Last user:  {s}");
-        }
+    if let Some(s) = &b.last_user
+        && Some(s) != b.first_user.as_ref()
+    {
+        println!("Last user:  {s}");
     }
     if let Some(s) = &b.last_assistant {
         println!("Last asst:  {s}");
@@ -2538,13 +2577,9 @@ fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
 }
 
 async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
-    let uuid = uuid::Uuid::parse_str(id)?;
-    let conv = db
-        .get_conversation(uuid)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
+    let conv = resolve_conversation_by_id(db, id).await?;
 
-    let messages = db.get_messages(uuid).await?;
+    let messages = db.get_messages(conv.id).await?;
     if json {
         let details = hstry_core::models::ConversationWithMessages {
             conversation: conv,
@@ -4215,7 +4250,10 @@ fn display_title_for_list(title: Option<&str>, first_user: Option<&str>) -> Stri
     let title = title.unwrap_or("");
     let first_user = first_user.unwrap_or("");
 
-    if (title.is_empty() || is_system_context(title)) && !first_user.trim().is_empty() {
+    if (title.is_empty() || is_system_context(title))
+        && !first_user.trim().is_empty()
+        && !is_continuation_fragment(Some(first_user))
+    {
         return first_user.to_string();
     }
 
@@ -4273,6 +4311,44 @@ mod tests {
         assert!(!is_system_context("Can you help me with this code?"));
         assert!(!is_system_context("The agent ran the command successfully"));
         assert!(!is_system_context("Check the AGENTS.md file")); // just filename mention
+
+        // Compaction-continuation content stays searchable, so it is NOT
+        // classified as system context (that path drives search filtering).
+        assert!(!is_system_context(
+            "The conversation history before this point was compacted into the following summary:"
+        ));
+    }
+
+    #[test]
+    fn continuation_fragments_are_detected_and_hidden_by_default() {
+        assert!(is_continuation_fragment(Some(
+            "The conversation history before this point was compacted into the following summary: ..."
+        )));
+        assert!(is_continuation_fragment(Some(
+            "\n  The conversation history before this point was compacted"
+        )));
+        assert!(!is_continuation_fragment(Some("Central Server for ROMs")));
+        assert!(!is_continuation_fragment(None));
+    }
+
+    #[test]
+    fn embedded_web_runner_waits_for_an_authenticated_chatgpt_session() {
+        let runner = include_str!("../assets/web-runner.ts");
+
+        assert!(runner.contains("await waitForChatGPTAuthentication(page);"));
+        assert!(runner.contains("Boolean(session?.user || session?.accessToken)"));
+        assert!(
+            !runner.contains(
+                "if (provider === 'chatgpt') {\n    await page.waitForSelector('textarea'"
+            )
+        );
+    }
+
+    #[test]
+    fn embedded_web_runner_sets_chatgpt_api_base_url() {
+        let runner = include_str!("../assets/web-runner.ts");
+
+        assert!(runner.contains("baseURL: providerUrls.chatgpt,"));
     }
 
     #[test]
@@ -4348,13 +4424,12 @@ async fn cmd_export(
         .await?
     } else {
         let mut convs = Vec::new();
-        for id in conversations_arg.split(',') {
-            let id = id.trim();
-            if let Ok(uuid) = uuid::Uuid::parse_str(id)
-                && let Some(conv) = db.get_conversation(uuid).await?
-            {
-                convs.push(conv);
-            }
+        for id in conversations_arg
+            .split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            convs.push(resolve_conversation_by_id(db, id).await?);
         }
         convs
     };
@@ -4633,6 +4708,7 @@ fn parse_date_filter(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 /// Run interactive fzf picker to select a conversation
 async fn run_fzf_picker(
     db: &Database,
+    runner: &AdapterRunner,
     config: &Config,
     source_filter: Option<String>,
     workspace_filter: Option<String>,
@@ -4640,15 +4716,11 @@ async fn run_fzf_picker(
     before: Option<chrono::DateTime<chrono::Utc>>,
     limit: i64,
     agent_override: Option<String>,
+    dry_run: bool,
     json_output: bool,
 ) -> Result<()> {
     use hstry_core::db::ListConversationsOptions;
     use std::process::{Command, Stdio};
-
-    // Determine agent if specified (for preview)
-    let agent_name = agent_override
-        .as_deref()
-        .unwrap_or(&config.resume.default_agent);
 
     // Fetch conversations with filters
     let workspace_filter_like = workspace_filter.as_ref().map(|v| format!("%{v}%"));
@@ -4735,73 +4807,29 @@ async fn run_fzf_picker(
         return Ok(());
     }
 
-    // Extract ID and resume
     let selected_id = id_map
         .get(selected)
         .ok_or_else(|| anyhow::anyhow!("Could not find selected conversation"))?;
 
-    // Now call cmd_resume with the selected ID
-    // We need to re-resolve but since we have the ID, we can use resolve_conversation_by_id
-    let conversation = db
-        .get_conversation(*selected_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Conversation not found"))?;
-
-    // Get agent config (same logic as cmd_resume)
-    let agent_config = config
-        .resume
-        .agents
-        .get(agent_name)
-        .ok_or_else(|| {
-            let available: Vec<_> = config.resume.agents.keys().collect();
-            anyhow::anyhow!(
-                "No resume configuration for agent '{agent_name}'. Available: {available:?}"
-            )
-        })?
-        .clone();
-
-    // Get source
-    let source = db
-        .get_source(&conversation.source_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Source '{}' not found", conversation.source_id))?;
-
-    let source_adapter = &source.adapter;
-    let is_same_agent = source_adapter == &agent_config.format;
-
-    // Output what would happen
-    if json_output {
-        return emit_json(JsonResponse {
-            ok: true,
-            result: Some(serde_json::json!({
-                "conversation_id": conversation.id,
-                "title": conversation.title,
-                "source": conversation.source_id,
-                "source_adapter": source_adapter,
-                "target_agent": agent_name,
-                "target_format": agent_config.format,
-                "is_same_agent": is_same_agent,
-                "action": if is_same_agent { "open_directly" } else { "convert" },
-            })),
-            error: None,
-        });
-    }
-
-    println!(
-        "Selected: {} ({})",
-        conversation.title.as_deref().unwrap_or("(untitled)"),
-        conversation.id
-    );
-    println!("Source: {} ({})", source_adapter, conversation.source_id);
-    println!("Target agent: {} ({})", agent_name, agent_config.format);
-
-    if is_same_agent {
-        println!("Action: Open directly in {}", agent_name);
-    } else {
-        println!("Action: Convert to {} format", agent_config.format);
-    }
-
-    Ok(())
+    // Dispatch through the same path as an explicitly supplied ID so picker
+    // selection performs the conversion/direct resume and launches the agent.
+    Box::pin(cmd_resume(
+        db,
+        runner,
+        config,
+        Some(selected_id.to_string()),
+        None,
+        agent_override,
+        None,
+        None,
+        None,
+        None,
+        limit,
+        dry_run,
+        false,
+        json_output,
+    ))
+    .await
 }
 
 async fn cmd_resume(
@@ -4847,6 +4875,7 @@ async fn cmd_resume(
     if pick {
         return run_fzf_picker(
             db,
+            runner,
             config,
             source_filter,
             workspace_filter,
@@ -4854,6 +4883,7 @@ async fn cmd_resume(
             before,
             limit,
             agent_override,
+            dry_run,
             json_output,
         )
         .await;
@@ -5245,7 +5275,7 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
     // Try partial UUID match or external_id match
     let all = db
         .list_conversations(hstry_core::db::ListConversationsOptions {
-            limit: Some(500),
+            limit: None,
             ..Default::default()
         })
         .await?;
@@ -5258,7 +5288,11 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
                 .external_id
                 .as_ref()
                 .is_some_and(|e| e.starts_with(id_str) || e == id_str);
-            id_match || ext_match
+            let readable_match = c
+                .readable_id
+                .as_deref()
+                .is_some_and(|r| r == id_str || r.starts_with(&format!("{id_str}-")));
+            id_match || ext_match || readable_match
         })
         .collect();
 
@@ -5272,6 +5306,67 @@ async fn resolve_conversation_by_id(db: &Database, id_str: &str) -> Result<Conve
             "Ambiguous ID '{id_str}': matched {n} conversations. Use a longer prefix."
         ),
     }
+}
+
+#[derive(Debug, Serialize)]
+struct RemoveConversationResult {
+    id: uuid::Uuid,
+    source_id: String,
+    external_id: Option<String>,
+    title: Option<String>,
+    messages: i64,
+    removed: bool,
+}
+
+async fn cmd_remove(
+    db: &Database,
+    id: &str,
+    yes: bool,
+    dry_run: bool,
+    json_output: bool,
+) -> Result<()> {
+    let conversation = resolve_conversation_by_id(db, id).await?;
+    let messages = db.count_messages_for_conversation(conversation.id).await?;
+    let should_remove = yes && !dry_run;
+
+    if should_remove {
+        db.delete_conversations_batch(&[conversation.id]).await?;
+    }
+
+    let result = RemoveConversationResult {
+        id: conversation.id,
+        source_id: conversation.source_id,
+        external_id: conversation.external_id,
+        title: conversation.title,
+        messages,
+        removed: should_remove,
+    };
+
+    if json_output {
+        return emit_json(JsonResponse {
+            ok: true,
+            result: Some(result),
+            error: None,
+        });
+    }
+
+    let title = result.title.as_deref().unwrap_or("Untitled conversation");
+    if should_remove {
+        println!(
+            "Removed '{title}' ({id}) and {messages} message(s)",
+            id = result.id
+        );
+    } else {
+        println!("Would remove:");
+        println!("  Title:    {title}");
+        println!("  ID:       {}", result.id);
+        println!("  Source:   {}", result.source_id);
+        println!("  Messages: {messages}");
+        println!();
+        println!("Run `hstry remove {} --yes` to confirm.", result.id);
+    }
+
+    Ok(())
 }
 
 /// Build the launch command string by replacing placeholders.
@@ -6359,6 +6454,9 @@ async fn cmd_remote(
             }
 
             let direction: hstry_core::remote::SyncDirection = direction.into();
+            let device_namespace = (direction != hstry_core::remote::SyncDirection::Pull)
+                .then(|| config.sync.device_namespace())
+                .transpose()?;
             let mut results = Vec::new();
             let mut total_convs_added = 0usize;
             let mut total_convs_updated = 0usize;
@@ -6377,15 +6475,24 @@ async fn cmd_remote(
                             .map(|(_, sync)| sync)
                     }
                     hstry_core::remote::SyncDirection::Push => {
-                        remote::sync_to_remote(&config.database, remote_config).await
+                        remote::sync_to_remote(
+                            &config.database,
+                            remote_config,
+                            device_namespace.as_deref().unwrap_or("device"),
+                        )
+                        .await
                     }
                     hstry_core::remote::SyncDirection::Bidirectional => {
                         // Pull first, then push
                         let pull_result = remote::sync_from_remote(db, remote_config).await;
                         match pull_result {
                             Ok((_, mut sync)) => {
-                                if let Ok(push_sync) =
-                                    remote::sync_to_remote(&config.database, remote_config).await
+                                if let Ok(push_sync) = remote::sync_to_remote(
+                                    &config.database,
+                                    remote_config,
+                                    device_namespace.as_deref().unwrap_or("device"),
+                                )
+                                .await
                                 {
                                     sync.conversations_added += push_sync.conversations_added;
                                     sync.conversations_updated += push_sync.conversations_updated;

@@ -1161,6 +1161,7 @@ async fn main() -> Result<()> {
             session_files,
             pretty,
         } => {
+            adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
@@ -1194,6 +1195,7 @@ async fn main() -> Result<()> {
             dry_run,
             pick,
         } => {
+            adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             let runtime = Runtime::parse(&config.js_runtime).ok_or_else(|| {
@@ -3004,8 +3006,7 @@ fn cmd_adapters(
             let mut config_changed = false;
             for repo in &mut repos_to_update {
                 if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source
-                    && url == hstry_core::config::DEFAULT_ADAPTER_REPO
-                    && git_ref == "main"
+                    && official_adapter_ref_needs_update(url, git_ref, &expected_ref)
                 {
                     *git_ref = expected_ref.clone();
                     config_changed = true;
@@ -3020,8 +3021,7 @@ fn cmd_adapters(
                         .filter(|r| &r.name == repo_override)
                         .for_each(|r| {
                             if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
-                                && url == hstry_core::config::DEFAULT_ADAPTER_REPO
-                                && git_ref == "main"
+                                && official_adapter_ref_needs_update(url, git_ref, &expected_ref)
                             {
                                 *git_ref = expected_ref.clone();
                             }
@@ -3029,8 +3029,7 @@ fn cmd_adapters(
                 } else {
                     for r in &mut config.adapter_repos {
                         if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
-                            && url == hstry_core::config::DEFAULT_ADAPTER_REPO
-                            && git_ref == "main"
+                            && official_adapter_ref_needs_update(url, git_ref, &expected_ref)
                         {
                             *git_ref = expected_ref.clone();
                         }
@@ -3097,6 +3096,10 @@ fn adapter_root_dir(config: &Config) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("Failed to resolve config directory"))?
         .to_path_buf();
     Ok(config_dir.join("adapters"))
+}
+
+fn official_adapter_ref_needs_update(url: &str, git_ref: &str, expected_ref: &str) -> bool {
+    url == hstry_core::config::DEFAULT_ADAPTER_REPO && git_ref != expected_ref
 }
 
 fn update_repo_adapters(
@@ -3853,8 +3856,7 @@ fn ensure_adapter_updates(config: &mut Config, config_path: &Path, json: bool) -
     let mut config_changed = false;
     for repo in &mut repos_to_update {
         if let AdapterRepoSource::Git { url, git_ref, .. } = &mut repo.source
-            && url == hstry_core::config::DEFAULT_ADAPTER_REPO
-            && git_ref == "main"
+            && official_adapter_ref_needs_update(url, git_ref, &expected_ref)
         {
             *git_ref = expected_ref.clone();
             config_changed = true;
@@ -3864,8 +3866,7 @@ fn ensure_adapter_updates(config: &mut Config, config_path: &Path, json: bool) -
     if config_changed {
         for r in &mut config.adapter_repos {
             if let AdapterRepoSource::Git { url, git_ref, .. } = &mut r.source
-                && url == hstry_core::config::DEFAULT_ADAPTER_REPO
-                && git_ref == "main"
+                && official_adapter_ref_needs_update(url, git_ref, &expected_ref)
             {
                 *git_ref = expected_ref.clone();
             }
@@ -4349,6 +4350,38 @@ mod tests {
         let runner = include_str!("../assets/web-runner.ts");
 
         assert!(runner.contains("baseURL: providerUrls.chatgpt,"));
+    }
+
+    #[test]
+    fn official_adapter_release_refs_advance_with_the_binary_version() {
+        assert!(official_adapter_ref_needs_update(
+            hstry_core::config::DEFAULT_ADAPTER_REPO,
+            "v0.5.3",
+            "v0.5.23"
+        ));
+        assert!(!official_adapter_ref_needs_update(
+            hstry_core::config::DEFAULT_ADAPTER_REPO,
+            "v0.5.23",
+            "v0.5.23"
+        ));
+        assert!(!official_adapter_ref_needs_update(
+            "https://example.com/custom-adapters",
+            "v0.5.3",
+            "v0.5.23"
+        ));
+    }
+
+    #[test]
+    fn bundled_adapter_manifest_matches_the_binary_version() {
+        let manifest: adapter_manifest::AdapterManifest =
+            serde_json::from_str(include_str!("../../../adapters/.hstry-adapters.json"))
+                .unwrap_or_else(|err| panic!("parse bundled adapter manifest: {err}"));
+
+        assert_eq!(manifest.hstry_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            manifest.protocol_version,
+            adapter_manifest::ADAPTER_PROTOCOL_VERSION
+        );
     }
 
     #[test]

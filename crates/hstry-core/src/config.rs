@@ -189,7 +189,7 @@ impl Default for ResumeConfig {
             "hermes".to_string(),
             AgentResumeConfig {
                 format: "hermes".to_string(),
-                command: "hermes --session {session_id}".to_string(),
+                command: "hermes --resume {session_id}".to_string(),
                 session_dir: "~/.hermes/sessions".to_string(),
             },
         );
@@ -197,7 +197,7 @@ impl Default for ResumeConfig {
             "opencode".to_string(),
             AgentResumeConfig {
                 format: "opencode".to_string(),
-                command: "opencode".to_string(),
+                command: "opencode --session {session_id}".to_string(),
                 session_dir: "~/.local/share/opencode".to_string(),
             },
         );

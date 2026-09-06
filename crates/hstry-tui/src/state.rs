@@ -690,7 +690,7 @@ impl App {
             if scope != SearchScope::Local {
                 let remote_hits =
                     hstry_core::remote::search_remotes(&config.remotes, &q, &opts).await?;
-                results.extend(remote_hits);
+                results.extend(remote_hits.hits);
             }
             results.sort_by(|a, b| {
                 b.score

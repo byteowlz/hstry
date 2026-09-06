@@ -221,6 +221,10 @@ pub struct SearchHit {
     pub role: MessageRole,
     pub content: String,
     pub snippet: String,
+    #[serde(default)]
+    pub match_position: Option<usize>,
+    #[serde(default)]
+    pub provenance: crate::recall::Provenance,
     pub created_at: Option<DateTime<Utc>>,
     pub conv_created_at: DateTime<Utc>,
     pub conv_updated_at: Option<DateTime<Utc>>,

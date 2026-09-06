@@ -11,7 +11,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use hstry_core::config::{AdapterRepo, AdapterRepoSource};
-use hstry_core::models::{Conversation, Message, MessageRole, SearchHit, Source};
+use hstry_core::models::{Conversation, Message, MessageRole, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
 
@@ -26,7 +26,10 @@ mod adapter_manifest;
 use serde::{Serialize, de::DeserializeOwned};
 
 mod pretty;
+mod read_cli;
+mod resume;
 mod service;
+mod skill;
 mod sync;
 
 #[derive(Debug, serde::Deserialize)]
@@ -44,6 +47,13 @@ struct SearchInput {
     mode: Option<SearchModeArg>,
     scope: Option<SearchScopeArg>,
     remotes: Option<Vec<String>>,
+    offset: Option<i64>,
+    after: Option<String>,
+    before: Option<String>,
+    role: Option<Vec<SearchRoleArg>>,
+    model: Option<String>,
+    harness_filter: Option<String>,
+    tag: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -150,6 +160,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Install, inspect, or update the bundled agent retrieval skill
+    Skill {
+        #[command(subcommand)]
+        command: skill::Command,
+    },
     /// Sync chat history from all sources
     Sync {
         /// Only sync a specific source
@@ -185,8 +200,29 @@ enum Command {
 
     /// Search across chat history
     Search {
-        /// Search query
+        /// Search query (empty lists recent evidence)
+        #[arg(default_value = "")]
         query: String,
+
+        /// Hard total JSON character budget
+        #[arg(long, default_value_t = 3000)]
+        max_chars: usize,
+
+        /// Maximum characters per evidence snippet (up to 300)
+        #[arg(long, default_value_t = 300)]
+        snippet_chars: usize,
+
+        /// Lossless JSON report including full message content (unbudgeted)
+        #[arg(long)]
+        raw: bool,
+
+        /// Write content-free retrieval diagnostics to a new local file (never queries or IDs)
+        #[arg(long)]
+        trace_file: Option<PathBuf>,
+
+        /// Skip this many ranked matches
+        #[arg(long, default_value_t = 0)]
+        offset: i64,
 
         /// Maximum results
         #[arg(short, long, default_value = "20")]
@@ -305,10 +341,29 @@ enum Command {
         all: bool,
     },
 
-    /// Show a conversation
+    /// Read budgeted evidence pages locally or from a named SSH source
+    Read {
+        /// Conversation ID (optional when --input supplies it)
+        id: Option<String>,
+        #[arg(long)]
+        input: Option<PathBuf>,
+        #[arg(long)]
+        remote: Option<String>,
+        #[command(flatten)]
+        options: read_cli::ReadArgs,
+    },
+
+    /// Show a bounded conversation page; use read for continuation controls
     Show {
+        /// Explicitly return the complete, unbounded legacy transcript
+        #[arg(long)]
+        full: bool,
+        /// Read only the anchored message from search output
+        #[arg(long)]
+        message_idx: Option<i32>,
+
         /// Conversation ID, unique prefix, or external ID
-        id: String,
+        id: Option<String>,
 
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
@@ -440,6 +495,10 @@ enum Command {
         /// Show what would happen without writing or launching
         #[arg(long)]
         dry_run: bool,
+
+        /// Explicitly allow launching a converted transcript without verified native compatibility
+        #[arg(long)]
+        allow_unverified: bool,
 
         /// Interactive picker using fzf
         #[arg(short, long)]
@@ -945,6 +1004,11 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Search {
             query,
+            max_chars,
+            snippet_chars,
+            raw,
+            trace_file,
+            offset,
             limit,
             source,
             workspace,
@@ -963,6 +1027,7 @@ async fn main() -> Result<()> {
             compact,
             input,
         } => {
+            skill::warn_if_stale();
             let input = read_input::<SearchInput>(input)?;
             let query = input.as_ref().map_or(query, |v| v.query.clone());
             let limit = input.as_ref().and_then(|v| v.limit).unwrap_or(limit);
@@ -977,6 +1042,16 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .and_then(|v| v.remotes.clone())
                 .unwrap_or(remote);
+            let offset = input.as_ref().and_then(|v| v.offset).unwrap_or(offset);
+            let after = input.as_ref().and_then(|v| v.after.clone()).or(after);
+            let before = input.as_ref().and_then(|v| v.before.clone()).or(before);
+            let role = input.as_ref().and_then(|v| v.role.clone()).unwrap_or(role);
+            let model = input.as_ref().and_then(|v| v.model.clone()).or(model);
+            let harness_filter = input
+                .as_ref()
+                .and_then(|v| v.harness_filter.clone())
+                .or(harness_filter);
+            let tag = input.as_ref().and_then(|v| v.tag.clone()).or(tag);
             cmd_search_fast(
                 &config,
                 &query,
@@ -997,6 +1072,13 @@ async fn main() -> Result<()> {
                 tag,
                 compact,
                 cli.json,
+                hstry_core::recall::Budget {
+                    total: max_chars,
+                    snippet: snippet_chars,
+                },
+                raw,
+                offset,
+                trace_file,
             )
             .await
         }
@@ -1074,12 +1156,65 @@ async fn main() -> Result<()> {
                 .await
             }
         }
-        Command::Show { id, input } => {
+        Command::Read {
+            id,
+            input,
+            remote,
+            options,
+        } => {
+            let request = read_input::<read_cli::ReadInput>(input)?;
+            let (id, options) = if let Some(r) = request {
+                (r.id, r.options)
+            } else {
+                (
+                    id.ok_or_else(|| anyhow::anyhow!("Provide a conversation ID or --input"))?,
+                    options.into(),
+                )
+            };
+            let page = if let Some(name) = remote {
+                let peer = config
+                    .remotes
+                    .iter()
+                    .find(|r| r.name == name && r.enabled)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown remote {name}"))?;
+                hstry_core::remote::read_remote(peer, &id, &options).await?
+            } else {
+                let db = Database::open(&config.database).await?;
+                let conv = resolve_conversation_by_id(&db, &id).await?;
+                db.read_page(conv.id, options).await?
+            };
+            println!("{}", page.to_wire()?);
+            Ok(())
+        }
+        Command::Show {
+            id,
+            input,
+            message_idx,
+            full,
+        } => {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             let input = read_input::<ShowInput>(input)?;
-            let id = input.as_ref().map_or(id, |v| v.id.clone());
-            cmd_show(&db, &id, cli.json).await
+            let id = input
+                .map(|v| v.id)
+                .or(id)
+                .ok_or_else(|| anyhow::anyhow!("Provide a conversation ID or --input"))?;
+            if full {
+                cmd_show(&db, &id, cli.json, message_idx).await
+            } else {
+                let conv = resolve_conversation_by_id(&db, &id).await?;
+                let page = db
+                    .read_page(
+                        conv.id,
+                        hstry_core::read::ReadOptions {
+                            message_idx,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                println!("{}", page.to_wire()?);
+                Ok(())
+            }
         }
         Command::Peek { id, chars } => {
             let db = Database::open(&config.database).await?;
@@ -1193,6 +1328,7 @@ async fn main() -> Result<()> {
             before,
             limit,
             dry_run,
+            allow_unverified,
             pick,
         } => {
             adapter_manifest::validate_adapter_manifest(&config.adapter_paths)?;
@@ -1203,8 +1339,21 @@ async fn main() -> Result<()> {
             })?;
             let runner = AdapterRunner::new(runtime, config.adapter_paths.clone());
             cmd_resume(
-                &db, &runner, &config, id, search, agent, source, workspace, after, before, limit,
-                dry_run, pick, cli.json,
+                &db,
+                &runner,
+                &config,
+                id,
+                search,
+                agent,
+                source,
+                workspace,
+                after,
+                before,
+                limit,
+                dry_run,
+                allow_unverified,
+                pick,
+                cli.json,
             )
             .await
         }
@@ -1233,6 +1382,7 @@ async fn main() -> Result<()> {
             apply_storage_config(&db, &config);
             cmd_web(&db, &config, &config_path, command, cli.json).await
         }
+        Command::Skill { command } => skill::run(command),
         Command::Config { command } => cmd_config(&config, &config_path, command, cli.json),
         Command::Reseed {
             source,
@@ -2005,26 +2155,68 @@ async fn cmd_search_fast(
     tag: Option<String>,
     compact: bool,
     json: bool,
+    budget: hstry_core::recall::Budget,
+    raw: bool,
+    offset: i64,
+    trace_file: Option<PathBuf>,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
+    budget.validate()?;
+    if !(1..=1000).contains(&limit) || offset < 0 {
+        anyhow::bail!("limit must be 1..1000 and offset nonnegative");
+    }
+    let scope = if !remotes.is_empty() && scope == SearchScopeArg::Local {
+        SearchScopeArg::Remote
+    } else {
+        scope
+    };
+    if offset > 0
+        && scope != SearchScopeArg::Local
+        && !(scope == SearchScopeArg::Remote && remotes.len() == 1)
+    {
+        anyhow::bail!(
+            "Pagination requires a local search or one named --remote; page each store separately"
+        );
+    }
     // Parse date strings into DateTime<Utc>
     let after_dt = after.as_deref().map(parse_date_filter).transpose()?;
     let before_dt = before.as_deref().map(parse_date_filter).transpose()?;
 
-    // Push single role filter to DB level for efficiency
-    let db_role = if roles.len() == 1 {
-        Some(roles[0].to_string())
+    let include_system = include_system || roles.iter().any(|r| matches!(r, SearchRoleArg::System));
+    // Filter before retrieval limits and fallback decisions, including multiple requested roles.
+    let db_role = if !roles.is_empty() {
+        Some(
+            roles
+                .iter()
+                .filter(|r| !no_tools || !matches!(r, SearchRoleArg::Tool))
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    } else if no_tools || !include_system {
+        Some(
+            ["user", "assistant", "system", "tool", "other"]
+                .into_iter()
+                .filter(|r| (include_system || *r != "system") && (!no_tools || *r != "tool"))
+                .collect::<Vec<_>>()
+                .join(","),
+        )
     } else {
         None
     };
 
     // Request more results than needed if we're filtering, to ensure we get enough after filtering
     let has_filters = !include_system || !roles.is_empty() || no_tools || dedup;
-    let fetch_limit = if has_filters { limit * 4 } else { limit };
+    let fetch_limit = if has_filters {
+        (limit * 4).min(1000)
+    } else {
+        limit
+    };
     let opts = hstry_core::db::SearchOptions {
         source_id: source,
         workspace,
         limit: Some(fetch_limit),
-        offset: None,
+        offset: Some(offset),
         mode: mode.into(),
         after: after_dt,
         before: before_dt,
@@ -2033,7 +2225,7 @@ async fn cmd_search_fast(
         harness: harness_filter,
         tag,
     };
-    let mut messages = Vec::new();
+    let mut report = hstry_core::recall::SearchReport::default();
 
     if scope != SearchScopeArg::Remote {
         let service_expected = std::env::var("HSTRY_NO_SERVICE").is_err()
@@ -2041,7 +2233,9 @@ async fn cmd_search_fast(
             && config.service.search_api;
 
         let local = if service_expected {
-            if let Some(results) = hstry_core::service::try_service_search(query, &opts).await? {
+            if let Some(results) =
+                hstry_core::service::try_service_search_report(query, &opts).await?
+            {
                 results
             } else {
                 anyhow::bail!(
@@ -2053,9 +2247,9 @@ async fn cmd_search_fast(
         } else {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, config);
-            db.search(query, opts.clone()).await?
+            db.search_report(query, opts.clone()).await?
         };
-        messages.extend(local);
+        report = local;
     }
 
     if scope != SearchScopeArg::Local {
@@ -2070,19 +2264,49 @@ async fn cmd_search_fast(
                 .collect()
         };
 
-        let remote_hits = hstry_core::remote::search_remotes(&remote_list, query, &opts).await?;
-        messages.extend(remote_hits);
+        for name in &remotes {
+            if !remote_list.iter().any(|r| r.enabled && r.name == *name) {
+                anyhow::bail!("Unknown or disabled remote: {name}");
+            }
+        }
+        if !remote_list.iter().any(|r| r.enabled) {
+            anyhow::bail!("No enabled remotes to search");
+        }
+        let remote = hstry_core::remote::search_remotes(&remote_list, query, &opts).await?;
+        if scope == SearchScopeArg::Remote {
+            report.filters = remote.filters;
+        }
+        report.hits.extend(remote.hits);
+        report.stores.extend(remote.stores);
+        report.attempts.extend(remote.attempts);
+        report.warnings.extend(remote.warnings);
+        report.has_more |= remote.has_more;
     }
-
-    messages.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    report.scope = match scope {
+        SearchScopeArg::Local => "local_snapshot".into(),
+        SearchScopeArg::Remote if remotes.len() == 1 => format!("remote:{}", remotes[0]),
+        SearchScopeArg::Remote => "remote".into(),
+        SearchScopeArg::All => "local_snapshot_and_remote".into(),
+    };
+    report.offset = offset;
+    if scope != SearchScopeArg::Local && !(scope == SearchScopeArg::Remote && remotes.len() == 1) {
+        report
+            .warnings
+            .push("Multi-store discovery: narrow to local or one named remote to paginate".into());
+    }
+    report.available_remotes = config
+        .remotes
+        .iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.name.clone())
+        .collect();
+    let mut messages = std::mem::take(&mut report.hits);
+    // Core results are best-first (BM25 is negative); preserve conversation-aware ranking.
 
     // Filter out system context (AGENTS.md, etc.) unless explicitly requested
     if !include_system {
-        messages.retain(|hit| !is_system_context(&hit.content));
+        messages.retain(|hit| hit.role != MessageRole::System);
+        report.filters["exclude_system"] = serde_json::json!(true);
     }
 
     // Filter out tool messages if requested
@@ -2132,8 +2356,8 @@ async fn cmd_search_fast(
 
             let entry = grouped.entry(key).or_insert((0, hit.clone()));
             entry.0 += 1; // increment occurrence count
-            // Keep the hit with the highest score
-            if hit.score > entry.1.score {
+            // Lower BM25 is better.
+            if hit.score < entry.1.score {
                 entry.1 = hit.clone();
             }
         }
@@ -2149,23 +2373,38 @@ async fn cmd_search_fast(
 
         // Re-sort by score after grouping
         messages.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
+            a.score
+                .partial_cmp(&b.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
 
     // Apply the original limit after filtering
     let truncate_to = usize::try_from(limit.max(0)).unwrap_or(usize::MAX);
+    report.has_more |= messages.len() > truncate_to;
     messages.truncate(truncate_to);
+    if let Some(path) = trace_file {
+        let value = serde_json::json!({"version":1,"elapsed_ms":started.elapsed().as_millis(),"attempts":report.attempts,"returned_hits":messages.len(),"store_count":report.stores.len(),"warning_count":report.warnings.len(),"has_more":report.has_more,"ranks":messages.iter().enumerate().map(|(i,h)|serde_json::json!({"rank":i+1,"score":h.score,"role":h.role})).collect::<Vec<_>>()});
+        let mut file = tempfile::NamedTempFile::new_in(
+            path.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?;
+        serde_json::to_writer(file.as_file_mut(), &value)?;
+        file.persist_noclobber(path).map_err(|e| e.error)?;
+    }
 
     if json {
-        return emit_json(JsonResponse {
-            ok: true,
-            result: Some(messages),
-            error: None,
-        });
+        report.hits = messages;
+        let envelope = hstry_core::recall::project(&report, budget, raw)?;
+        println!("{envelope}");
+        return Ok(());
     }
+    eprintln!(
+        "Searched {} via {}; completeness is snapshot-only (not proof of global absence).",
+        report.scope,
+        report.attempts.join(" → ")
+    );
 
     if compact {
         pretty::print_search_results_compact(&messages);
@@ -2220,13 +2459,20 @@ struct SearchApiQuery<'a> {
     source: Option<&'a str>,
     workspace: Option<&'a str>,
     mode: SearchModeArg,
+    raw: bool,
+    after: Option<String>,
+    before: Option<String>,
+    role: Option<&'a str>,
+    model: Option<&'a str>,
+    harness: Option<&'a str>,
+    tag: Option<&'a str>,
 }
 
 async fn try_api_search(
     query: &str,
     opts: &hstry_core::db::SearchOptions,
     mode: SearchModeArg,
-) -> Result<Option<Vec<SearchHit>>> {
+) -> Result<Option<hstry_core::recall::SearchReport>> {
     if std::env::var("HSTRY_NO_API").is_ok() {
         return Ok(None);
     }
@@ -2242,6 +2488,13 @@ async fn try_api_search(
         source: opts.source_id.as_deref(),
         workspace: opts.workspace.as_deref(),
         mode,
+        raw: true,
+        after: opts.after.map(|d| d.to_rfc3339()),
+        before: opts.before.map(|d| d.to_rfc3339()),
+        role: opts.role.as_deref(),
+        model: opts.model.as_deref(),
+        harness: opts.harness.as_deref(),
+        tag: opts.tag.as_deref(),
     };
 
     let client = reqwest::Client::new();
@@ -2254,10 +2507,11 @@ async fn try_api_search(
     }
 
     let body = response.text().await?;
-    match serde_json::from_str::<Vec<SearchHit>>(&body) {
-        Ok(results) => Ok(Some(results)),
-        Err(_) => Ok(None),
-    }
+    let envelope: serde_json::Value = serde_json::from_str(&body)?;
+    let report = serde_json::from_value(envelope["result"].clone()).map_err(|_| {
+        anyhow::anyhow!("Search API predates recall protocol; upgrade it or set HSTRY_NO_API=1")
+    })?;
+    Ok(Some(report))
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, serde::Deserialize, serde::Serialize)]
@@ -2266,6 +2520,10 @@ enum SearchModeArg {
     Auto,
     Natural,
     Code,
+    Exact,
+    Needle,
+    Regex,
+    Recent,
 }
 
 impl From<SearchModeArg> for hstry_core::db::SearchMode {
@@ -2274,6 +2532,10 @@ impl From<SearchModeArg> for hstry_core::db::SearchMode {
             SearchModeArg::Auto => hstry_core::db::SearchMode::Auto,
             SearchModeArg::Natural => hstry_core::db::SearchMode::NaturalLanguage,
             SearchModeArg::Code => hstry_core::db::SearchMode::Code,
+            SearchModeArg::Exact => hstry_core::db::SearchMode::Exact,
+            SearchModeArg::Needle => hstry_core::db::SearchMode::Needle,
+            SearchModeArg::Regex => hstry_core::db::SearchMode::Regex,
+            SearchModeArg::Recent => hstry_core::db::SearchMode::Recent,
         }
     }
 }
@@ -2578,10 +2840,16 @@ fn print_peek_text(b: &hstry_core::peek::PeekBundle) {
     }
 }
 
-async fn cmd_show(db: &Database, id: &str, json: bool) -> Result<()> {
+async fn cmd_show(db: &Database, id: &str, json: bool, message_idx: Option<i32>) -> Result<()> {
     let conv = resolve_conversation_by_id(db, id).await?;
 
-    let messages = db.get_messages(conv.id).await?;
+    let mut messages = db.get_messages(conv.id).await?;
+    if let Some(idx) = message_idx {
+        messages.retain(|m| m.idx == idx);
+        if messages.is_empty() {
+            anyhow::bail!("Message index {idx} not found");
+        }
+    }
     if json {
         let details = hstry_core::models::ConversationWithMessages {
             conversation: conv,
@@ -4750,6 +5018,7 @@ async fn run_fzf_picker(
     limit: i64,
     agent_override: Option<String>,
     dry_run: bool,
+    allow_unverified: bool,
     json_output: bool,
 ) -> Result<()> {
     use hstry_core::db::ListConversationsOptions;
@@ -4859,6 +5128,7 @@ async fn run_fzf_picker(
         None,
         limit,
         dry_run,
+        allow_unverified,
         false,
         json_output,
     ))
@@ -4878,11 +5148,14 @@ async fn cmd_resume(
     before_str: Option<String>,
     limit: i64,
     dry_run: bool,
+    allow_unverified: bool,
     pick: bool,
     json_output: bool,
 ) -> Result<()> {
     use hstry_core::db::ListConversationsOptions;
 
+    // Machine-readable resume is a plan, never a false claim that a process launched.
+    let dry_run = dry_run || json_output;
     let agent_name = agent_override
         .as_deref()
         .unwrap_or(&config.resume.default_agent);
@@ -4917,6 +5190,7 @@ async fn cmd_resume(
             limit,
             agent_override,
             dry_run,
+            allow_unverified,
             json_output,
         )
         .await;
@@ -5147,7 +5421,7 @@ async fn cmd_resume(
         .map(PathBuf::from);
 
     let is_same_agent = source_adapter == &agent_config.format;
-    let original_exists = original_file.as_ref().is_some_and(|p| p.exists());
+    let original_exists = original_file.as_ref().is_some_and(|p| p.is_file());
 
     if is_same_agent && original_exists {
         let Some(session_path) = original_file.as_ref() else {
@@ -5161,6 +5435,9 @@ async fn cmd_resume(
                     ok: true,
                     result: Some(&serde_json::json!({
                         "action": "direct_resume",
+                        "launched": false,
+                        "native_verification": "not_checked",
+                        "argv": build_resume_command(&agent_config, session_path, &conversation)?,
                         "agent": agent_name,
                         "session_path": session_path,
                         "workspace": workspace,
@@ -5174,8 +5451,8 @@ async fn cmd_resume(
             println!("  Agent:    {agent_name}");
             println!("  Session:  {}", session_path.display());
             println!("  Workspace: {workspace}");
-            let cmd = build_resume_command(&agent_config, session_path, &conversation);
-            println!("  Command:  {cmd}");
+            let cmd = build_resume_command(&agent_config, session_path, &conversation)?;
+            println!("  Arguments: {cmd:?}");
             return Ok(());
         }
 
@@ -5183,7 +5460,7 @@ async fn cmd_resume(
             eprintln!("Resuming {} session directly in {workspace}", agent_name);
         }
 
-        let cmd = build_resume_command(&agent_config, session_path, &conversation);
+        let cmd = build_resume_command(&agent_config, session_path, &conversation)?;
         launch_agent(&cmd, workspace, json_output)?;
         return Ok(());
     }
@@ -5195,6 +5472,11 @@ async fn cmd_resume(
             agent_config.format
         )
     })?;
+
+    // A cross-agent continuation is a new native session, with explicit provenance.
+    let mut target_conversation = conversation.clone();
+    target_conversation.external_id = Some(resume::fresh_session_id(&agent_config.format));
+    target_conversation.metadata["hstry_origin"] = serde_json::json!({"conversation_id":conversation.id,"source":conversation.source_id,"external_id":conversation.external_id});
 
     // Load messages and build export conversation
     let messages = db.get_messages(conversation.id).await?;
@@ -5214,7 +5496,7 @@ async fn cmd_resume(
         .collect();
 
     let export_conv = ExportConversation {
-        external_id: conversation.external_id.clone(),
+        external_id: target_conversation.external_id.clone(),
         readable_id: conversation.readable_id.clone(),
         title: conversation.title.clone(),
         created_at: conversation.created_at.timestamp_millis(),
@@ -5226,7 +5508,7 @@ async fn cmd_resume(
         tokens_out: conversation.tokens_out,
         cost_usd: conversation.cost_usd,
         messages: parsed_messages,
-        metadata: Some(conversation.metadata.clone()),
+        metadata: Some(target_conversation.metadata.clone()),
         version: Some(u64::try_from(conversation.version).unwrap_or(0)),
         message_count: Some(u32::try_from(conversation.message_count).unwrap_or(0)),
     };
@@ -5244,7 +5526,7 @@ async fn cmd_resume(
 
     // Step 5: Place the exported file(s) in the agent's native session directory
     let session_dir = Config::expand_path(&agent_config.session_dir);
-    let placed_paths = place_exported_session(&result, &session_dir, &conversation, dry_run)?;
+    let placed_paths = place_exported_session(&result, &session_dir, &target_conversation, true)?;
 
     if placed_paths.is_empty() {
         anyhow::bail!("Export produced no files to place");
@@ -5259,6 +5541,14 @@ async fn cmd_resume(
                 ok: true,
                 result: Some(&serde_json::json!({
                     "action": "convert_and_resume",
+                    "launched": false,
+                    "native_verification": "not_checked",
+                    "fidelity": "adapter_projection_not_runtime_state",
+                    "warnings": ["Native load/continuation is not verified for this installed agent version; runtime state, permissions, reasoning signatures and attachment availability may not survive conversion"],
+                    "target_session_id": target_conversation.external_id,
+                    "origin": target_conversation.metadata["hstry_origin"],
+                    "requires_allow_unverified": true,
+                    "argv": build_resume_command(&agent_config, primary_path, &target_conversation)?,
                     "agent": agent_name,
                     "source_adapter": source_adapter,
                     "target_format": agent_config.format,
@@ -5278,11 +5568,26 @@ async fn cmd_resume(
             println!("  Placed:   {}", p.display());
         }
         println!("  Workspace: {workspace}");
-        let cmd = build_resume_command(&agent_config, primary_path, &conversation);
-        println!("  Command:  {cmd}");
+        let cmd = build_resume_command(&agent_config, primary_path, &target_conversation)?;
+        println!("  Arguments: {cmd:?}");
         return Ok(());
     }
 
+    if !allow_unverified {
+        anyhow::bail!(
+            "Converted transcripts have not been verified against this installed agent version. Inspect --dry-run --json; use --allow-unverified only to explicitly accept this risk. No session files were written."
+        );
+    }
+    let command = build_resume_command(&agent_config, primary_path, &target_conversation)?;
+    which::which(&command[0])
+        .map_err(|_| anyhow::anyhow!("Target executable is not installed: {}", command[0]))?;
+    if !Path::new(workspace).is_dir() {
+        anyhow::bail!("Recorded workspace does not exist; no session files were written");
+    }
+    place_exported_session(&result, &session_dir, &target_conversation, false)?;
+    eprintln!(
+        "Warning: conversion is an adapter projection; native continuation is not verified for this installed agent version."
+    );
     if !json_output {
         eprintln!(
             "Converted {source_adapter} -> {} ({} file(s))",
@@ -5291,8 +5596,7 @@ async fn cmd_resume(
         );
     }
 
-    let cmd = build_resume_command(&agent_config, primary_path, &conversation);
-    launch_agent(&cmd, workspace, json_output)?;
+    launch_agent(&command, workspace, json_output)?;
     Ok(())
 }
 
@@ -5402,23 +5706,20 @@ async fn cmd_remove(
     Ok(())
 }
 
-/// Build the launch command string by replacing placeholders.
+/// Parse argument templates before substituting source data.
 fn build_resume_command(
     agent_config: &hstry_core::config::AgentResumeConfig,
     session_path: &Path,
     conversation: &Conversation,
-) -> String {
+) -> Result<Vec<String>> {
     let id_string = conversation.id.to_string();
     let session_id = conversation.external_id.as_deref().unwrap_or(&id_string);
-
-    agent_config
-        .command
-        .replace("{session_path}", &session_path.display().to_string())
-        .replace("{session_id}", session_id)
-        .replace(
-            "{workspace}",
-            conversation.workspace.as_deref().unwrap_or("."),
-        )
+    resume::arguments(
+        &agent_config.command,
+        session_path,
+        session_id,
+        conversation.workspace.as_deref().unwrap_or("."),
+    )
 }
 
 /// Place exported session files into the agent's native session directory.
@@ -5431,85 +5732,31 @@ fn place_exported_session(
     conversation: &Conversation,
     dry_run: bool,
 ) -> Result<Vec<PathBuf>> {
-    use std::fs;
-
-    // Extract root prefix from metadata (e.g., "sessions/", "project/")
-    let root_prefix = result
-        .metadata
-        .as_ref()
-        .and_then(|m| m.get("root"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let mut placed = Vec::new();
-
-    if let Some(ref content) = result.content {
-        // Single-file export (e.g., JSON, markdown)
-        let id_string = conversation.id.to_string();
-        let session_id = conversation.external_id.as_deref().unwrap_or(&id_string);
-        let ext = match result.format.as_str() {
-            "markdown" => "md",
-            "json" => "json",
-            _ => "jsonl",
-        };
-        let filename = format!("{session_id}.{ext}");
-        let target = session_dir.join(&filename);
-
-        if dry_run {
-            placed.push(target);
-        } else {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&target, content)?;
-            placed.push(target);
-        }
+    let id = conversation
+        .external_id
+        .clone()
+        .unwrap_or_else(|| conversation.id.to_string());
+    let mut result = result.clone();
+    if let Some(origin) = conversation.metadata.get("hstry_origin") {
+        // Kept outside native message files, which may discard unknown metadata.
+        result.files.get_or_insert_with(Vec::new).push(hstry_runtime::runner::ExportFile {
+            path:format!(".hstry-origin/{id}.json"),
+            content:serde_json::to_string(&serde_json::json!({"origin":origin,"target_session_id":id,"target_format":result.format}))?,
+            encoding:None,
+        });
     }
-
-    if let Some(ref files) = result.files {
-        for file in files {
-            // Strip the root prefix from the file path
-            let relative = file.path.strip_prefix(root_prefix).unwrap_or(&file.path);
-            let target = session_dir.join(relative);
-
-            if dry_run {
-                placed.push(target);
-            } else {
-                if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&target, &file.content)?;
-                placed.push(target);
-            }
-        }
-    }
-
-    Ok(placed)
+    resume::place(&result, session_dir, &id, dry_run)
 }
 
 /// Launch an agent process in the given workspace directory.
-fn launch_agent(command_str: &str, workspace: &str, json_output: bool) -> Result<()> {
-    let parts: Vec<&str> = command_str.split_whitespace().collect();
-    if parts.is_empty() {
-        anyhow::bail!("Empty resume command");
-    }
-
-    let program = parts[0];
-    let args = &parts[1..];
-
+fn launch_agent(argv: &[String], workspace: &str, json_output: bool) -> Result<()> {
     if json_output {
-        return emit_json(JsonResponse {
-            ok: true,
-            result: Some(&serde_json::json!({
-                "launched": true,
-                "command": command_str,
-                "workspace": workspace,
-            })),
-            error: None,
-        });
+        anyhow::bail!("JSON resume must return a plan without launching");
     }
-
-    eprintln!("Launching: {command_str}");
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("Empty resume command"))?;
+    eprintln!("Launching: {argv:?}");
     eprintln!("Workspace: {workspace}");
 
     let status = ProcessCommand::new(program)

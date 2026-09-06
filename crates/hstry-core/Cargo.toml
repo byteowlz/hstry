@@ -27,6 +27,8 @@ prost.workspace = true
 tonic-prost.workspace = true
 tower.workspace = true
 hyper-util.workspace = true
+regex = "1"
+futures.workspace = true
 
 [build-dependencies]
 tonic-prost-build.workspace = true

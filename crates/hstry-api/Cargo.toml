@@ -19,3 +19,6 @@ log.workspace = true
 env_logger.workspace = true
 chrono.workspace = true
 dateparser.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -51,14 +51,33 @@ impl SearchService for ServerState {
         let opts = search_request_to_opts(&request);
         let query = request.query.clone();
 
-        let hits = self
+        let report = self
             .db
-            .search(&query, opts)
+            .search_report(&query, opts)
             .await
             .map_err(|e| tonic::Status::internal(format!("Search failed: {e}")))?;
 
+        let budget = hstry_core::recall::Budget {
+            total: if request.max_chars == 0 {
+                3000
+            } else {
+                request.max_chars as usize
+            },
+            snippet: if request.snippet_chars == 0 {
+                300
+            } else {
+                request.snippet_chars as usize
+            },
+        };
+        let envelope = hstry_core::recall::project(&report, budget, request.raw)
+            .map_err(|e| tonic::Status::invalid_argument(e.to_string()))?;
         let response = hstry_core::service::proto::SearchResponse {
-            hits: hits.iter().map(hit_to_proto).collect(),
+            hits: if request.raw {
+                report.hits.iter().map(hit_to_proto).collect()
+            } else {
+                Vec::new()
+            },
+            envelope_json: envelope.to_string(),
         };
         Ok(tonic::Response::new(response))
     }
@@ -2046,6 +2065,48 @@ fn is_candidate_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn search_service_defaults_to_bounded_evidence_not_raw_content() -> anyhow::Result<()> {
+        use hstry_core::service::proto;
+        let dir = tempfile::tempdir()?;
+        let db = Arc::new(Database::open(&dir.path().join("service.db")).await?);
+        db.upsert_source(&hstry_core::models::Source {
+            id: "test".into(),
+            adapter: "pi".into(),
+            path: None,
+            last_sync_at: None,
+            config: serde_json::json!({}),
+        })
+        .await?;
+        let conv = serde_json::from_value(
+            serde_json::json!({"externalId":"test","createdAt":1767225600000_i64,"messages":[{"role":"tool","content":format!("{}needle@example.test", "noise ".repeat(1000))}]}),
+        )?;
+        hstry_core::ingest::ingest_batch(&db, "test", vec![conv]).await?;
+        let server = ServerState { db };
+        let request = proto::SearchRequest {
+            query: "needle@example.test".into(),
+            mode: proto::SearchMode::Exact as i32,
+            ..Default::default()
+        };
+        let response = server
+            .search(tonic::Request::new(request.clone()))
+            .await?
+            .into_inner();
+        assert!(response.hits.is_empty());
+        assert!(response.envelope_json.chars().count() <= 3000);
+        let body: serde_json::Value = serde_json::from_str(&response.envelope_json)?;
+        assert_eq!(body["result"]["hits"][0]["role"], "tool");
+        let response = server
+            .search(tonic::Request::new(proto::SearchRequest {
+                raw: true,
+                ..request
+            }))
+            .await?
+            .into_inner();
+        assert!(response.hits[0].content.len() > 5000);
+        Ok(())
+    }
 
     fn with_temp_env<F: FnOnce()>(f: F) {
         let temp_dir = tempfile::tempdir().unwrap_or_else(|err| panic!("tempdir: {err}"));

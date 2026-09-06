@@ -59,6 +59,10 @@ fn normalize_source_path(path: Option<&String>) -> Option<String> {
 }
 
 impl Database {
+    pub(crate) fn read_pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     /// Open or create a database at the given path.
     pub async fn open(path: &Path) -> Result<Self> {
         let parent = path.parent().unwrap_or(Path::new("."));
@@ -2097,9 +2101,74 @@ impl Database {
 
     /// Full-text search across messages with snippet and provenance.
     pub async fn search(&self, query: &str, opts: SearchOptions) -> Result<Vec<SearchHit>> {
+        Ok(self.search_report(query, opts).await?.hits)
+    }
+
+    pub(crate) async fn search_pass(
+        &self,
+        query: &str,
+        opts: SearchOptions,
+    ) -> Result<Vec<SearchHit>> {
+        self.search_in_conversations(query, opts, &[]).await
+    }
+
+    pub(crate) async fn search_in_conversations(
+        &self,
+        query: &str,
+        opts: SearchOptions,
+        conversations: &[Uuid],
+    ) -> Result<Vec<SearchHit>> {
+        use futures::TryStreamExt;
         let mode = opts.mode.resolve(query);
         let table = mode.table_name();
-        let query = sanitize_fts_query(query);
+        let raw = matches!(
+            mode,
+            SearchMode::Exact | SearchMode::Regex | SearchMode::Recent
+        );
+        let regex = if mode == SearchMode::Regex {
+            Some(
+                regex::Regex::new(query)
+                    .map_err(|e| crate::Error::Other(format!("Invalid regex: {e}")))?,
+            )
+        } else {
+            None
+        };
+        let original_query = query;
+        let evidence = crate::recall::EvidenceQuery::new(query);
+        let query = if raw {
+            query.to_string()
+        } else if mode == SearchMode::Broad {
+            query
+                .split_whitespace()
+                .map(sanitize_fts_query)
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        } else {
+            sanitize_fts_query(query)
+        };
+        if query.is_empty() && mode != SearchMode::Recent {
+            return Ok(Vec::new());
+        }
+        // FTS snippet() retokenizes large tool blobs. Select our evidence window
+        // first and compute FTS snippets lazily only for stemming-only matches.
+        let snippet_sql = "''";
+        let score_sql = if raw {
+            "0.0".to_string()
+        } else {
+            format!("bm25({table})")
+        };
+        let from_sql = if raw {
+            "messages m".to_string()
+        } else {
+            format!("{table} JOIN messages m ON m.rowid = {table}.rowid")
+        };
+        let predicate = if mode == SearchMode::Exact {
+            "instr(m.content, ?) > 0".to_string()
+        } else if raw {
+            "1=1".to_string()
+        } else {
+            format!("{table} MATCH ?")
+        };
 
         let mut sql = format!(
             r"
@@ -2119,16 +2188,20 @@ impl Database {
                 c.workspace AS workspace,
                 s.adapter AS source_adapter,
                 s.path AS source_path,
-                snippet({table}, 0, '[', ']', '…', 12) AS snippet,
-                bm25({table}) AS score
-            FROM {table}
-            JOIN messages m ON m.rowid = {table}.rowid
+                COALESCE(c.metadata, '{{}}') AS conversation_metadata,
+                c.message_count AS local_message_count,
+                {snippet_sql} AS snippet,
+                {score_sql} AS score
+            FROM {from_sql}
             JOIN conversations c ON c.id = m.conversation_id
             JOIN sources s ON s.id = c.source_id
-            WHERE {table} MATCH ?
+            WHERE {predicate}
             "
         );
 
+        if !conversations.is_empty() {
+            sql.push_str(" AND c.id IN (SELECT value FROM json_each(?))");
+        }
         if opts.source_id.is_some() {
             sql.push_str(" AND (c.source_id = ? OR c.source_id LIKE ?)");
         }
@@ -2142,7 +2215,7 @@ impl Database {
             sql.push_str(" AND m.created_at < ?");
         }
         if opts.role.is_some() {
-            sql.push_str(" AND m.role = ?");
+            sql.push_str(" AND instr(',' || ? || ',', ',' || m.role || ',') > 0");
         }
         if opts.model.is_some() {
             sql.push_str(" AND c.model = ?");
@@ -2154,18 +2227,31 @@ impl Database {
             sql.push_str(" AND c.id IN (SELECT ct.conversation_id FROM conversation_tags ct JOIN tags t ON t.id = ct.tag_id WHERE t.name = ?)");
         }
 
-        sql.push_str(" ORDER BY score ASC");
-
-        if let Some(limit) = opts.limit {
-            let _ = write!(sql, " LIMIT {limit}");
+        if mode == SearchMode::Recent {
+            sql.push_str(" ORDER BY COALESCE(c.updated_at,c.created_at) DESC, c.id, m.idx");
+        } else {
+            sql.push_str(
+                " ORDER BY score ASC, c.source_id, COALESCE(c.external_id,c.id), c.id, m.idx",
+            );
         }
-        if let Some(offset) = opts.offset {
-            let _ = write!(sql, " OFFSET {offset}");
+
+        if regex.is_none() {
+            let _ = write!(
+                sql,
+                " LIMIT {} OFFSET {}",
+                opts.limit.unwrap_or(20).max(0),
+                opts.offset.unwrap_or(0).max(0)
+            );
         }
 
         let mut query_builder = sqlx::query(&sql);
-        query_builder = query_builder.bind(query);
+        if !raw || mode == SearchMode::Exact {
+            query_builder = query_builder.bind(&query);
+        }
 
+        if !conversations.is_empty() {
+            query_builder = query_builder.bind(serde_json::to_string(conversations)?);
+        }
         if let Some(ref source_id) = opts.source_id {
             query_builder = query_builder.bind(source_id).bind(format!("{source_id}-%"));
         }
@@ -2191,18 +2277,69 @@ impl Database {
             query_builder = query_builder.bind(tag.trim().to_lowercase());
         }
 
-        let rows = query_builder.fetch_all(&self.pool).await?;
-
+        // Source config can contain a large file cursor. Decode it once per source,
+        // not once per matching message.
+        let sources: std::collections::HashMap<_, _> = self
+            .list_sources()
+            .await?
+            .into_iter()
+            .map(|s| (s.id.clone(), s))
+            .collect();
+        let mut rows = query_builder.fetch(&self.pool);
         let mut hits = Vec::new();
-        for row in rows {
+        let mut skipped = 0;
+        while let Some(row) = rows.try_next().await? {
+            let content: String = row.get("content");
+            let (evidence_position, field_evidence) = if raw {
+                (None, false)
+            } else {
+                evidence.select(&content)
+            };
+            let position = if let Some(re) = &regex {
+                let Some(found) = re.find(&content) else {
+                    continue;
+                };
+                if skipped < opts.offset.unwrap_or(0).max(0) {
+                    skipped += 1;
+                    continue;
+                }
+                Some(content[..found.start()].chars().count())
+            } else if mode == SearchMode::Exact {
+                content
+                    .find(original_query)
+                    .map(|p| content[..p].chars().count())
+            } else if !raw {
+                evidence_position
+            } else {
+                Some(0)
+            };
+            let snippet: String = if let Some(pos) = position {
+                crate::recall::window(&content, pos, 300)
+            } else {
+                row.get("snippet")
+            };
+            let metadata = serde_json::from_str(row.get::<&str, _>("conversation_metadata"))
+                .unwrap_or_default();
+            let source_id: &str = row.get("source_id");
+            let mut provenance = sources
+                .get(source_id)
+                .map(|source| crate::recall::Provenance::from_source(source, &metadata))
+                .unwrap_or_else(|| crate::recall::Provenance {
+                    source: source_id.into(),
+                    completeness: "unknown".into(),
+                    ..Default::default()
+                });
+            provenance.apply_snapshot(&metadata, row.get("local_message_count"));
             hits.push(SearchHit {
                 message_id: Uuid::parse_str(row.get::<&str, _>("message_id")).unwrap_or_default(),
                 conversation_id: Uuid::parse_str(row.get::<&str, _>("conversation_id"))
                     .unwrap_or_default(),
                 message_idx: row.get("message_idx"),
                 role: MessageRole::from(row.get::<&str, _>("role")),
-                content: row.get("content"),
-                snippet: row.get::<String, _>("snippet"),
+                content,
+                snippet,
+                match_position: position,
+                provenance,
                 created_at: row
                     .get::<Option<i64>, _>("created_at")
                     .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
@@ -2216,7 +2353,7 @@ impl Database {
                     .get::<Option<i64>, _>("conv_updated_at")
                     .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0))
                     .map(|dt| dt.with_timezone(&Utc)),
-                score: row.get::<f32, _>("score"),
+                score: row.get::<f32, _>("score") * if field_evidence { 1.5 } else { 1.0 },
                 source_id: row.get("source_id"),
                 external_id: row.get("external_id"),
                 readable_id: row.get("readable_id"),
@@ -2227,8 +2364,32 @@ impl Database {
                 host: None,
                 occurrences: None,
             });
+            if regex.is_some() && hits.len() >= opts.limit.unwrap_or(20).max(0) as usize {
+                break;
+            }
         }
 
+        drop(rows);
+        if !raw {
+            for hit in hits.iter_mut().filter(|h| h.match_position.is_none()) {
+                let marked: String = sqlx::query_scalar(&format!("SELECT snippet({table}, 0, '[', ']', '…', 24) FROM {table} WHERE rowid=(SELECT rowid FROM messages WHERE id=?) AND {table} MATCH ?"))
+                    .bind(hit.message_id.to_string()).bind(&query).fetch_one(&self.pool).await?;
+                hit.snippet = marked.clone();
+                if let Some(term) = marked
+                    .split_once('[')
+                    .and_then(|(_, s)| s.split_once(']'))
+                    .map(|(term, _)| term)
+                    && let Ok(re) = regex::RegexBuilder::new(&regex::escape(term))
+                        .case_insensitive(true)
+                        .build()
+                    && let Some(found) = re.find(&hit.content)
+                {
+                    let position = hit.content[..found.start()].chars().count();
+                    hit.match_position = Some(position);
+                    hit.snippet = crate::recall::window(&hit.content, position, 300);
+                }
+            }
+        }
         Ok(hits)
     }
 
@@ -3136,9 +3297,27 @@ pub enum SearchMode {
     Auto,
     NaturalLanguage,
     Code,
+    Exact,
+    Needle,
+    Regex,
+    Recent,
+    Broad,
 }
 
 impl SearchMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::NaturalLanguage => "natural",
+            Self::Code => "code",
+            Self::Exact => "exact",
+            Self::Needle => "needle",
+            Self::Regex => "regex",
+            Self::Recent => "recent",
+            Self::Broad => "natural_or",
+        }
+    }
+
     fn resolve(self, query: &str) -> SearchMode {
         match self {
             SearchMode::Auto => detect_search_mode(query),
@@ -3148,8 +3327,8 @@ impl SearchMode {
 
     fn table_name(self) -> &'static str {
         match self {
-            SearchMode::Auto | SearchMode::NaturalLanguage => "messages_fts",
             SearchMode::Code => "messages_code_fts",
+            _ => "messages_fts",
         }
     }
 }

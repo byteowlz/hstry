@@ -5,7 +5,10 @@ use crate::db::{SearchMode, SearchOptions};
 use crate::models::SearchHit;
 use crate::paths::service_port_path;
 
+// Tonic-generated code emits lint attributes and Default::default() calls.
+// ast-grep-ignore: rust-no-clippy-allow
 #[expect(clippy::allow_attributes)]
+// ast-grep-ignore: rust-no-clippy-allow
 #[expect(clippy::default_trait_access)]
 pub mod proto {
     tonic::include_proto!("hstry.service");
@@ -31,6 +34,11 @@ pub fn search_mode_to_proto(mode: SearchMode) -> proto::SearchMode {
         SearchMode::Auto => proto::SearchMode::Auto,
         SearchMode::NaturalLanguage => proto::SearchMode::Natural,
         SearchMode::Code => proto::SearchMode::Code,
+        SearchMode::Exact => proto::SearchMode::Exact,
+        SearchMode::Needle => proto::SearchMode::Needle,
+        SearchMode::Regex => proto::SearchMode::Regex,
+        SearchMode::Recent => proto::SearchMode::Recent,
+        SearchMode::Broad => proto::SearchMode::Natural,
     }
 }
 
@@ -38,6 +46,10 @@ pub fn search_mode_from_proto(mode: i32) -> SearchMode {
     match proto::SearchMode::try_from(mode) {
         Ok(proto::SearchMode::Natural) => SearchMode::NaturalLanguage,
         Ok(proto::SearchMode::Code) => SearchMode::Code,
+        Ok(proto::SearchMode::Exact) => SearchMode::Exact,
+        Ok(proto::SearchMode::Needle) => SearchMode::Needle,
+        Ok(proto::SearchMode::Regex) => SearchMode::Regex,
+        Ok(proto::SearchMode::Recent) => SearchMode::Recent,
         _ => SearchMode::Auto,
     }
 }
@@ -104,6 +116,9 @@ fn search_request_from_opts(query: &str, opts: &SearchOptions) -> proto::SearchR
         model: opts.model.clone().unwrap_or_default(),
         harness: opts.harness.clone().unwrap_or_default(),
         tag: opts.tag.clone().unwrap_or_default(),
+        raw: true,
+        max_chars: 0,
+        snippet_chars: 0,
     }
 }
 
@@ -111,6 +126,15 @@ pub async fn try_service_search(
     query: &str,
     opts: &SearchOptions,
 ) -> crate::Result<Option<Vec<SearchHit>>> {
+    Ok(try_service_search_report(query, opts)
+        .await?
+        .map(|r| r.hits))
+}
+
+pub async fn try_service_search_report(
+    query: &str,
+    opts: &SearchOptions,
+) -> crate::Result<Option<crate::recall::SearchReport>> {
     if std::env::var("HSTRY_NO_SERVICE").is_ok() {
         return Ok(None);
     }
@@ -134,13 +158,14 @@ pub async fn try_service_search(
         }
     };
 
-    let hits = response
-        .into_inner()
-        .hits
-        .into_iter()
-        .map(hit_from_proto)
-        .collect();
-    Ok(Some(hits))
+    let response = response.into_inner();
+    if response.envelope_json.is_empty() {
+        return Err(crate::Error::Other(
+            "Search service predates recall protocol; restart it with the current binary".into(),
+        ));
+    }
+    let envelope: serde_json::Value = serde_json::from_str(&response.envelope_json)?;
+    Ok(Some(serde_json::from_value(envelope["result"].clone())?))
 }
 
 /// Try to connect to the search service.
@@ -265,6 +290,8 @@ pub fn hit_to_proto(hit: &SearchHit) -> proto::SearchHit {
         source_adapter: hit.source_adapter.clone(),
         source_path: hit.source_path.clone().unwrap_or_default(),
         host: hit.host.clone().unwrap_or_default(),
+        provenance_json: serde_json::to_string(&hit.provenance).unwrap_or_default(),
+        match_position: hit.match_position.map(|p| p as u64),
     }
 }
 
@@ -276,6 +303,8 @@ pub fn hit_from_proto(hit: proto::SearchHit) -> SearchHit {
         role: hit.role.as_str().into(),
         content: hit.content,
         snippet: hit.snippet,
+        match_position: hit.match_position.map(|p| p as usize),
+        provenance: serde_json::from_str(&hit.provenance_json).unwrap_or_default(),
         created_at: ts_from_ms(hit.created_at_ms),
         conv_created_at: ts_from_ms(hit.conv_created_at_ms).unwrap_or_else(Utc::now),
         conv_updated_at: ts_from_ms(hit.conv_updated_at_ms),

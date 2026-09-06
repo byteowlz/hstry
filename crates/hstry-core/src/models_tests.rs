@@ -349,6 +349,8 @@ mod search_hit_tests {
             role: MessageRole::Assistant,
             content: "Here's the answer".to_string(),
             snippet: "Here's the [answer]".to_string(),
+            match_position: Some(11),
+            provenance: crate::recall::Provenance::default(),
             created_at: Some(chrono::Utc::now()),
             conv_created_at: chrono::Utc::now(),
             conv_updated_at: None,

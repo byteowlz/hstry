@@ -21,6 +21,9 @@ use hstry_core::models::Source;
 use hstry_core::parsed::ParsedConversation;
 use hstry_core::{Config, Database};
 
+#[cfg(test)]
+mod search_tests;
+
 /// Ingest payloads carry full conversation histories; allow generous bodies.
 const INGEST_BODY_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -73,6 +76,7 @@ async fn try_main() -> Result<()> {
         .route("/health", get(health))
         .route("/config", get(get_config))
         .route("/search", get(search))
+        .route("/read", post(read_evidence))
         .route("/sources", post(register_source))
         .route(
             "/ingest",
@@ -131,6 +135,44 @@ struct AppState {
     ingest_token: Arc<Option<String>>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadRequest {
+    id: String,
+    #[serde(default)]
+    options: hstry_core::read::ReadOptions,
+    remote: Option<String>,
+}
+
+async fn read_evidence(
+    State(state): State<AppState>,
+    Json(req): Json<ReadRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let result: anyhow::Result<_> = async {
+        if let Some(name) = req.remote {
+            let peer = state
+                .config
+                .remotes
+                .iter()
+                .find(|r| r.name == name && r.enabled)
+                .ok_or_else(|| anyhow::anyhow!("Unknown remote"))?;
+            Ok(hstry_core::remote::read_remote(peer, &req.id, &req.options).await?)
+        } else {
+            Ok(state.db.read_page(req.id.parse()?, req.options).await?)
+        }
+    }
+    .await;
+    match result {
+        Ok(page) => Ok(Json(serde_json::json!({"ok":true,"result":page}))),
+        Err(err) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({"ok":false,"error":hstry_core::recall::clip(&err.to_string(),300)}),
+            ),
+        )),
+    }
+}
+
 #[derive(Serialize)]
 struct RootResponse {
     name: &'static str,
@@ -160,6 +202,9 @@ async fn get_config(State(state): State<AppState>) -> Result<Json<Config>, Statu
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
     query: String,
+    max_chars: Option<usize>,
+    snippet_chars: Option<usize>,
+    raw: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
     source: Option<String>,
@@ -182,23 +227,31 @@ struct SearchQuery {
 async fn search(
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
-) -> Result<Json<Vec<hstry_core::models::SearchHit>>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let mode = match params.mode.as_deref() {
         Some("auto") | None => SearchMode::Auto,
         Some("natural" | "natural_language") => SearchMode::NaturalLanguage,
         Some("code") => SearchMode::Code,
+        Some("exact") => SearchMode::Exact,
+        Some("needle") => SearchMode::Needle,
+        Some("regex") => SearchMode::Regex,
+        Some("recent") => SearchMode::Recent,
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
     let after = params
         .after
         .as_deref()
-        .and_then(|s| dateparser::parse(s).ok())
+        .map(dateparser::parse)
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
         .map(|dt| dt.with_timezone(&chrono::Utc));
     let before = params
         .before
         .as_deref()
-        .and_then(|s| dateparser::parse(s).ok())
+        .map(dateparser::parse)
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?
         .map(|dt| dt.with_timezone(&chrono::Utc));
 
     let source = params.source.clone();
@@ -208,9 +261,9 @@ async fn search(
     let harness = params.harness.clone();
     let tag = params.tag.clone();
 
-    let results = state
+    let mut results = state
         .db
-        .search(
+        .search_report(
             &params.query,
             SearchOptions {
                 source_id: source,
@@ -229,7 +282,20 @@ async fn search(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Json(results))
+    results.available_remotes = state
+        .config
+        .remotes
+        .iter()
+        .filter(|r| r.enabled)
+        .map(|r| r.name.clone())
+        .collect();
+    let budget = hstry_core::recall::Budget {
+        total: params.max_chars.unwrap_or(3000),
+        snippet: params.snippet_chars.unwrap_or(300),
+    };
+    let envelope = hstry_core::recall::project(&results, budget, params.raw.unwrap_or(false))
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(envelope))
 }
 
 #[derive(Debug, Deserialize)]

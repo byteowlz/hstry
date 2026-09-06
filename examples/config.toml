@@ -113,12 +113,12 @@ session_dir = "~/.codex/sessions"
 
 [resume.agents.hermes]
 format = "hermes"
-command = "hermes --session {session_id}"
+command = "hermes --resume {session_id}"
 session_dir = "~/.hermes/sessions"
 
 [resume.agents.opencode]
 format = "opencode"
-command = "opencode"
+command = "opencode --session {session_id}"
 session_dir = "~/.local/share/opencode"
 
 [resume.agents.goose]

@@ -47,6 +47,10 @@ enum SearchMode {
   SEARCH_MODE_AUTO = 0;
   SEARCH_MODE_NATURAL = 1;
   SEARCH_MODE_CODE = 2;
+  SEARCH_MODE_EXACT = 3;
+  SEARCH_MODE_NEEDLE = 4;
+  SEARCH_MODE_REGEX = 5;
+  SEARCH_MODE_RECENT = 6;
 }
 
 message SearchRequest {
@@ -62,6 +66,9 @@ message SearchRequest {
   string model = 10;               // Filter by conversation model
   string harness = 11;             // Filter by agent harness ("pi", "claude", etc.)
   string tag = 12;                 // Filter by conversation tag
+  bool raw = 13;                   // Explicit lossless internal transport
+  uint32 max_chars = 14;           // 0 = default 3000
+  uint32 snippet_chars = 15;       // 0 = default 300
 }
 
 message SearchHit {
@@ -83,10 +90,13 @@ message SearchHit {
   string source_path = 16;
   string host = 17;
   string readable_id = 18;
+  string provenance_json = 19;
+  optional uint64 match_position = 20;
 }
 
 message SearchResponse {
-  repeated SearchHit hits = 1;
+  repeated SearchHit hits = 1; // Populated only with raw=true
+  string envelope_json = 2;   // Budgeted by default, lossless report with raw=true
 }
 
 // ============================================================================

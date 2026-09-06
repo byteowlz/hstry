@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-09-06
+
+### Added
+
+- Exact/needle/regex recall with bounded evidence, stable anchors, and explicit scope/completeness reporting.
+- Shared bounded reads across CLI, HTTP, MCP, and SSH, including field continuations and linked tool interactions.
+- Installable retrieval skill and opt-in content-free search diagnostics.
+
+### Changed
+
+- Search JSON now returns a report object; upgrade service/API/remote binaries together. `show` is bounded by default; use `--full` for legacy output.
+- Resume uses structured arguments, fresh conversion identities, origin sidecars, and no-overwrite placement. JSON returns a non-executing plan; converted launches require `--allow-unverified`.
+
+### Fixed
+
+- TUI compilation with remote search reports and OpenCode conversion layout/session IDs.
+
 ## [0.5.16] - 2026-04-26
 
 ### Changed

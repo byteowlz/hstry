@@ -1,220 +1,100 @@
 # hstry
 
-Universal AI chat history database. Aggregates conversations from multiple AI tools (ChatGPT, Claude, Gemini, Cursor, Claude Code, etc.) into a single searchable SQLite database.
-
-## Features
-
-- Import chat history from multiple sources via pluggable TypeScript adapters
-- One-off imports from files or directories with auto-detection
-- Full-text search with separate indexes for natural language and code
-- Filter by source, workspace, role, and local/remote scope
-- Remote sync and search over SSH
-- Background service for automatic syncing
-- Optional terminal UI (`hstry-tui`) for interactive browsing
-- Incremental adapter parsing with cursor-based batching
-- Export conversations to adapter formats (markdown/json, pi, opencode, codex, claude-code, etc.)
-- Resume past sessions in any coding agent with cross-format conversion
-- Deduplicate conversations and export memories to mmry
-- JSON output for scripting and MCP integration
+One searchable SQLite database for your AI chat history. Imports conversations from coding agents (Claude Code, Codex, Pi, Cursor, Aider, ...) and web apps (ChatGPT, Claude, Gemini, Perplexity), with full-text search, export, and cross-agent session resume.
 
 ## Installation
 
-### Homebrew (macOS and Linux)
-
 ```bash
+# Homebrew (macOS and Linux)
 brew tap byteowlz/tap
 brew install hstry
-```
 
-### Arch Linux (AUR)
-
-```bash
-# Using yay (recommended)
+# Arch Linux
 yay -S hstry
 
-# Using paru
-paru -S hstry
-
-# Using makepkg (manual)
-git clone https://aur.archlinux.org/hstry.git
-cd hstry
-makepkg -si
-```
-
-### Cargo
-
-```bash
+# Cargo
 cargo install --path crates/hstry-cli
+
+# Optional binaries
+cargo install --path .        # all binaries (CLI, TUI, MCP, API)
+cargo install --path crates/hstry-tui
 ```
 
-### Pre-built Binaries
+Pre-built binaries for Linux (x86_64/ARM64) and macOS (Intel/Apple Silicon) are on the [Releases](https://github.com/byteowlz/hstry/releases) page.
 
-Download pre-built binaries from the [GitHub Releases](https://github.com/byteowlz/hstry/releases) page.
-
-Available platforms:
-- Linux x86_64 and ARM64
-- macOS Intel and Apple Silicon
-
-### Build from Source
+## Quick start
 
 ```bash
-git clone https://github.com/byteowlz/hstry.git
-cd hstry
-cargo build --release --workspace
-```
+hstry quickstart                      # scan known paths, add sources, sync
 
-To install all binaries (CLI, TUI, MCP):
-```bash
-cargo install --path .
-```
+hstry source add ~/.codex/sessions    # add a source (adapter auto-detected)
+hstry sync --parallel 2               # import from all sources
+hstry import ~/Downloads/chatgpt-export  # one-off import
 
-## Quick Start
-
-```bash
-# Quickstart: scan, add sources, and sync
-hstry quickstart
-
-# Install Playwright browsers (web automation)
-hstry web install
-
-# Login to a web provider (headful for first login)
-hstry web login chatgpt
-
-# Sync web providers (uses saved sessions)
-hstry web sync --provider chatgpt
-
-# Note: web sync currently supports ChatGPT (including multiple workspaces).
-# Claude and Gemini sync support is planned.
-
-# Scan for supported chat history sources
-hstry scan
-
-# Add a source (auto-detects adapter)
-hstry source add ~/.codex/sessions
-
-# Sync all sources
-hstry sync
-
-# Control sync concurrency
-hstry sync --parallel 2
-
-# Import a one-off export directory
-hstry import ~/Downloads/chatgpt-export
-
-# Search your history
-hstry search "how to parse JSON"
-
-# List recent conversations
-hstry list --limit 10
-
-# View a specific conversation
+hstry search "how to parse JSON"      # full-text search
+hstry list --limit 10                 # recent conversations
 hstry show <conversation-id>
 
-# Export a conversation to markdown
-hstry export --format markdown --conversations <conversation-id> --output ./conversation.md
-
-# Resume a past session in your preferred coding agent
-hstry resume --search "JSON parser" --agent pi
-
-# Resume with time filter
-hstry resume --after "yesterday" --workspace myproject
-
-# Browse recent and pick interactively
-hstry resume --limit 10
+hstry resume --search "JSON parser" --agent pi   # reopen a session in any agent
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `quickstart` | Scan known paths, add sources, and sync everything |
-| `web install` | Install Playwright browsers for web automation |
-| `web login` | Login to a web provider and store session state |
-| `web sync` | Sync web providers and import chats |
-| `web status` | Show web login and sync status |
-| `scan` | Detect chat history sources on the system |
-| `sync` | Import conversations from all configured sources in parallel (resets cursor if source is empty) |
+| `quickstart` | Scan known paths, add sources, sync |
+| `sync` | Import from all configured sources in parallel |
 | `import <path>` | One-off import with auto-detected adapter |
-| `search <query>` | Full-text search across all messages |
+| `scan` | Detect chat history sources on this system |
+| `search <query>` | Full-text search across messages |
 | `index` | Build or refresh the search index |
-| `list` | List conversations with optional filters (workspace uses substring match) |
-| `show <id>` | Display a conversation with all messages |
-| `export` | Export conversations to markdown/json or adapter format |
-| `resume` | Resume a past session in a coding agent (pi, claude-code, codex, etc.) |
-| `dedup` | Deduplicate conversations in the database |
+| `list` | List conversations with filters |
+| `show <id>` / `read` / `peek` | Display a conversation (bounded pages) |
+| `remove <id>` | Remove a conversation and related data |
+| `export` | Export to markdown/json or an adapter format |
+| `resume` | Resume a session in a coding agent |
+| `dedup` | Deduplicate conversations |
+| `reseed` / `verify` | Rebuild a source from scratch / check DB vs disk |
 | `source add/list/remove` | Manage import sources |
-| `adapters list/add/enable/disable` | Manage adapters |
-| `adapters repo ...` | Manage adapter repositories (git/archive/local) |
-| `remote add/list/remove/test/fetch/sync/status` | Manage remote hosts and sync |
-
-Adapter installs are version-pinned to the hstry binary. Run `hstry adapters update`
-whenever you upgrade, and the CLI will refuse to sync if adapter manifests do not
-match the current hstry version.
-| `service enable/disable/start/run/restart/stop/status` | Control background sync service |
-| `config show/path/edit` | Manage configuration |
-| `stats` | Show database statistics |
+| `adapters list/add/repo/update` | Manage adapters and adapter repositories |
+| `remote add/test/fetch/sync` | Sync and search remote hosts over SSH |
+| `web install/login/sync/status` | Playwright-based web automation |
+| `service enable/start/status` | Background sync service + local search API |
+| `config show/path/edit` | Configuration management |
+| `stats` | Database statistics |
+| `skill install/status/update` | Install the bundled agent retrieval skill |
 | `mmry extract` | Export memories to mmry |
 
-## Search Modes
+Adapter installs are version-pinned to the hstry binary. Run `hstry adapters update` after upgrading; sync refuses to run if adapter manifests do not match.
 
-The search command auto-detects query type:
+## Browser extension
 
-- **Natural language**: Uses porter stemming for English text
-- **Code**: Preserves underscores, dots, and path separators
-
-Force a mode with `--mode natural` or `--mode code`.
-
-Scope and filters:
-
-- `--scope local|remote|all` (default: local)
-- `--remote <name>` to target specific remotes
-- `--source`, `--workspace`, `--role` filters
-- `--no-tools` to exclude tool calls
-- `--dedup` to collapse similar results
-- `--include-system` to include system context (AGENTS.md, etc.)
-
-## Session Resume
-
-The `resume` command opens a past session in your preferred coding agent. It handles
-cross-agent format conversion automatically -- a Codex session can be resumed in pi,
-a Claude Code session in Codex, etc.
+`extension/` contains **hstry sync**, a Chrome MV3 extension that background-syncs conversations from ChatGPT, Claude, Gemini, and Perplexity into your local database. It POSTs new conversations to a running `hstry-api` instance (`http://127.0.0.1:3000/ingest`, token-authenticated).
 
 ```bash
-# Direct resume by conversation ID
-hstry resume <conversation-id>
-
-# Search for a session
-hstry resume --search "async runtime refactor"
-
-# Browse recent sessions and pick interactively
-hstry resume --limit 10
-
-# Filter by time
-hstry resume --after "yesterday"
-hstry resume --after "2 days ago" --before "today"
-hstry resume --after "2026-02-01" --before "2026-03-01"
-
-# Filter by source or workspace
-hstry resume --source codex-main --workspace myproject
-
-# Target a specific agent (overrides default_agent from config)
-hstry resume --search "refactor" --agent claude-code
-
-# Dry run (show what would happen without writing or launching)
-hstry resume --dry-run --search "query"
-
-# JSON output for automation
-hstry resume --json --search "query"
+hstry-api --port 3000   # start the API, optionally with --token <secret>
 ```
 
-**How it works:**
+Load it from `chrome://extensions` with Developer mode enabled (Load unpacked, select `extension/`). Provider toggles, port, and token are configured on the extension's options page. The `hstry web` Playwright commands are the headless alternative to the extension.
 
-1. If the session already belongs to the target agent and the original file exists on disk, it launches directly (zero conversion overhead).
-2. Otherwise, it exports the session via the target adapter, places the converted file in the agent's native session directory, and launches the agent.
+## Search
 
-**Time filter formats:** ISO dates (`2026-03-01`), relative dates (`yesterday`, `today`, `last week`, `last month`), duration expressions (`2 days ago`, `3 weeks ago`, `1 month ago`).
+The query type is auto-detected: natural-language queries use porter stemming, code queries preserve underscores, dots, and path separators. Force with `--mode natural|code`.
 
-Configure the default agent and per-agent launch commands in `config.toml`:
+Useful flags: `--scope local|remote|all`, `--remote <name>`, `--source`, `--workspace`, `--role`, `--no-tools`, `--dedup`, `--json`.
+
+## Session resume
+
+`resume` reopens a past session in any supported agent, converting formats when needed (a Codex session can resume in Claude Code and vice versa).
+
+```bash
+hstry resume <conversation-id>
+hstry resume --search "async runtime refactor" --agent claude-code
+hstry resume --after "2 days ago" --workspace myproject
+hstry resume --limit 10                # browse and pick interactively
+```
+
+Time filters accept ISO dates, relative dates (`yesterday`, `last week`), and durations (`3 weeks ago`). Defaults come from config:
 
 ```toml
 [resume]
@@ -224,30 +104,68 @@ default_agent = "pi"
 format = "pi"
 command = "pi --session {session_path}"
 session_dir = "~/.pi/agent/sessions"
-
-[resume.agents.claude-code]
-format = "claude-code"
-command = "claude --resume {session_id}"
-session_dir = "~/.claude/projects"
 ```
 
-Command templates support these placeholders: `{session_path}`, `{session_id}`, `{workspace}`.
+Placeholders: `{session_path}`, `{session_id}`, `{workspace}`.
+
+## Remote sync
+
+Sync and search other machines' databases over SSH. Remotes need `hstry` installed.
+
+```bash
+hstry remote add laptop user@laptop
+hstry remote test laptop
+hstry remote fetch --remote laptop
+hstry search "auth error" --scope remote --remote laptop
+hstry remote sync --remote laptop --direction pull
+```
+
+See [docs/remote-sync.md](docs/remote-sync.md) for device namespaces and concurrency guidance.
+
+## Service and API
+
+`hstry service` runs a daemon that keeps the search index warm and exposes a local-only gRPC search endpoint; the CLI prefers it when running. `hstry-api` serves a local HTTP API (default `127.0.0.1:3000`) for external integrations, including the browser extension.
+
+Environment overrides: `HSTRY_NO_SERVICE=1`, `HSTRY_API_URL`, `HSTRY_NO_API=1`.
+
+## Supported sources
+
+### Local agents
+
+| Adapter | Default path |
+|---------|--------------|
+| `claude-code` | `~/.claude/projects` |
+| `codex` | `~/.codex/sessions` |
+| `cursor` | Cursor `workspaceStorage` (state.vscdb) |
+| `opencode` | `~/.local/share/opencode` |
+| `pi` | `~/.pi/agent/sessions` |
+| `gemini-cli` | `~/.gemini/tmp` |
+| `workbuddy` | `~/.workbuddy/projects` |
+| `aider` | `.aider.chat.history.md` in project directories |
+| `goose` | `~/.local/share/goose/sessions` |
+| `jan` | `~/jan/threads` |
+| `lmstudio` | `~/.cache/lm-studio/conversations` |
+| `openwebui` | `~/.open-webui/data` |
+
+### Web
+
+- **Browser extension** (`extension/`): ChatGPT, Claude, Gemini, Perplexity
+- **Manual exports**: `chatgpt` (Settings > Data controls > Export), `claude-web` (Settings > Export data), `gemini` (Google Takeout)
+
+## Adapters
+
+Adapters are TypeScript modules that implement `detect(path)` and `parse(path, options)`. They run via Bun/Deno/Node and are loaded from `adapter_paths`. Repositories (git, archive, local) can be managed with `hstry adapters repo`.
+
+```bash
+hstry adapters repo add-git community https://example.com/adapters.git
+hstry adapters update
+```
 
 ## Configuration
 
-hstry follows XDG Base Directory specifications:
-
-| Directory | Default | Environment Override |
-|-----------|---------|---------------------|
-| Config | `~/.config/hstry/` | `$XDG_CONFIG_HOME/hstry/` |
-| Data | `~/.local/share/hstry/` | `$XDG_DATA_HOME/hstry/` |
-| State | `~/.local/state/hstry/` | `$XDG_STATE_HOME/hstry/` |
-
-Default config: `~/.config/hstry/config.toml`
+XDG paths: config in `~/.config/hstry/`, data in `~/.local/share/hstry/`, state in `~/.local/state/hstry/` (overridable via `XDG_*`). Default config is `~/.config/hstry/config.toml`:
 
 ```toml
-"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/hstry/hstry.config.schema.json"
-
 database = "~/.local/share/hstry/hstry.db"
 adapter_paths = ["~/.config/hstry/adapters"]
 js_runtime = "auto"  # bun, deno, or node
@@ -259,152 +177,25 @@ enabled = true
 [service]
 enabled = false
 poll_interval_secs = 30
-search_api = true
-
-[search]
-index_batch_size = 500
 
 [resume]
 default_agent = "pi"
-
-[resume.agents.pi]
-format = "pi"
-command = "pi --session {session_path}"
-session_dir = "~/.pi/agent/sessions"
 ```
 
-See `examples/config.toml` for all options. Use `hstry config show/path/edit` for config management.
-
-## Service + API
-
-`hstry service` runs a local daemon that keeps the search index warm and exposes a
-local-only gRPC search endpoint. The CLI prefers the service when it is running.
-Use `hstry service enable/disable/start/run/restart/stop/status` to manage it.
-
-The optional `hstry-api` binary serves a local HTTP API (default `http://127.0.0.1:3000`)
-for external integrations (e.g., Octo).
-
-Override service usage with `HSTRY_NO_SERVICE=1`. Override the API URL with
-`HSTRY_API_URL` or disable API usage with `HSTRY_NO_API=1`.
-
-## Remote Sync
-
-hstry can sync and search remote databases over SSH. Remotes require `hstry` to
-be installed on the host.
-
-```bash
-# Add a remote host
-hstry remote add laptop user@laptop
-
-# Verify connectivity
-hstry remote test laptop
-
-# Fetch the remote database into the local cache
-hstry remote fetch --remote laptop
-
-# Search only remote results
-hstry search "auth error" --scope remote --remote laptop
-
-# Sync (merge) remote history into the local database
-hstry remote sync --remote laptop --direction pull
-```
-
-See [Remote sync](docs/remote-sync.md) for device namespaces, hub safety checks, and concurrency guidance.
-
-## Terminal UI
-
-Use the optional `hstry-tui` binary for an interactive, three-pane browser.
-
-```bash
-cargo install --path crates/hstry-tui
-hstry-tui
-```
-
-## Supported Sources
-
-### Local Agents & Apps (automatic local storage)
-
-| Adapter | Default Path | Description |
-|---------|--------------|-------------|
-| `claude-code` | `~/.claude/projects` | Claude Code CLI |
-| `codex` | `~/.codex/sessions` | OpenAI Codex CLI |
-| `cursor` | `Cursor workspaceStorage` (platform-specific) | Cursor (state.vscdb) |
-| `opencode` | `~/.local/share/opencode` | OpenCode |
-| `pi` | `~/.pi/agent/sessions` | Pi coding agent |
-| `gemini-cli` | `~/.gemini/tmp` | Gemini CLI sessions |
-| `workbuddy` | `~/.workbuddy/projects` | WorkBuddy project sessions |
-| `aider` | Project directories | Aider (finds `.aider.chat.history.md`) |
-| `goose` | `~/.local/share/goose/sessions` | Goose (SQLite/JSONL) |
-| `jan` | `~/jan/threads` | Jan.ai |
-| `lmstudio` | `~/.cache/lm-studio/conversations` | LM Studio |
-| `openwebui` | `~/.open-webui/data` (or `/app/backend/data`) | Open WebUI |
-
-### Web Exports (manual download)
-
-| Adapter | Source | Export Location |
-|---------|--------|-----------------|
-| `chatgpt` | ChatGPT | Settings > Data controls > Export |
-| `claude-web` | Claude.ai | Settings > Export data |
-| `gemini` | Gemini | google.com/takeout > Gemini Apps |
-
-Point these adapters at the extracted export directory (e.g., `~/Downloads/chatgpt-export`).
-
-## Adapters
-
-Adapters are TypeScript modules that parse chat history from specific tools. Each adapter implements:
-
-- `detect(path)` - Check if a path contains valid data
-- `parse(path, options)` - Extract conversations and messages
-
-Add custom adapters by placing them in `adapter_paths`, or manage repositories with:
-
-```bash
-hstry adapters repo add-git community https://example.com/adapters.git
-hstry adapters update
-```
-
-## Workspace Structure
-
-```
-crates/
-  hstry-core/     # Database, config, models
-  hstry-runtime/  # TypeScript adapter execution
-  hstry-cli/      # Command-line interface
-  hstry-tui/      # Terminal UI (ratatui)
-  hstry-mcp/      # MCP server
-  hstry-api/      # HTTP API (axum)
-```
+See `examples/config.toml` for all options.
 
 ## Development
 
 ```bash
-just check-all       # Format, lint, and test
-just test            # Run tests only
-just clippy          # Lint only
-just update-adapters # Copy latest adapters to ~/.config/hstry/adapters
+just check-all        # format, lint, test
+just update-adapters  # copy adapters to ~/.config/hstry/adapters
 ```
 
-## Contributing
-
-Contributions are welcome! Please see [docs/RELEASE.md](docs/RELEASE.md) for information about the release process.
-
-## Release Notes
-
-See [CHANGELOG.md](CHANGELOG.md) for the full list of changes.
-
-## Release Process
-
-The release process is fully automated via GitHub Actions:
-
-1. **GitHub Releases**: Automatic builds for Linux (x86_64/ARM64) and macOS (Intel/Apple Silicon)
-2. **Homebrew**: Automatic formula updates in `byteowlz/homebrew-tap`
-3. **AUR**: Automatic PKGBUILD updates
-
-See [docs/RELEASE.md](docs/RELEASE.md) for detailed release instructions.
+Workspace layout: `hstry-core` (database, config, models), `hstry-runtime` (adapter execution), `hstry-cli`, `hstry-tui` (ratatui), `hstry-mcp`, `hstry-api` (axum). Releases are automated via GitHub Actions; see [docs/RELEASE.md](docs/RELEASE.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Attribution
 
-This project is inspired by and references ideas from **cross-agent-session-search (cass)** by Jeffrey Emanuel. Source: https://github.com/Dicklesworthstone/coding_agent_session_search (MIT License).
+Inspired by [cross-agent-session-search (cass)](https://github.com/Dicklesworthstone/coding_agent_session_search) by Jeffrey Emanuel (MIT).
 
 ## License
 

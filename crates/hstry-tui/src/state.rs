@@ -192,6 +192,8 @@ pub struct App {
     pub chat_images: Vec<ImageEntry>,
     pub chat_scroll: usize,
     pub chat_height: u16,
+    /// Content width the chat lines were wrapped for; 0 = unwrapped.
+    pub chat_wrap_width: usize,
 
     // Layout feedback (for mouse routing)
     pub sidebar_area: Rect,
@@ -242,6 +244,7 @@ impl App {
             chat_images: Vec::new(),
             chat_scroll: 0,
             chat_height: 0,
+            chat_wrap_width: 0,
             sidebar_area: Rect::default(),
             chat_area: Rect::default(),
             status: None,
@@ -642,16 +645,29 @@ impl App {
         }
     }
 
-    fn after_messages_loaded(&mut self) {
+    /// Re-render chat lines for the current wrap width (e.g. after a resize).
+    pub fn rebuild_chat_lines(&mut self) {
         let highlight = if self.show_search_results {
             self.last_search_query.clone()
         } else {
             None
         };
-        let (lines, images) =
-            crate::ui::chat::build_chat_lines(&self.messages, highlight.as_deref());
+        let (lines, images) = crate::ui::chat::build_chat_lines(
+            &self.messages,
+            highlight.as_deref(),
+            self.chat_wrap_width,
+        );
         self.chat_lines = lines;
         self.chat_images = images;
+    }
+
+    fn after_messages_loaded(&mut self) {
+        self.rebuild_chat_lines();
+        let highlight = if self.show_search_results {
+            self.last_search_query.clone()
+        } else {
+            None
+        };
         self.chat_scroll = highlight
             .as_deref()
             .and_then(|q| first_match_line(&self.chat_lines, q))

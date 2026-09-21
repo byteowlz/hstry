@@ -39,23 +39,25 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let width = inner.width as usize;
+    // One column is taken by the selection gutter.
+    let width = (inner.width as usize).saturating_sub(1);
     let items: Vec<ListItem> = app
         .rows
         .iter()
         .map(|row| render_row(app, row, width))
         .collect();
 
+    // Bar fill plus an accent gutter: stays visible even when the terminal's
+    // black equals its background.
     let highlight = if active {
-        Style::default()
-            .bg(THEME.color(Token::Bar))
-            .add_modifier(Modifier::BOLD)
+        THEME.on_bar(Token::Accent).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(THEME.color(Token::Bar))
+        THEME.on_bar(Token::Primary).add_modifier(Modifier::BOLD)
     };
 
     let list = List::new(items)
         .highlight_style(highlight)
+        .highlight_symbol("▎")
         .scroll_padding(2);
     let mut state = ListState::default().with_selected(Some(app.cursor));
     f.render_stateful_widget(list, inner, &mut state);
@@ -91,33 +93,53 @@ fn render_row(app: &App, row: &Row, width: usize) -> ListItem<'static> {
             let adapter = app.adapter_of(&conv.source_id);
 
             let mark_span = if marked {
-                Span::styled("▎", THEME.fg_bold(Token::Warn))
+                Span::styled("✓", THEME.fg_bold(Token::Warn))
             } else {
                 Span::raw(" ")
             };
-            let dot = Span::styled("● ", Style::default().fg(adapter_color(adapter)));
+            // The harness is already named by the group header when grouping by
+            // agent; elsewhere a colored dot identifies it.
+            let show_dot = !matches!(app.group_by, GroupBy::Agent | GroupBy::AgentRepo);
+            let dot = if show_dot {
+                Span::styled("● ", Style::default().fg(adapter_color(adapter)))
+            } else {
+                Span::raw("")
+            };
 
             let time = relative_time(conv.updated_at.unwrap_or(conv.created_at));
             let show_repo = matches!(app.group_by, GroupBy::Flat | GroupBy::Agent | GroupBy::Date);
-            let mut meta = time;
-            if show_repo && let Some(ws) = conv.workspace.as_deref() {
-                meta = format!("{meta} · {}", crate::state::shorten_workspace(ws));
-            }
+            let repo = if show_repo {
+                conv.workspace.as_deref().map(|ws| {
+                    let short = crate::state::shorten_workspace(ws);
+                    truncate_str(short.rsplit('/').next().unwrap_or(&short), 14)
+                })
+            } else {
+                None
+            };
 
-            let overhead = indent.len() + 3 + meta.chars().count() + 2;
-            let title_w = width.saturating_sub(overhead).max(8);
+            let prefix_w = 1 + indent.len() + if show_dot { 2 } else { 0 };
+            let repo_w = repo.as_ref().map_or(0, |r| r.chars().count() + 2);
+            let time_w = time.chars().count() + 2;
+            let title_w = width.saturating_sub(prefix_w + repo_w + time_w).max(8);
             let title = truncate_str(
                 conv.title.as_deref().unwrap_or("(untitled)").trim(),
                 title_w,
             );
+            let used = prefix_w + title.chars().count() + repo_w + time_w;
+            let pad = " ".repeat(width.saturating_sub(used));
 
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 mark_span,
                 Span::raw(indent),
                 dot,
                 Span::styled(title, THEME.fg(Token::Primary)),
-                Span::styled(format!("  {meta}"), THEME.fg(Token::Muted)),
-            ]))
+            ];
+            spans.push(Span::raw(pad));
+            if let Some(repo) = repo {
+                spans.push(Span::styled(format!("  {repo}"), THEME.fg(Token::Muted)));
+            }
+            spans.push(Span::styled(format!("  {time}"), THEME.fg(Token::Muted)));
+            ListItem::new(Line::from(spans))
         }
         Row::Hit { idx } => {
             let hit = &app.search_results[*idx];

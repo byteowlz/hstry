@@ -53,6 +53,7 @@ clap_complete = "4.5"
 
 # TUI
 ratatui = "0.30"
+unicode-width = "0.2"
 crossterm = "0.29"
 pulldown-cmark = "0.13"
 ratatui-image = { version = "11.0", default-features = false, features = ["crossterm"] }

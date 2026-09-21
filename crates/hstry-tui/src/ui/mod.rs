@@ -33,12 +33,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let sidebar_w = (u32::from(chunks[1].width) * 34 / 100).clamp(28, 46) as u16;
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(sidebar_w), Constraint::Min(0)])
+            .constraints([
+                Constraint::Length(sidebar_w),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
             .split(chunks[1]);
         app.sidebar_area = body[0];
-        app.chat_area = body[1];
+        app.chat_area = body[2];
         sidebar::draw(f, app, body[0]);
-        chat::draw(f, app, body[1]);
+        chat::draw(f, app, body[2]);
     } else {
         app.sidebar_area = Rect::default();
         app.chat_area = chunks[1];

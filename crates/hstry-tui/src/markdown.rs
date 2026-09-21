@@ -17,10 +17,12 @@ pub fn render_markdown(
     role: &MessageRole,
     highlight: Option<&str>,
 ) -> Vec<Line<'static>> {
-    if *role == MessageRole::Tool
-        && let Some(lines) = try_format_tool_output(content)
-    {
-        return lines;
+    if *role == MessageRole::Tool {
+        if let Some(lines) = try_format_tool_output(content) {
+            return lines;
+        }
+        // Tool output is not prose: keep line breaks instead of reflowing.
+        return render_verbatim(content, 40);
     }
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -177,6 +179,23 @@ pub fn render_markdown(
     } else {
         lines
     }
+}
+
+/// Render text line-for-line, capped at `max_lines` with a muted overflow note.
+fn render_verbatim(content: &str, max_lines: usize) -> Vec<Line<'static>> {
+    let all: Vec<&str> = content.lines().collect();
+    let mut lines: Vec<Line<'static>> = all
+        .iter()
+        .take(max_lines)
+        .map(|l| Line::from(Span::styled(l.to_string(), THEME.fg(Token::Primary))))
+        .collect();
+    if all.len() > max_lines {
+        lines.push(
+            Line::from(format!("… ({} more lines)", all.len() - max_lines))
+                .fg(THEME.color(Token::Muted)),
+        );
+    }
+    lines
 }
 
 fn current_style(stack: &[Style]) -> Style {

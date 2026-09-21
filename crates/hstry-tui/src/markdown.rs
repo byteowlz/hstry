@@ -8,6 +8,9 @@ use ratatui::{
 
 use hstry_core::models::MessageRole;
 
+use crate::theme::Token;
+use crate::ui::THEME;
+
 /// Render markdown content to styled ratatui Lines.
 pub fn render_markdown(
     content: &str,
@@ -64,10 +67,7 @@ pub fn render_markdown(
                 Tag::Item => {
                     flush_line(&mut lines, &mut current_spans);
                     let indent = "  ".repeat(list_depth.saturating_sub(1));
-                    current_spans.push(Span::styled(
-                        format!("{indent}• "),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+                    current_spans.push(Span::styled(format!("{indent}• "), THEME.fg(Token::Muted)));
                 }
                 Tag::Emphasis => {
                     let style = current_style(&style_stack).add_modifier(Modifier::ITALIC);
@@ -90,9 +90,9 @@ pub fn render_markdown(
                 }
                 Tag::BlockQuote(_) => {
                     flush_line(&mut lines, &mut current_spans);
-                    let style = Style::default().fg(Color::DarkGray);
+                    let style = THEME.fg(Token::Muted);
                     style_stack.push(style);
-                    current_spans.push(Span::styled("▎ ", Style::default().fg(Color::DarkGray)));
+                    current_spans.push(Span::styled("▎ ", THEME.fg(Token::Muted)));
                 }
                 _ => {}
             },
@@ -140,10 +140,8 @@ pub fn render_markdown(
                     let style = current_style(&style_stack);
                     if in_heading && current_spans.is_empty() {
                         let prefix = "#".repeat(heading_level);
-                        current_spans.push(Span::styled(
-                            format!("{prefix} "),
-                            Style::default().fg(Color::DarkGray),
-                        ));
+                        current_spans
+                            .push(Span::styled(format!("{prefix} "), THEME.fg(Token::Muted)));
                     }
                     current_spans.push(Span::styled(text.to_string(), style));
                 }
@@ -162,7 +160,7 @@ pub fn render_markdown(
             }
             MdEvent::Rule => {
                 flush_line(&mut lines, &mut current_spans);
-                lines.push(Line::from("─".repeat(24)).fg(Color::DarkGray));
+                lines.push(Line::from("─".repeat(24)).fg(THEME.color(Token::Muted)));
             }
             _ => {}
         }
@@ -198,18 +196,15 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[S
     let gutter = Span::styled(" ", Style::default().bg(Color::Black));
 
     lines.push(Line::from(vec![
-        Span::styled("╭ ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            display_lang.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled("╭ ", THEME.fg(Token::Muted)),
+        Span::styled(display_lang.to_string(), THEME.fg(Token::Muted)),
         Span::styled(
             if collapsed {
                 format!(" · {} lines", code_lines.len())
             } else {
                 String::new()
             },
-            Style::default().fg(Color::DarkGray),
+            THEME.fg(Token::Muted),
         ),
     ]));
 
@@ -220,21 +215,18 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, lang: &str, code_lines: &[S
     };
     for line in shown {
         lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", THEME.fg(Token::Muted)),
             gutter.clone(),
             Span::styled(line.clone(), code_style),
         ]));
     }
     if collapsed {
         lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("…", Style::default().fg(Color::DarkGray)),
+            Span::styled("│ ", THEME.fg(Token::Muted)),
+            Span::styled("…", THEME.fg(Token::Muted)),
         ]));
     }
-    lines.push(Line::from(Span::styled(
-        "╰",
-        Style::default().fg(Color::DarkGray),
-    )));
+    lines.push(Line::from(Span::styled("╰", THEME.fg(Token::Muted))));
 }
 
 pub fn truncate_str(s: &str, max: usize) -> String {
@@ -345,11 +337,12 @@ fn try_parse_tool_json(content: &str) -> Option<Vec<Line<'static>>> {
 
             if !files.is_empty() {
                 for f in files.iter().take(5) {
-                    lines.push(Line::from(format!("  {f}")).fg(Color::DarkGray));
+                    lines.push(Line::from(format!("  {f}")).fg(THEME.color(Token::Muted)));
                 }
                 if files.len() > 5 {
                     lines.push(
-                        Line::from(format!("  … and {} more", files.len() - 5)).fg(Color::DarkGray),
+                        Line::from(format!("  … and {} more", files.len() - 5))
+                            .fg(THEME.color(Token::Muted)),
                     );
                 }
             }
@@ -357,7 +350,7 @@ fn try_parse_tool_json(content: &str) -> Option<Vec<Line<'static>>> {
             let output_lines = render_markdown(output, &MessageRole::Tool, None);
             if output_lines.len() > 25 {
                 lines.extend(output_lines.into_iter().take(20));
-                lines.push(Line::from("… (truncated)").fg(Color::DarkGray));
+                lines.push(Line::from("… (truncated)").fg(THEME.color(Token::Muted)));
             } else {
                 lines.extend(output_lines);
             }
@@ -418,10 +411,12 @@ fn format_exit_code_output(content: &str) -> Vec<Line<'static>> {
     if looks_like_file_listing_lines(&output) {
         let total = output.len();
         for f in output.iter().take(8) {
-            lines.push(Line::from(format!("  {}", shorten_path(f))).fg(Color::DarkGray));
+            lines.push(Line::from(format!("  {}", shorten_path(f))).fg(THEME.color(Token::Muted)));
         }
         if total > 8 {
-            lines.push(Line::from(format!("  … and {} more", total - 8)).fg(Color::DarkGray));
+            lines.push(
+                Line::from(format!("  … and {} more", total - 8)).fg(THEME.color(Token::Muted)),
+            );
         }
     } else {
         for line in output.iter().take(20) {
@@ -429,7 +424,8 @@ fn format_exit_code_output(content: &str) -> Vec<Line<'static>> {
         }
         if output.len() > 20 {
             lines.push(
-                Line::from(format!("… ({} more lines)", output.len() - 20)).fg(Color::DarkGray),
+                Line::from(format!("… ({} more lines)", output.len() - 20))
+                    .fg(THEME.color(Token::Muted)),
             );
         }
     }
@@ -482,11 +478,11 @@ fn format_file_listing(content: &str) -> Vec<Line<'static>> {
     lines.push(Line::from(format!("Files ({total}):")).fg(Color::Cyan));
     for f in file_lines.iter().take(8) {
         let short = shorten_path(f);
-        lines.push(Line::from(format!("  {short}")).fg(Color::DarkGray));
+        lines.push(Line::from(format!("  {short}")).fg(THEME.color(Token::Muted)));
     }
     if total > 8 {
         let remaining = total - 8;
-        lines.push(Line::from(format!("  … and {remaining} more")).fg(Color::DarkGray));
+        lines.push(Line::from(format!("  … and {remaining} more")).fg(THEME.color(Token::Muted)));
     }
 
     lines

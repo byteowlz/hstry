@@ -29,7 +29,7 @@ impl Theme {
     pub const fn color(self, token: Token) -> Color {
         match token {
             Token::Primary => Color::Reset,
-            Token::Muted => Color::DarkGray,
+            Token::Muted => Color::Gray,
             Token::Accent => Color::Blue,
             Token::Bar => Color::Black,
             Token::Success => Color::Green,

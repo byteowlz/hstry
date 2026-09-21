@@ -274,6 +274,7 @@ fn draw_help(f: &mut Frame, scroll: usize) {
         key("Ctrl-R", "resume in default agent"),
         key("R", "resume with agent picker"),
         key("i", "view images (kitty/sixel graphics)"),
+        key("y", "copy session to clipboard as markdown"),
         key("Space", "mark session (on a group: mark all)"),
         key("Ctrl-A / V", "mark all / clear marks"),
         key("d", "delete marked or current (on agent group: source)"),

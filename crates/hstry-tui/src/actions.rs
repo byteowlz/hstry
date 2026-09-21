@@ -25,6 +25,7 @@ pub enum ActionId {
     Resume,
     ResumeWith,
     OpenImages,
+    CopySession,
     MarkAll,
     ClearMarks,
 }
@@ -126,6 +127,11 @@ pub const ACTIONS: &[Action] = &[
         id: ActionId::OpenImages,
         label: "View images in conversation",
         keys: "i",
+    },
+    Action {
+        id: ActionId::CopySession,
+        label: "Copy session to clipboard (markdown)",
+        keys: "y",
     },
     Action {
         id: ActionId::MarkAll,

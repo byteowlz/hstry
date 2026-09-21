@@ -3,6 +3,7 @@
 //! hstry TUI: read past agent sessions fast, jump back in with a coding agent.
 
 mod actions;
+mod clipboard;
 mod images;
 mod markdown;
 mod state;
@@ -252,6 +253,7 @@ fn handle_normal(app: &mut App, key: &KeyEvent, rt: &tokio::runtime::Runtime) ->
         KeyCode::Char('r') => return run_action(app, ActionId::Refresh, rt),
         KeyCode::Char('R') => return run_action(app, ActionId::ResumeWith, rt),
         KeyCode::Char('i') => return run_action(app, ActionId::OpenImages, rt),
+        KeyCode::Char('y') => return run_action(app, ActionId::CopySession, rt),
         KeyCode::Char('d') => return run_action(app, ActionId::Delete, rt),
         KeyCode::Char('V') => return run_action(app, ActionId::ClearMarks, rt),
         KeyCode::Tab => return run_action(app, ActionId::ToggleSidebar, rt),
@@ -537,6 +539,23 @@ fn run_action(app: &mut App, action: ActionId, rt: &tokio::runtime::Runtime) -> 
                 }
             } else {
                 app.set_status("No session selected");
+            }
+        }
+        ActionId::CopySession => {
+            if app.cursor_conversation_id().is_none() {
+                app.set_status("No session selected");
+            } else {
+                if app.messages.is_empty() {
+                    app.load_messages(rt);
+                }
+                let md = clipboard::session_markdown(app.cursor_conversation(), &app.messages);
+                match clipboard::copy_text(&md) {
+                    Ok(target) => app.set_status(format!(
+                        "Copied {} messages to {target}",
+                        app.messages.len()
+                    )),
+                    Err(e) => app.set_status(format!("Copy failed: {e}")),
+                }
             }
         }
         ActionId::OpenImages => {

@@ -22,3 +22,4 @@ base64.workspace = true
 pulldown-cmark.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+arboard.workspace = true

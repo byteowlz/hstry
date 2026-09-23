@@ -75,7 +75,7 @@ globalThis.document = {
 globalThis.chrome = {
   runtime: {
     sendMessage: async message =>
-      message.type === 'checkApi' ? { ok: true, url: 'http://127.0.0.1:3000' } : { ok: true },
+      message.type === 'checkApi' ? { ok: true, url: 'http://127.0.0.1:41770' } : { ok: true },
   },
   storage: {
     local: {

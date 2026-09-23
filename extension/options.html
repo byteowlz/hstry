@@ -72,11 +72,11 @@
       <section class="section" aria-labelledby="connection-heading">
         <div class="section-heading"><h2 id="connection-heading">Connection</h2><p>The API must be running on this computer. The token is only required when the API was started with one.</p></div>
         <div class="form-grid">
-          <label for="port">Port</label><div class="control"><input id="port" type="number" min="1" max="65535" /><span class="hint">Default: 3000</span></div>
+          <label for="port">Port</label><div class="control"><input id="port" type="number" min="1" max="65535" /><span class="hint">Default: 41770</span></div>
           <label for="token">Ingest token</label><div class="control"><input id="token" type="password" autocomplete="off" placeholder="No token" /><span class="hint">Must match <code style="padding:1px 3px">--token</code> or <code style="padding:1px 3px">HSTRY_API_TOKEN</code>.</span></div>
           <label for="interval">Interval</label><div class="control"><input id="interval" type="number" min="1" max="720" /><span class="hint">Minutes between background syncs.</span></div>
         </div>
-        <div class="command-row"><span class="muted">Start command</span><code id="setup-command">hstry-api --port 3000</code></div>
+        <div class="command-row"><span class="muted">Start command</span><code id="setup-command">hstry-api --port 41770</code></div>
       </section>
 
       <section class="section" aria-labelledby="providers-heading">

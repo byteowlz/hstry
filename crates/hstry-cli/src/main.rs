@@ -2478,7 +2478,7 @@ async fn try_api_search(
     }
 
     let api_url =
-        std::env::var("HSTRY_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
+        std::env::var("HSTRY_API_URL").unwrap_or_else(|_| "http://127.0.0.1:41770".to_string());
     let url = format!("{base}/search", base = api_url.trim_end_matches('/'));
 
     let query_params = SearchApiQuery {

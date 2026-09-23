@@ -7,7 +7,7 @@ const nowSeconds = Date.now() / 1000;
 const oldWatermark = Date.now() + 86_400_000;
 const stored = {
   settings: {
-    port: 3000,
+    port: 41770,
     token: '',
     intervalMinutes: 15,
     providers: { chatgpt: true, claude: false, gemini: false, perplexity: false },

@@ -22,7 +22,7 @@ check('offline error is actionable', friendlyError('cannot reach hstry-api at x'
 check('login error is actionable', friendlyError('claude.ai: not logged in'), 'Open this provider and sign in, then sync again.');
 check('recovered API makes stale offline failure retryable', providerState({
   lastRunMs: now - 27 * 60_000,
-  lastError: 'cannot reach hstry-api at http://127.0.0.1:3000/ingest',
+  lastError: 'cannot reach hstry-api at http://127.0.0.1:41770/ingest',
 }, true, { apiConnected: true }), {
   tone: 'idle',
   label: 'Ready to retry',
@@ -50,7 +50,7 @@ check('visible settings normalize before sync', normalizeSettings({
   token: ' hello ',
   intervalMinutes: '15',
   providers: { chatgpt: true, claude: true },
-}, { port: 3000, intervalMinutes: 15 }), {
+}, { port: 41770, intervalMinutes: 15 }), {
   port: 3434,
   token: 'hello',
   intervalMinutes: 15,
@@ -61,8 +61,8 @@ check('invalid port cannot escape form constraints', normalizeSettings({
   token: '',
   intervalMinutes: '0',
   providers: {},
-}, { port: 3000, intervalMinutes: 15 }), {
-  port: 3000,
+}, { port: 41770, intervalMinutes: 15 }), {
+  port: 41770,
   token: '',
   intervalMinutes: 15,
   providers: { chatgpt: false, claude: false, gemini: false, perplexity: false },

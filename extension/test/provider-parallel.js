@@ -7,7 +7,7 @@ const now = new Date(Date.now() - 3_600_000).toISOString();
 const nowSec = Date.now() / 1000 - 3600;
 const stored = {
   settings: {
-    port: 3000,
+    port: 41770,
     token: '',
     intervalMinutes: 15,
     providers: { chatgpt: true, claude: true, gemini: false, perplexity: false },

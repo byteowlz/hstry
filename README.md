@@ -69,10 +69,10 @@ Adapter installs are version-pinned to the hstry binary. Run `hstry adapters upd
 
 ## Browser extension
 
-`extension/` contains **hstry sync**, a Chrome MV3 extension that background-syncs conversations from ChatGPT, Claude, Gemini, and Perplexity into your local database. It POSTs new conversations to a running `hstry-api` instance (`http://127.0.0.1:3000/ingest`, token-authenticated).
+`extension/` contains **hstry sync**, a Chrome MV3 extension that background-syncs conversations from ChatGPT, Claude, Gemini, and Perplexity into your local database. It POSTs new conversations to a running `hstry-api` instance (`http://127.0.0.1:41770/ingest`, token-authenticated).
 
 ```bash
-hstry-api --port 3000   # start the API, optionally with --token <secret>
+hstry-api --port 41770   # start the API, optionally with --token <secret>
 ```
 
 Load it from `chrome://extensions` with Developer mode enabled (Load unpacked, select `extension/`). Provider toggles, port, and token are configured on the extension's options page. The `hstry web` Playwright commands are the headless alternative to the extension.
@@ -124,7 +124,7 @@ See [docs/remote-sync.md](docs/remote-sync.md) for device namespaces and concurr
 
 ## Service and API
 
-`hstry service` runs a daemon that keeps the search index warm and exposes a local-only gRPC search endpoint; the CLI prefers it when running. `hstry-api` serves a local HTTP API (default `127.0.0.1:3000`) for external integrations, including the browser extension.
+`hstry service` runs a daemon that keeps the search index warm and exposes a local-only gRPC search endpoint; the CLI prefers it when running. `hstry-api` serves a local HTTP API (default `127.0.0.1:41770`) for external integrations, including the browser extension.
 
 Environment overrides: `HSTRY_NO_SERVICE=1`, `HSTRY_API_URL`, `HSTRY_NO_API=1`.
 

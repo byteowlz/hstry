@@ -5,7 +5,7 @@ import { NotLoggedInError } from './lib/common.js';
 import { DEFAULT_PROVIDER_SETTINGS, PROVIDERS } from './providers/index.js';
 
 const DEFAULT_SETTINGS = {
-  port: 3000,
+  port: 41770,
   token: '',
   intervalMinutes: 15,
   providers: DEFAULT_PROVIDER_SETTINGS,

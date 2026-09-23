@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDER_SETTINGS, PROVIDERS, formatTime, normalizeSettings, providerState } from './ui.js';
 
-const DEFAULTS = { port: 3000, token: '', intervalMinutes: 15, providers: DEFAULT_PROVIDER_SETTINGS };
+const DEFAULTS = { port: 41770, token: '', intervalMinutes: 15, providers: DEFAULT_PROVIDER_SETTINGS };
 const el = id => document.getElementById(id);
 let currentSettings = DEFAULTS;
 let apiConnected = false;

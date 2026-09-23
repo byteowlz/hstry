@@ -120,7 +120,7 @@ struct CommonOpts {
     config: Option<PathBuf>,
 
     /// Port to listen on
-    #[arg(short, long, default_value = "3000")]
+    #[arg(short, long, default_value = "41770")]
     port: u16,
 
     /// Bearer token required for /ingest (falls back to HSTRY_API_TOKEN)

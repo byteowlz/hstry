@@ -2506,8 +2506,23 @@ async fn try_api_search(
         return Ok(None);
     }
 
+    // Port 3000 is a popular default (Vite, Next, Rails...). Anything that does not
+    // answer with the hstry JSON envelope is some other program: fall back to local.
+    let is_json = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("json"));
+    if !is_json {
+        return Ok(None);
+    }
     let body = response.text().await?;
-    let envelope: serde_json::Value = serde_json::from_str(&body)?;
+    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return Ok(None);
+    };
+    if !envelope.is_object() || envelope.get("result").is_none() {
+        return Ok(None);
+    }
     let report = serde_json::from_value(envelope["result"].clone()).map_err(|_| {
         anyhow::anyhow!("Search API predates recall protocol; upgrade it or set HSTRY_NO_API=1")
     })?;

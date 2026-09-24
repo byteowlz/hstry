@@ -23,9 +23,19 @@
         "content": { "content_type": "text", "parts": ["first question"] }
       }
     },
+    "hidden-user": {
+      "id": "hidden-user",
+      "parent": "first-user",
+      "message": {
+        "author": { "role": "user" },
+        "create_time": 1700000001.5,
+        "metadata": { "is_visually_hidden_from_conversation": true },
+        "content": { "content_type": "text", "parts": ["scheduled task prompt"] }
+      }
+    },
     "execution-answer": {
       "id": "execution-answer",
-      "parent": "first-user",
+      "parent": "hidden-user",
       "message": {
         "author": { "role": "assistant" },
         "create_time": 1700000001,
@@ -34,7 +44,7 @@
     },
     "execution-answer-alias": {
       "id": "execution-answer",
-      "parent": "first-user",
+      "parent": "hidden-user",
       "message": {
         "author": { "role": "assistant" },
         "create_time": 1700000001,

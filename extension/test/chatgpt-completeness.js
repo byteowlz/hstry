@@ -66,6 +66,7 @@ try {
     first.messages.map(message => [message.role, message.content]),
     [
       ['user', 'first question'],
+      ['user', 'scheduled task prompt'],
       ['assistant', 'execution result'],
       ['user', 'quoted follow-up'],
       ['assistant', 'regenerated alternate'],

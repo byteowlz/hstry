@@ -196,8 +196,9 @@ function extractMessage(node) {
   if (!msg) return null;
   const role = msg.author?.role;
   if (role !== 'user' && role !== 'assistant') return null;
-  if (msg.metadata?.is_visually_hidden_from_conversation) return null;
-
+  // Hidden user turns can contain the prompts for scheduled/automated replies.
+  // The flag controls ChatGPT's UI, not whether the turn belongs in history.
+  // Keep recoverable user/assistant content so a long chat retains its context.
   const parts = [];
   const texts = [];
   const content = msg.content ?? {};

@@ -2,6 +2,7 @@ import { syncChatGPT } from './chatgpt.js';
 import { syncClaude } from './claude.js';
 import { syncGemini } from './gemini.js';
 import { syncPerplexity } from './perplexity.js';
+import { syncCopilot } from './copilot.js';
 
 // Shared provider seam for the worker and both extension surfaces. A provider
 // owns its sync implementation; callers only need this small descriptor.
@@ -41,6 +42,15 @@ export const PROVIDERS = {
     sourceId: 'perplexity-web',
     adapter: 'perplexity',
     sync: syncPerplexity,
+  },
+  copilot: {
+    name: 'M365 Copilot Chat',
+    site: 'm365.cloud.microsoft',
+    description: 'Work Copilot conversations from your signed-in session',
+    defaultEnabled: false,
+    sourceId: 'm365-copilot',
+    adapter: 'm365-copilot',
+    sync: syncCopilot,
   },
 };
 

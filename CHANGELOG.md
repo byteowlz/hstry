@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.26] - 2026-09-29
+
+### Added
+
+- `hstry api enable|disable|start|stop|restart|status|run` to manage the hstry-api HTTP ingest server, mirroring `hstry service`. `start` runs hstry-api as a detached background process (pid file + log under XDG state); no launchd/plist involved.
+- `[api]` config section (`enabled`/`port`/`token`). The ingest token may be a literal, an `env:VAR` reference, or a `kyz:<secret>` secrets-store reference via `hstry_core::config::resolve_secret`, so it never needs to live as plaintext in config or the process args.
+
 ## [0.5.25] - 2026-09-06
 
 ### Added

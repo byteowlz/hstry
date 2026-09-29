@@ -1392,7 +1392,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hstry-api"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "axum",
@@ -1411,7 +1411,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-cli"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-core"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-mcp"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-runtime"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "hstry-core",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "hstry-tui"
-version = "0.5.25"
+version = "0.5.26"
 dependencies = [
  "anyhow",
  "arboard",

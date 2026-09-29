@@ -63,7 +63,9 @@ search_api = true
 [api]
 enabled = false
 # port = 41770
-# token = ""   # set to require a Bearer token on POST /ingest
+# token = ""       # literal, or:
+# token = "env:HSTRY_API_TOKEN"   # read from an environment variable
+# token = "kyz:my-ingest-token"   # pull from the kyz secrets store
 
 # Sync settings (for hub/satellite mode)
 [sync]

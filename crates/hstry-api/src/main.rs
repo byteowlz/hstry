@@ -52,11 +52,19 @@ async fn try_main() -> Result<()> {
         .token
         .clone()
         .or_else(|| std::env::var("HSTRY_API_TOKEN").ok())
-        .filter(|t| !t.is_empty());
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            if config.api.token.is_empty() {
+                return None;
+            }
+            hstry_core::config::resolve_secret(&config.api.token)
+                .ok()
+                .filter(|t| !t.is_empty())
+        });
     let has_token = ingest_token.is_some();
     if !has_token {
         info!(
-            "No ingest token configured (set --token or HSTRY_API_TOKEN); /ingest accepts any loopback client"
+            "No ingest token configured (set --token or HSTRY_API_TOKEN, or [api].token / env:/kyz:); /ingest accepts any loopback client"
         );
     }
 

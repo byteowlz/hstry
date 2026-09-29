@@ -772,6 +772,36 @@ impl Default for ApiConfig {
     }
 }
 
+/// Resolve a secret value that may be a plain literal, an `env:` reference, or
+/// a `kyz:` secrets-store reference (e.g. `env:HSTRY_API_TOKEN`, `kyz:my-token`).
+/// Used for the ingest API token so credentials never live as plaintext in
+/// config or on the command line.
+pub fn resolve_secret(input: &str) -> Result<String> {
+    if let Some(var) = input.strip_prefix("env:") {
+        return std::env::var(var)
+            .map_err(|_| Error::Config(format!("environment variable {var} is not set")));
+    }
+    if let Some(key) = input.strip_prefix("kyz:") {
+        let output = std::process::Command::new("kyz")
+            .args(["get", key])
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Other(format!(
+                "kyz get {key} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            return Err(Error::Other(format!(
+                "kyz get {key} returned an empty value"
+            )));
+        }
+        return Ok(value);
+    }
+    Ok(input.to_string())
+}
+
 /// Per-source adaptive cadence configuration. The scheduler keeps a per-source
 /// `next_due_at` deadline. After every successful sync, the cadence is
 /// multiplied by `idle_backoff` (clamped to `max_interval_secs`) when no new

@@ -102,14 +102,13 @@ fn start_api(config_path: &Path) -> Result<()> {
     let exe = api_binary()?;
     let log_file = open_api_log()?;
     let mut cmd = Command::new(&exe);
+    // Token is resolved by hstry-api from [api].token (literal/env:/kyz:), so
+    // the secret is never passed on the command line or written to a log.
     cmd.arg("--config")
         .arg(config_path)
         .arg("--port")
-        .arg(config.api.port.to_string());
-    if !config.api.token.is_empty() {
-        cmd.arg("--token").arg(&config.api.token);
-    }
-    cmd.stdin(Stdio::null())
+        .arg(config.api.port.to_string())
+        .stdin(Stdio::null())
         .stdout(log_file.try_clone()?)
         .stderr(log_file);
 
@@ -142,9 +141,6 @@ fn run_api(config_path: &Path) -> Result<()> {
         .arg(config_path)
         .arg("--port")
         .arg(config.api.port.to_string());
-    if !config.api.token.is_empty() {
-        cmd.arg("--token").arg(&config.api.token);
-    }
     let status = cmd.status().context("Failed to run API process")?;
     if !status.success() {
         anyhow::bail!("API exited with {status}");

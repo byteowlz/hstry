@@ -304,3 +304,19 @@ mod api_config_tests {
         assert!(!config.api.enabled);
     }
 }
+
+mod resolve_secret_tests {
+    use super::super::resolve_secret;
+
+    #[test]
+    fn literal_and_env_references_resolve() {
+        // Plain literal passes through unchanged.
+        assert_eq!(resolve_secret("plain-token").unwrap(), "plain-token");
+
+        // env: reference reads an existing variable (PATH is always set).
+        assert!(!resolve_secret("env:PATH").unwrap().is_empty());
+
+        // Missing env var is an error, not an empty token.
+        assert!(resolve_secret("env:HSTRY_NO_SUCH_VAR_XYZ").is_err());
+    }
+}

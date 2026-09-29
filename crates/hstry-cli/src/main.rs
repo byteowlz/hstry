@@ -23,8 +23,10 @@ fn apply_storage_config(db: &Database, config: &Config) {
 }
 
 mod adapter_manifest;
+use api::ApiCommand;
 use serde::{Serialize, de::DeserializeOwned};
 
+mod api;
 mod pretty;
 mod read_cli;
 mod resume;
@@ -410,6 +412,12 @@ enum Command {
     Service {
         #[command(subcommand)]
         command: ServiceCommand,
+    },
+
+    /// Manage the hstry-api HTTP ingest server
+    Api {
+        #[command(subcommand)]
+        command: ApiCommand,
     },
 
     /// Scan for chat history sources
@@ -1260,6 +1268,34 @@ async fn main() -> Result<()> {
                 service::cmd_service(&config_path, other).await?;
                 if cli.json {
                     let status = service::get_service_status(&config_path)?;
+                    emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(status),
+                        error: None,
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        },
+        Command::Api { command } => match command {
+            ApiCommand::Status => {
+                let status = api::get_api_status(&config_path)?;
+                if cli.json {
+                    emit_json(JsonResponse {
+                        ok: true,
+                        result: Some(status),
+                        error: None,
+                    })
+                } else {
+                    api::cmd_api(&config_path, ApiCommand::Status).await
+                }
+            }
+            ApiCommand::Run => api::cmd_api(&config_path, ApiCommand::Run).await,
+            other => {
+                api::cmd_api(&config_path, other).await?;
+                if cli.json {
+                    let status = api::get_api_status(&config_path)?;
                     emit_json(JsonResponse {
                         ok: true,
                         result: Some(status),

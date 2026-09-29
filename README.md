@@ -60,6 +60,7 @@ hstry resume --search "JSON parser" --agent pi   # reopen a session in any agent
 | `remote add/test/fetch/sync` | Sync and search remote hosts over SSH |
 | `web install/login/sync/status` | Playwright-based web automation |
 | `service enable/start/status` | Background sync service + local search API |
+| `api enable/start/status` | Manage the hstry-api HTTP ingest server |
 | `config show/path/edit` | Configuration management |
 | `stats` | Database statistics |
 | `skill install/status/update` | Install the bundled agent retrieval skill |
@@ -72,7 +73,10 @@ Adapter installs are version-pinned to the hstry binary. Run `hstry adapters upd
 `extension/` contains **hstry sync**, a Chrome MV3 extension that background-syncs conversations from ChatGPT, Claude, Gemini, and Perplexity into your local database. It POSTs new conversations to a running `hstry-api` instance (`http://127.0.0.1:41770/ingest`, token-authenticated).
 
 ```bash
-hstry-api --port 41770   # start the API, optionally with --token <secret>
+hstry api enable   # set port/token under [api] in config, then:
+hstry api start    # runs hstry-api as a background process (managed, no launchd)
+# or run it directly:
+hstry-api --port 41770   # optionally with --token <secret>
 ```
 
 Load it from `chrome://extensions` with Developer mode enabled (Load unpacked, select `extension/`). Provider toggles, port, and token are configured on the extension's options page. The `hstry web` Playwright commands are the headless alternative to the extension.

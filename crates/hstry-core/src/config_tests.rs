@@ -270,3 +270,37 @@ mod remote_config_tests {
         assert_eq!(parsed.port, remote.port);
     }
 }
+
+mod api_config_tests {
+    use super::super::{ApiConfig, Config};
+
+    #[test]
+    fn serde_roundtrip() {
+        let api = ApiConfig {
+            enabled: true,
+            port: 43999,
+            token: "s3cret".to_string(),
+        };
+        let json = serde_json::to_string(&api).unwrap_or_else(|err| panic!("serialize: {err}"));
+        let parsed: ApiConfig =
+            serde_json::from_str(&json).unwrap_or_else(|err| panic!("deserialize: {err}"));
+        assert_eq!(parsed.enabled, api.enabled);
+        assert_eq!(parsed.port, api.port);
+        assert_eq!(parsed.token, api.token);
+    }
+
+    #[test]
+    fn default_port_is_41770_and_disabled() {
+        let api = ApiConfig::default();
+        assert!(!api.enabled);
+        assert_eq!(api.port, 41770);
+        assert!(api.token.is_empty());
+    }
+
+    #[test]
+    fn config_default_includes_api() {
+        let config = Config::default();
+        assert_eq!(config.api.port, 41770);
+        assert!(!config.api.enabled);
+    }
+}

@@ -735,7 +735,7 @@ fn stop_service() -> Result<()> {
 }
 
 #[cfg(unix)]
-fn terminate_process(pid: u32) -> Result<()> {
+pub(crate) fn terminate_process(pid: u32) -> Result<()> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
@@ -744,7 +744,7 @@ fn terminate_process(pid: u32) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn terminate_process(pid: u32) -> Result<()> {
+pub(crate) fn terminate_process(pid: u32) -> Result<()> {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -761,7 +761,7 @@ fn terminate_process(pid: u32) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn is_process_running(pid: u32) -> bool {
+pub(crate) fn is_process_running(pid: u32) -> bool {
     use nix::sys::signal::kill;
     use nix::unistd::Pid;
 
@@ -771,7 +771,7 @@ fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn is_process_running(pid: u32) -> bool {
+pub(crate) fn is_process_running(pid: u32) -> bool {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -813,7 +813,7 @@ fn service_state_dir() -> PathBuf {
 
 /// Get XDG-compliant state directory.
 /// Checks `$XDG_STATE_HOME` first, then falls back to `~/.local/state`.
-fn xdg_state_dir() -> PathBuf {
+pub(crate) fn xdg_state_dir() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_STATE_HOME")
         && !xdg.is_empty()
     {

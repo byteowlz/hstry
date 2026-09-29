@@ -40,6 +40,9 @@ pub struct Config {
     /// Service configuration.
     pub service: ServiceConfig,
 
+    /// HTTP API configuration for `hstry api`.
+    pub api: ApiConfig,
+
     /// Sources configuration.
     pub sources: Vec<SourceConfig>,
 
@@ -425,6 +428,7 @@ impl Default for Config {
             workspaces: Vec::new(),
             adapters: Vec::new(),
             service: ServiceConfig::default(),
+            api: ApiConfig::default(),
             sources: Vec::new(),
             remotes: Vec::new(),
             sync: SyncConfig::default(),
@@ -735,6 +739,37 @@ pub struct ServiceConfig {
     /// Resource controls for the sync loop (trx-z42c.7).
     #[serde(default)]
     pub resources: ResourceConfig,
+}
+
+/// HTTP API configuration for `hstry api` (the extension ingest server).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiConfig {
+    /// Whether the API starts when `hstry api start` is run.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Port the HTTP API binds (matches the hstry-api default).
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+
+    /// Bearer token required for `POST /ingest`. Empty means no token.
+    #[serde(default)]
+    pub token: String,
+}
+
+fn default_api_port() -> u16 {
+    41770
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_api_port(),
+            token: String::new(),
+        }
+    }
 }
 
 /// Per-source adaptive cadence configuration. The scheduler keeps a per-source

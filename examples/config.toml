@@ -59,6 +59,12 @@ search_api = true
 # search_port = 3000
 # transport = "tcp"  # "tcp" (default) or "unix"
 
+# hstry-api HTTP ingest server (used by the browser extension)
+[api]
+enabled = false
+# port = 41770
+# token = ""   # set to require a Bearer token on POST /ingest
+
 # Sync settings (for hub/satellite mode)
 [sync]
 mode = "standalone"  # "standalone", "hub", or "satellite"

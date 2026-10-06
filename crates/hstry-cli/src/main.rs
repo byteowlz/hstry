@@ -2274,9 +2274,14 @@ async fn cmd_search_fast(
             {
                 results
             } else {
-                anyhow::bail!(
-                    "Search service unavailable. Run `hstry service start` or set HSTRY_NO_SERVICE=1 to use local search."
+                let db = Database::open(&config.database).await?;
+                apply_storage_config(&db, config);
+                let mut results = db.search_report(query, opts.clone()).await?;
+                results.warnings.push(
+                    "Search service unavailable; fell back to local snapshot search. Run `hstry service start` for faster search."
+                        .into(),
                 );
+                results
             }
         } else if let Some(results) = try_api_search(query, &opts, mode).await? {
             results

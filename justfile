@@ -181,6 +181,7 @@ bump level="patch":
     NEW="$MAJOR.$MINOR.$PATCH"
     sed -i "s/^version = .*/version = \"$NEW\"/" Cargo.toml
     cargo update --workspace --offline >/dev/null 2>&1 || true
+    just sync-adapter-manifest
     echo "Bumped version: $CURRENT -> $NEW"
     echo "Review, then 'just release-bump $NEW' to commit, tag, and push."
 
@@ -196,12 +197,21 @@ release-bump version:
     echo "Bumping version to $VERSION"
     # Update workspace version
     sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
-    git add Cargo.toml
+    just sync-adapter-manifest
+    git add Cargo.toml adapters/.hstry-adapters.json
     git commit -m "chore: bump version to $VERSION"
     git tag "v$VERSION"
     git push origin main
     git push origin "v$VERSION"
     echo "Release v$VERSION pushed! Workflow will start automatically."
+
+# Sync the bundled adapter manifest's hstry_version with the workspace version
+sync-adapter-manifest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+    sed -i -E "s/(\"hstry_version\": )\"[^\"]*\"/\1\"$VERSION\"/" adapters/.hstry-adapters.json
+    echo "Adapter manifest hstry_version -> $VERSION"
 
 # Check release readiness
 release-check:

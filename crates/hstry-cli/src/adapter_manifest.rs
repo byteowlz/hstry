@@ -7,7 +7,10 @@ pub const ADAPTER_PROTOCOL_VERSION: &str = "1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdapterManifest {
-    pub hstry_version: String,
+    /// Stamped when adapters are installed; absent in the source tree, which
+    /// always matches the binary built from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hstry_version: Option<String>,
     pub protocol_version: String,
 }
 
@@ -21,7 +24,7 @@ pub fn validate_adapter_manifest(adapter_paths: &[PathBuf]) -> Result<AdapterMan
         .unwrap_or(false)
     {
         return Ok(AdapterManifest {
-            hstry_version: expected_hstry_version(),
+            hstry_version: Some(expected_hstry_version()),
             protocol_version: ADAPTER_PROTOCOL_VERSION.to_string(),
         });
     }
@@ -44,8 +47,9 @@ pub fn validate_adapter_manifest(adapter_paths: &[PathBuf]) -> Result<AdapterMan
     let expected_protocol = ADAPTER_PROTOCOL_VERSION;
 
     for manifest in manifests {
-        let manifest_version = normalize_version(&manifest.hstry_version);
-        if manifest_version != expected_version {
+        if let Some(manifest_version) = manifest.hstry_version.as_deref().map(normalize_version)
+            && manifest_version != expected_version
+        {
             anyhow::bail!(
                 "Adapter version mismatch (expected hstry {}, found {}). Run 'hstry adapters update'.",
                 expected_version,
@@ -62,7 +66,7 @@ pub fn validate_adapter_manifest(adapter_paths: &[PathBuf]) -> Result<AdapterMan
     }
 
     Ok(AdapterManifest {
-        hstry_version: expected_hstry_version(),
+        hstry_version: Some(expected_hstry_version()),
         protocol_version: expected_protocol.to_string(),
     })
 }

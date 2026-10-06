@@ -3543,7 +3543,7 @@ fn copy_adapters_from(
 
     let dest_manifest = dest_root.join(".hstry-adapters.json");
     let manifest = adapter_manifest::AdapterManifest {
-        hstry_version: adapter_manifest::expected_hstry_version(),
+        hstry_version: Some(adapter_manifest::expected_hstry_version()),
         protocol_version: adapter_manifest::ADAPTER_PROTOCOL_VERSION.to_string(),
     };
     std::fs::write(&dest_manifest, serde_json::to_string_pretty(&manifest)?)?;
@@ -4696,15 +4696,15 @@ mod tests {
     }
 
     #[test]
-    fn bundled_adapter_manifest_matches_the_binary_version() {
-        let manifest: adapter_manifest::AdapterManifest =
+    fn bundled_adapter_manifest_matches_the_binary_protocol() {
+        // hstry_version is stamped at install time, so the source manifest only pins the protocol.
+        let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../../adapters/.hstry-adapters.json"))
                 .unwrap_or_else(|err| panic!("parse bundled adapter manifest: {err}"));
 
-        assert_eq!(manifest.hstry_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
-            manifest.protocol_version,
-            adapter_manifest::ADAPTER_PROTOCOL_VERSION
+            manifest,
+            serde_json::json!({"protocol_version": adapter_manifest::ADAPTER_PROTOCOL_VERSION})
         );
     }
 

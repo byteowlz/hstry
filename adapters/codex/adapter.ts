@@ -47,6 +47,7 @@ import type {
 import {
   runAdapter,
   textOnlyParts,
+  thinkingPart,
   toolCallPart,
   toolResultPart,
   isUnderAnyCanonicalRoot,
@@ -111,6 +112,10 @@ interface CodexResponseItem {
   status?: string;
   action?: unknown;
   input?: string;
+  /** reasoning: provider summary of the model's thinking. */
+  summary?: Array<{ type?: string; text?: string }>;
+  /** event_msg.agent_message: assistant text not always mirrored as a response_item. */
+  message?: string;
 }
 
 const adapter: Adapter = {
@@ -302,6 +307,30 @@ async function parseRolloutFile(
         const payload = event.payload as CodexResponseItem | undefined;
         if (!payload?.type) break;
 
+        if (payload.type === 'reasoning') {
+          // Codex stores the model's reasoning as summary_text items (and an
+          // encrypted payload that must not be searched). Keep the readable
+          // summary as a hidden-adjacent reasoning part so it is indexed but
+          // not confused with visible assistant text.
+          const summary = (payload.summary ?? [])
+            .map(item => item?.text?.trim())
+            .filter((text): text is string => Boolean(text))
+            .join('\n\n');
+          if (!summary) break;
+          // `content` feeds the full-text index (crates/hstry-core FTS5 on
+          // messages.content), so the summary text must live there to be
+          // searchable; the thinking part preserves it as reasoning rather than
+          // assistant prose. Same convention as claude-code's thinking blocks.
+          messages.push({
+            role: 'assistant',
+            content: summary,
+            parts: [thinkingPart(summary)],
+            createdAt: timestampMs,
+            model,
+          });
+          break;
+        }
+
         if (payload.type === 'message') {
           const content = extractContent(payload.content);
           if (!content) break;
@@ -401,6 +430,25 @@ async function parseRolloutFile(
 
         break;
       }
+      case 'event_msg': {
+        // agent_message is the event-log mirror of the assistant's final text.
+        // It is usually duplicated by a response_item.message; only import it
+        // when no identical message was already seen, so reasoning/status-only
+        // turns (and forks that omitted response_items) stay searchable.
+        const payload = event.payload as CodexResponseItem | undefined;
+        if (payload?.type !== 'agent_message') break;
+        const content = payload.message?.trim();
+        if (!content) break;
+        messages.push({
+          role: 'assistant',
+          content,
+          parts: textOnlyParts(content),
+          createdAt: timestampMs,
+          model,
+          metadata: { source: 'event_msg.agent_message' },
+        });
+        break;
+      }
       default:
         break;
     }
@@ -408,9 +456,23 @@ async function parseRolloutFile(
 
   if (messages.length === 0) return null;
 
+  // event_msg.agent_message mirrors the assistant's final text, but the two
+  // streams interleave and either may arrive first. Now that all
+  // response_items are known, drop agent_message copies that a
+  // response_item.message already recorded; keep the ones it did not, so
+  // reasoning-only turns stay searchable. `response_item.message` is
+  // authoritative and always wins the ordering.
+  const responseItemTexts = new Set(
+    messages.filter(m => m.metadata?.source !== 'event_msg.agent_message').map(m => m.content).filter(Boolean)
+  );
+  const reconciled = messages.filter(
+    m => m.metadata?.source !== 'event_msg.agent_message' || !responseItemTexts.has(m.content)
+  );
+  reconciled.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+
   const createdAt = sessionMeta?.timestamp
     ? Date.parse(sessionMeta.timestamp)
-    : messages[0].createdAt ?? Date.now();
+    : reconciled[0].createdAt ?? Date.now();
 
   // Check both created and updated time so modified sessions are re-imported
   if (opts?.since) {
@@ -433,7 +495,7 @@ async function parseRolloutFile(
     updatedAt: lastTimestamp,
     model: model ?? thread?.model ?? undefined,
     workspace: sessionMeta?.cwd,
-    messages,
+    messages: reconciled,
     metadata: {
       file: filePath,
       ...(thread?.archived ? { archived: true } : {}),

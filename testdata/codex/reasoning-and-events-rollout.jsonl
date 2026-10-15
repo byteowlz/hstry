@@ -1,0 +1,12 @@
+{"timestamp":"2026-09-22T19:17:31.000Z","type":"session_meta","payload":{"meta":{"id":"test-codex-reasoning-1","timestamp":"2026-09-22T19:17:31.000Z","cwd":"/work","originator":"codex","cli_version":"0.154.0","source":"cli","model_provider":null}}}
+{"timestamp":"2026-09-22T19:17:31.000Z","type":"turn_context","payload":{"model":"gpt-5.5","approval_policy":"auto","sandbox_policy":null,"cwd":"/work"}}
+{"timestamp":"2026-09-22T19:17:32.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check the repository."}]}}
+{"timestamp":"2026-09-22T19:17:33.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I will inspect the working tree first."}}
+{"timestamp":"2026-09-22T19:17:34.000Z","type":"response_item","payload":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"The user wants a repository check. Start with git status before anything else."}],"encrypted_content":null}}
+{"timestamp":"2026-09-22T19:17:35.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the working tree first."}]}}
+{"timestamp":"2026-09-22T19:17:36.000Z","type":"response_item","payload":{"type":"function_call","name":"web_search","namespace":"mcp__search__","arguments":"{\"query\":\"databento ohlcv-1m\"}","call_id":"call_1"}}
+{"timestamp":"2026-09-22T19:17:36.100Z","type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","invocation":{"server":"search","tool":"web_search","arguments":{"query":"databento ohlcv-1m"}},"result":{"Ok":{"content":[{"type":"text","text":"Databento supports ohlcv-1m."}]}}}}
+{"timestamp":"2026-09-22T19:17:37.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"Databento supports ohlcv-1m."}}
+{"timestamp":"2026-09-22T19:17:38.000Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"databento ohlcv-1m"}}}
+{"timestamp":"2026-09-22T19:17:39.000Z","type":"response_item","payload":{"type":"reasoning","id":"rs_2","summary":[{"type":"summary_text","text":"Postgres enforces the constraint, no application code needed."}],"encrypted_content":null}}
+{"timestamp":"2026-09-22T19:17:40.000Z","type":"event_msg","payload":{"type":"agent_message","message":"The constraint is already enforced at the database layer."}}

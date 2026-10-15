@@ -1,0 +1,162 @@
+[
+  {
+    "externalId": "test-codex-reasoning-1",
+    "title": "work - 2026-09-22 - Check the repository.",
+    "createdAt": 1790104651000,
+    "updatedAt": 1790104660000,
+    "model": "gpt-5.5",
+    "workspace": "/work",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Check the repository.",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Check the repository."
+          }
+        ],
+        "createdAt": 1790104652000,
+        "model": "gpt-5.5"
+      },
+      {
+        "role": "assistant",
+        "content": "The user wants a repository check. Start with git status before anything else.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "thinking",
+            "text": "The user wants a repository check. Start with git status before anything else."
+          }
+        ],
+        "createdAt": 1790104654000,
+        "model": "gpt-5.5"
+      },
+      {
+        "role": "assistant",
+        "content": "I will inspect the working tree first.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "I will inspect the working tree first."
+          }
+        ],
+        "createdAt": 1790104655000,
+        "model": "gpt-5.5"
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "web_search",
+            "input": {
+              "query": "databento ohlcv-1m"
+            }
+          }
+        ],
+        "createdAt": 1790104656000,
+        "model": "gpt-5.5"
+      },
+      {
+        "role": "tool",
+        "content": "Databento supports ohlcv-1m.",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "Databento supports ohlcv-1m.",
+            "name": "web_search"
+          }
+        ],
+        "createdAt": 1790104657000,
+        "toolCalls": [
+          {
+            "toolName": "web_search",
+            "input": {
+              "query": "databento ohlcv-1m"
+            },
+            "status": "success",
+            "output": "Databento supports ohlcv-1m."
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "{\"type\":\"search\",\"query\":\"databento ohlcv-1m\"}",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_call",
+            "toolCallId": "web_search-1790104658000",
+            "name": "web_search",
+            "input": {
+              "type": "search",
+              "query": "databento ohlcv-1m"
+            }
+          },
+          {
+            "id": "p-8",
+            "type": "tool_result",
+            "toolCallId": "web_search-1790104658000",
+            "output": "{\"type\":\"search\",\"query\":\"databento ohlcv-1m\"}",
+            "name": "web_search"
+          }
+        ],
+        "createdAt": 1790104658000,
+        "toolCalls": [
+          {
+            "toolName": "web_search",
+            "input": {
+              "type": "search",
+              "query": "databento ohlcv-1m"
+            },
+            "status": "completed"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Postgres enforces the constraint, no application code needed.",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "thinking",
+            "text": "Postgres enforces the constraint, no application code needed."
+          }
+        ],
+        "createdAt": 1790104659000,
+        "model": "gpt-5.5"
+      },
+      {
+        "role": "assistant",
+        "content": "The constraint is already enforced at the database layer.",
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "The constraint is already enforced at the database layer."
+          }
+        ],
+        "createdAt": 1790104660000,
+        "model": "gpt-5.5",
+        "metadata": {
+          "source": "event_msg.agent_message"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.codex/sessions/2026/09/22/rollout-2026-09-22T19-17-31-fixture.jsonl",
+      "originator": "codex",
+      "cliVersion": "0.154.0",
+      "source": "cli",
+      "modelProvider": null
+    }
+  }
+]

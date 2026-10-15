@@ -1,0 +1,135 @@
+[
+  {
+    "externalId": "jw-session",
+    "title": "Investigate the parser",
+    "createdAt": 1777626002000,
+    "updatedAt": 1777626006000,
+    "model": "qwen3-coder-plus",
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Where is the parser defined?",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Where is the parser defined?"
+          }
+        ],
+        "createdAt": 1777626002000,
+        "metadata": {
+          "uuid": "m1"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Checking the tree.\nIt lives in src/parser.rs.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Checking the tree."
+          },
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "It lives in src/parser.rs."
+          },
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "read_file",
+            "input": {
+              "absolute_path": "/work/proj/src/parser.rs"
+            }
+          }
+        ],
+        "createdAt": 1777626003000,
+        "model": "qwen3-coder-plus",
+        "toolCalls": [
+          {
+            "toolName": "read_file",
+            "input": {
+              "absolute_path": "/work/proj/src/parser.rs"
+            },
+            "status": "pending"
+          }
+        ],
+        "metadata": {
+          "uuid": "m2"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "pub fn parse() {}",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "pub fn parse() {}",
+            "name": "read_file"
+          }
+        ],
+        "createdAt": 1777626004000,
+        "metadata": {
+          "uuid": "m3"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "call_2",
+            "name": "run_shell_command",
+            "input": {
+              "command": "cargo test"
+            }
+          }
+        ],
+        "createdAt": 1777626005000,
+        "model": "qwen3-coder-plus",
+        "toolCalls": [
+          {
+            "toolName": "run_shell_command",
+            "input": {
+              "command": "cargo test"
+            },
+            "status": "pending"
+          }
+        ],
+        "metadata": {
+          "uuid": "m4"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "{}",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "call_2",
+            "output": "{}",
+            "name": "run_shell_command",
+            "isError": true
+          }
+        ],
+        "createdAt": 1777626006000,
+        "metadata": {
+          "uuid": "m5"
+        }
+      }
+    ],
+    "metadata": {
+      "source": "qwen-code",
+      "format": "jsonl",
+      "version": "0.25.1"
+    }
+  }
+]

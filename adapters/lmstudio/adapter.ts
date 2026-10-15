@@ -11,10 +11,11 @@ import type {
   Adapter,
   AdapterInfo,
   Conversation,
+  CanonPart,
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter, textOnlyParts } from '../types/index.ts';
+import { runAdapter, textOnlyParts, textPart, thinkingPart } from '../types/index.ts';
 
 // Platform-specific default paths
 const DEFAULT_PATHS = [
@@ -27,6 +28,7 @@ const DEFAULT_PATHS = [
 interface LMStudioConversation {
   id?: string;
   title?: string;
+  name?: string;
   createdAt?: string | number;
   updatedAt?: string | number;
   modelIdentifier?: string;
@@ -63,6 +65,7 @@ interface LMStudioMessageVersion {
 
 interface LMStudioMessageStep {
   type?: string;
+  style?: { type?: string };
   content?: LMStudioContentPart[];
 }
 
@@ -220,7 +223,7 @@ function parseConversation(
 
   return {
     externalId: raw.id ?? basename(filePath, extname(filePath)),
-    title: raw.title ?? deriveTitle(messages),
+    title: raw.title ?? raw.name ?? deriveTitle(messages),
     createdAt,
     updatedAt,
     model,
@@ -247,7 +250,7 @@ function extractMessages(raw: LMStudioConversation): Message[] {
     if (!role) continue;
 
     const content = extractMessageContent(msg, version);
-    if (!content) continue;
+    if (!content && !extractReasoning(version?.steps)) continue;
 
     const createdAt = parseTimestamp(msg.timestamp ?? msg.createdAt);
     const model =
@@ -256,10 +259,15 @@ function extractMessages(raw: LMStudioConversation): Message[] {
       version?.genInfo?.indexedModelIdentifier ??
       msg.model;
 
+    // Current LM Studio marks reasoning as contentBlock steps with style.type "thinking".
+    const reasoning = extractReasoning(version?.steps);
+    let parts: CanonPart[] | undefined = textOnlyParts(content);
+    if (reasoning) parts = [thinkingPart(reasoning), ...(content ? [textPart(content)] : [])];
+
     messages.push({
       role: mapRole(role),
       content,
-      parts: textOnlyParts(content),
+      parts,
       createdAt,
       model,
     });
@@ -293,10 +301,21 @@ function extractMessageContent(
   return extractContentFromValue(message.content);
 }
 
+function extractReasoning(steps?: LMStudioMessageStep[]): string {
+  const parts: string[] = [];
+  for (const step of steps ?? []) {
+    if (step.type !== 'contentBlock' || step.style?.type !== 'thinking' || !step.content) continue;
+    const text = extractContentFromValue(step.content);
+    if (text) parts.push(text);
+  }
+  return parts.join('\n').trim();
+}
+
 function extractContentFromSteps(steps: LMStudioMessageStep[]): string {
   const parts: string[] = [];
   for (const step of steps) {
     if (step.type !== 'contentBlock' || !step.content) continue;
+    if (step.style?.type === 'thinking') continue;
     const content = extractContentFromValue(step.content);
     if (content) parts.push(content);
   }

@@ -1,0 +1,47 @@
+[
+  {
+    "externalId": "test-claude-code-1",
+    "title": "Test Claude Code Session",
+    "createdAt": 1699963201000,
+    "updatedAt": 1699963202000,
+    "workspace": "-work",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello Claude Code!",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello Claude Code!"
+          }
+        ],
+        "createdAt": 1699963201000,
+        "metadata": {
+          "uuid": "msg-001",
+          "type": "message"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Hello! I'm Claude Code. How can I assist with your development work?",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello! I'm Claude Code. How can I assist with your development work?"
+          }
+        ],
+        "createdAt": 1699963202000,
+        "model": "claude-sonnet-4-20250514",
+        "metadata": {
+          "uuid": "msg-002",
+          "type": "message"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.claude/projects/-work/session.jsonl"
+    }
+  }
+]

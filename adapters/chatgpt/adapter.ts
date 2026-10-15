@@ -162,7 +162,7 @@ function sortConversations(conversations: Conversation[]): Conversation[] {
 }
 
 function parseConversation(entry: RawConversation, opts?: ParseOptions): Conversation | null {
-  const messages = extractMessages(entry.mapping);
+  const messages = extractMessages(entry.mapping, entry.current_node);
 
   if (messages.length === 0) {
     return null;
@@ -202,12 +202,29 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
   return conversation;
 }
 
-function extractMessages(mapping?: ConversationMap): Message[] {
+/**
+ * Real exports keep every regenerated/edited branch in `mapping`; only the
+ * parent chain ending at `current_node` is the visible conversation.
+ */
+function activeBranchNodes(mapping: ConversationMap, currentNode?: string): ConversationNode[] {
+  if (!currentNode || !mapping[currentNode]) return Object.values(mapping);
+  const chain: ConversationNode[] = [];
+  const seen = new Set<string>();
+  let id: string | null | undefined = currentNode;
+  while (id && mapping[id] && !seen.has(id)) {
+    seen.add(id);
+    chain.push(mapping[id]);
+    id = mapping[id].parent;
+  }
+  return chain.reverse();
+}
+
+function extractMessages(mapping?: ConversationMap, currentNode?: string): Message[] {
   if (!mapping) return [];
 
   const messages: Message[] = [];
 
-  for (const node of Object.values(mapping)) {
+  for (const node of activeBranchNodes(mapping, currentNode)) {
     const msg = node.message;
     if (!msg || !msg.author?.role) {
       continue;

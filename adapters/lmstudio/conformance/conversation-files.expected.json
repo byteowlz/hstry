@@ -1,0 +1,89 @@
+[
+  {
+    "externalId": "1750100000000.conversation",
+    "title": "Hello",
+    "createdAt": 1750100000000,
+    "model": "llama-3.2-1b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hi",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hi"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Hello!",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello!"
+          }
+        ],
+        "model": "llama-3.2-1b"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.lmstudio/conversations/1750100000000.conversation.json",
+      "source": "lm-studio"
+    }
+  },
+  {
+    "externalId": "1750000000000.conversation",
+    "title": "Capital of France",
+    "createdAt": 1750000000000,
+    "model": "qwen3-4b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "What is the capital of France?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Paris.",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "thinking",
+            "text": "The user asks a simple question."
+          },
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "Paris."
+          }
+        ],
+        "model": "qwen3-4b"
+      },
+      {
+        "role": "assistant",
+        "content": "Paris, on the Seine.",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "Paris, on the Seine."
+          }
+        ],
+        "model": "qwen3-4b"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.lmstudio/conversations/1750000000000.conversation.json",
+      "source": "lm-studio"
+    }
+  }
+]

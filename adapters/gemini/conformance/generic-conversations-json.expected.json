@@ -1,0 +1,101 @@
+[
+  {
+    "externalId": "gem-conv-2",
+    "title": "Haiku",
+    "createdAt": 1750100000000,
+    "updatedAt": 1750100002000,
+    "model": "gemini-2.5-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a haiku",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Write a haiku"
+          }
+        ],
+        "createdAt": 1750100001000
+      },
+      {
+        "role": "assistant",
+        "content": "Quiet morning rain",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "Quiet morning rain"
+          }
+        ],
+        "createdAt": 1750100002000,
+        "model": "gemini-2.5-pro"
+      }
+    ],
+    "metadata": {
+      "source": "gemini-export"
+    }
+  },
+  {
+    "externalId": "gem-conv-1",
+    "title": "Trip ideas",
+    "createdAt": 1750000000000,
+    "updatedAt": 1750000090000,
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Suggest a weekend trip",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Suggest a weekend trip"
+          }
+        ],
+        "createdAt": 1750000001000
+      },
+      {
+        "role": "assistant",
+        "content": "How about Lisbon?",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "How about Lisbon?"
+          }
+        ],
+        "createdAt": 1750000005000,
+        "model": "gemini-2.5-flash"
+      },
+      {
+        "role": "user",
+        "content": "Why?",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Why?"
+          }
+        ],
+        "createdAt": 1750000060000
+      },
+      {
+        "role": "assistant",
+        "content": "Great food and trams.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Great food and trams."
+          }
+        ],
+        "createdAt": 1750000090000,
+        "model": "gemini-2.5-flash"
+      }
+    ],
+    "metadata": {
+      "source": "gemini-export"
+    }
+  }
+]

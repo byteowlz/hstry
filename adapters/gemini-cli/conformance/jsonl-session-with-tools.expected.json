@@ -1,0 +1,85 @@
+[
+  {
+    "externalId": "sess-aaaa1111",
+    "title": "List the files in src",
+    "createdAt": 1772355600000,
+    "updatedAt": 1772355630000,
+    "model": "gemini-2.5-pro",
+    "provider": "google",
+    "messages": [
+      {
+        "role": "user",
+        "content": "List the files in src",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "List the files in src"
+          }
+        ],
+        "createdAt": 1772355601000
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "**Listing**\nUse the ls tool."
+          }
+        ],
+        "createdAt": 1772355603000,
+        "model": "gemini-2.5-pro",
+        "toolCalls": [
+          {
+            "toolName": "list_directory",
+            "input": {
+              "dir_path": "src"
+            },
+            "output": "Directory listing for src:\nmain.ts",
+            "status": "success"
+          },
+          {
+            "toolName": "read_file",
+            "input": {
+              "file_path": "src/missing.ts"
+            },
+            "output": "File not found: src/missing.ts",
+            "status": "error"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "src contains main.ts; missing.ts does not exist.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "src contains main.ts; missing.ts does not exist."
+          }
+        ],
+        "createdAt": 1772355610000,
+        "model": "gemini-2.5-pro"
+      },
+      {
+        "role": "user",
+        "content": "Thanks",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Thanks"
+          }
+        ],
+        "createdAt": 1772355620000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.gemini/tmp/demo-project/chats/session-2026-03-01T09-00-aaaa1111.jsonl",
+      "cliOnly": true,
+      "skippedLogs": 1
+    }
+  }
+]

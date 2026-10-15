@@ -15,6 +15,7 @@ import type {
   Conversation,
   Message,
   ParseOptions,
+  ToolCall,
 } from '../types/index.ts';
 import {
   runAdapter,
@@ -41,6 +42,16 @@ interface CliMessage {
   content?: string | Array<{ text?: string }>;
   thoughts?: Array<{ subject?: string; description?: string; timestamp?: string }>;
   model?: string;
+  toolCalls?: CliToolCall[];
+}
+
+interface CliToolCall {
+  id?: string;
+  name?: string;
+  args?: unknown;
+  result?: unknown;
+  status?: string;
+  resultDisplay?: unknown;
 }
 
 interface SetEnvelope {
@@ -170,7 +181,8 @@ async function parseSessionFile(
       const thinking = formatThoughts(cli.thoughts);
       if (thinking) parts.push(thinkingPart(thinking));
       if (text.trim()) parts.push(textPart(text));
-      if (parts.length === 0) continue;
+      const toolCalls = mapToolCalls(cli.toolCalls);
+      if (parts.length === 0 && toolCalls.length === 0) continue;
 
       messages.push({
         role: 'assistant',
@@ -178,6 +190,7 @@ async function parseSessionFile(
         parts,
         createdAt: ts,
         model: cli.model,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       });
       if (cli.model) model = cli.model;
     }
@@ -223,6 +236,34 @@ function ingestCliMessage(
   if (msg.type === 'user' || msg.type === 'gemini') {
     out.push(msg);
   }
+}
+
+/** Tool results are Gemini Parts: [{ functionResponse: { response: { output | error } } }]. */
+function mapToolCalls(calls?: CliToolCall[]): ToolCall[] {
+  if (!calls?.length) return [];
+  return calls.flatMap(call => {
+    if (!call.name) return [];
+    let output = '';
+    if (Array.isArray(call.result)) {
+      output = call.result
+        .map(part => {
+          const response = (part as { functionResponse?: { response?: Record<string, unknown> } })
+            ?.functionResponse?.response;
+          const value = response?.output ?? response?.error;
+          return typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value);
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    if (!output && typeof call.resultDisplay === 'string') output = call.resultDisplay;
+    const failed = call.status === 'error' || call.status === 'cancelled';
+    return [{
+      toolName: call.name,
+      input: call.args,
+      output,
+      status: failed ? 'error' as const : 'success' as const,
+    }];
+  });
 }
 
 function extractContent(content?: string | Array<{ text?: string }>): string {

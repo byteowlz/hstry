@@ -1,0 +1,58 @@
+[
+  {
+    "externalId": ".aider.chat.history.md",
+    "title": "aider chat started at 2025-01-01 12:00:00",
+    "createdAt": 1735733100000,
+    "updatedAt": 1735733100000,
+    "workspace": "$HOME/projects/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "add a hello function to hello.py",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "add a hello function to hello.py"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Sure, here is the change.\n\nhello.py\n```python\n<<<<<<< SEARCH\n=======\ndef hello():\n    return \"hi\"\n>>>>>>> REPLACE\n```",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Sure, here is the change.\n\nhello.py\n```python\n<<<<<<< SEARCH\n=======\ndef hello():\n    return \"hi\"\n>>>>>>> REPLACE\n```"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "now add a test\nand run it",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "now add a test\nand run it"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "I added the test.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "I added the test."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/projects/demo/.aider.chat.history.md"
+    }
+  }
+]

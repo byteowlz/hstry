@@ -32,6 +32,7 @@ interface TeamsMessage {
   model?: string;
   done?: boolean;
   context?: unknown;
+  timestamp?: number;
 }
 
 interface TeamsHistory {
@@ -159,7 +160,7 @@ function extractDateFromFilename(filePath: string): number | null {
 }
 
 function parseConversation(entry: RawConversation, opts?: ParseOptions, fileDate?: number | null): Conversation | null {
-  const messages = extractMessages(entry.chat?.history?.messages);
+  const messages = extractMessages(entry.chat?.history?.messages, entry.chat?.history?.currentId);
 
   if (messages.length === 0) {
     return null;
@@ -198,12 +199,27 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions, fileDate
   return conversation;
 }
 
-function extractMessages(messagesMap?: Record<string, TeamsMessage>): Message[] {
+/** Follow parentId links from currentId so discarded branches are skipped. */
+function activeBranch(messagesMap: Record<string, TeamsMessage>, currentId?: string): TeamsMessage[] {
+  if (!currentId || !messagesMap[currentId]) return Object.values(messagesMap);
+  const chain: TeamsMessage[] = [];
+  const seen = new Set<string>();
+  let id: string | undefined | null = currentId;
+  while (id && messagesMap[id] && !seen.has(id)) {
+    seen.add(id);
+    chain.push(messagesMap[id]);
+    id = messagesMap[id].parentId;
+  }
+  return chain.reverse();
+}
+
+function extractMessages(messagesMap?: Record<string, TeamsMessage>, currentId?: string): Message[] {
   if (!messagesMap) return [];
 
   const messages: Message[] = [];
+  const ordered = currentId && messagesMap[currentId];
 
-  for (const msg of Object.values(messagesMap)) {
+  for (const msg of activeBranch(messagesMap, currentId)) {
     if (!msg.role || !msg.content) {
       continue;
     }
@@ -217,6 +233,7 @@ function extractMessages(messagesMap?: Record<string, TeamsMessage>): Message[] 
       role: mapRole(msg.role),
       content,
       parts: textOnlyParts(content),
+      createdAt: msg.timestamp ? Math.floor(msg.timestamp * 1000) : undefined,
       model: msg.model,
       metadata: {
         id: msg.id,
@@ -226,6 +243,8 @@ function extractMessages(messagesMap?: Record<string, TeamsMessage>): Message[] 
       },
     });
   }
+
+  if (ordered) return messages;
 
   messages.sort((a, b) => {
     if (a.metadata?.parentId === b.metadata?.id) return 1;

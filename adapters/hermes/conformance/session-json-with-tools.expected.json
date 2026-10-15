@@ -1,0 +1,123 @@
+[
+  {
+    "externalId": "20260418_045325_a1b2c3",
+    "title": "How much disk space is free?",
+    "createdAt": 1776488005274,
+    "updatedAt": 1776488050500,
+    "model": "anthropic/claude-sonnet-4.5",
+    "provider": "openrouter.ai",
+    "messages": [
+      {
+        "role": "user",
+        "content": "How much disk space is free?",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "How much disk space is free?"
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "I should run df."
+          },
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "call_df_1",
+            "name": "terminal",
+            "input": {
+              "command": "df -h /"
+            }
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      {
+        "role": "tool",
+        "content": "{\"output\":\"/dev/sda1 100G 40G 60G 40% /\",\"exit_code\":0}",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "{\"output\":\"/dev/sda1 100G 40G 60G 40% /\",\"exit_code\":0}"
+          },
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "call_df_1",
+            "output": "{\"output\":\"/dev/sda1 100G 40G 60G 40% /\",\"exit_code\":0}",
+            "name": "terminal"
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "call_bad_2",
+            "name": "terminal",
+            "input": {
+              "command": "nosuchcmd"
+            }
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      {
+        "role": "tool",
+        "content": "{\"output\":\"nosuchcmd: command not found\",\"exit_code\":127}",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "{\"output\":\"nosuchcmd: command not found\",\"exit_code\":127}"
+          },
+          {
+            "id": "p-8",
+            "type": "tool_result",
+            "toolCallId": "call_bad_2",
+            "output": "{\"output\":\"nosuchcmd: command not found\",\"exit_code\":127}",
+            "name": "terminal"
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      {
+        "role": "assistant",
+        "content": "You have 60G free on /.",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "You have 60G free on /."
+          }
+        ],
+        "createdAt": 1776488005274,
+        "model": "anthropic/claude-sonnet-4.5"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.hermes/sessions/session_20260418_045325_a1b2c3.json",
+      "platform": "cli",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "messageCount": 5
+    }
+  }
+]

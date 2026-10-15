@@ -1,0 +1,105 @@
+[
+  {
+    "externalId": "jan_1751100000",
+    "title": "New Thread",
+    "createdAt": 1751100000000,
+    "updatedAt": 1751100005000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Ping",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Ping"
+          }
+        ],
+        "createdAt": 1751100001000,
+        "metadata": {
+          "id": "01JYSAAAAAAAAAAAAAAAAAAAAA",
+          "status": "ready"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Pong",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Pong"
+          }
+        ],
+        "createdAt": 1751100004000,
+        "metadata": {
+          "id": "01JYSBBBBBBBBBBBBBBBBBBBBB",
+          "status": "ready"
+        }
+      }
+    ],
+    "metadata": {
+      "threadPath": "$HOME/.local/share/Jan/data/threads/jan_1751100000",
+      "assistants": []
+    }
+  },
+  {
+    "externalId": "8f2c9922-db49-4d1e-8620-279c05baf2d0",
+    "title": "Hello Jan",
+    "createdAt": 1751012633000,
+    "updatedAt": 1751012640000,
+    "model": "jan-v1-4b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What can you do?",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "What can you do?"
+          }
+        ],
+        "createdAt": 1751012635000,
+        "metadata": {
+          "id": "01JYR7S0GW5M9PSHMRE7T8VQJM",
+          "status": "ready"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "I can search and summarize.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "I can search and summarize."
+          }
+        ],
+        "createdAt": 1751012639307,
+        "metadata": {
+          "id": "01JYR7S0JB5ZBGMJV52KWMW5VW",
+          "status": "ready",
+          "tokenSpeed": {
+            "lastTimestamp": 1751012637097,
+            "message": "01JYR7S0GW5M9PSHMRE7T8VQJM",
+            "tokenCount": 49,
+            "tokenSpeed": 22.6
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "threadPath": "$HOME/.local/share/Jan/data/threads/8f2c9922-db49-4d1e-8620-279c05baf2d0",
+      "assistants": [
+        {
+          "id": "jan",
+          "object": "assistant",
+          "name": "Jan",
+          "model": "*",
+          "created_at": 1750945742.536
+        }
+      ]
+    }
+  }
+]

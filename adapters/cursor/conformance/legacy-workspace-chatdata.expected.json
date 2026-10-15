@@ -1,0 +1,42 @@
+[
+  {
+    "externalId": "tab-1",
+    "title": "Explain this",
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000020000,
+    "workspace": "abc123hash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain this function",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Explain this function"
+          }
+        ],
+        "createdAt": 1700000001000,
+        "metadata": {}
+      },
+      {
+        "role": "assistant",
+        "content": "It adds two numbers.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "It adds two numbers."
+          }
+        ],
+        "createdAt": 1700000010000,
+        "model": "gpt-4",
+        "metadata": {}
+      }
+    ],
+    "metadata": {
+      "source": "cursor-chat",
+      "tabId": "tab-1"
+    }
+  }
+]

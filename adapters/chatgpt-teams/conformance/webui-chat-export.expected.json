@@ -1,0 +1,124 @@
+[
+  {
+    "externalId": "chat-0002",
+    "title": "Second chat",
+    "createdAt": 1750001000000,
+    "updatedAt": 1750001100000,
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Ping",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Ping"
+          }
+        ],
+        "createdAt": 1750001001000,
+        "metadata": {
+          "id": "a",
+          "parentId": null,
+          "childrenIds": [
+            "b"
+          ]
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Pong",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Pong"
+          }
+        ],
+        "createdAt": 1750001002000,
+        "model": "gpt-4o-mini",
+        "metadata": {
+          "id": "b",
+          "parentId": "a",
+          "childrenIds": [],
+          "done": true
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "currentId": "b"
+    }
+  },
+  {
+    "externalId": "chat-0001",
+    "title": "Greeting",
+    "createdAt": 1750000000000,
+    "updatedAt": 1750000300000,
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello Teams!",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello Teams!"
+          }
+        ],
+        "createdAt": 1750000010000,
+        "metadata": {
+          "id": "m1",
+          "parentId": null,
+          "childrenIds": [
+            "m2",
+            "m3"
+          ]
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Hello from Teams.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello from Teams."
+          }
+        ],
+        "createdAt": 1750000030000,
+        "model": "gpt-4o",
+        "metadata": {
+          "id": "m3",
+          "parentId": "m1",
+          "childrenIds": [
+            "m4"
+          ],
+          "done": true
+        }
+      },
+      {
+        "role": "user",
+        "content": "Thanks",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Thanks"
+          }
+        ],
+        "createdAt": 1750000040000,
+        "metadata": {
+          "id": "m4",
+          "parentId": "m3",
+          "childrenIds": []
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "currentId": "m4"
+    }
+  }
+]

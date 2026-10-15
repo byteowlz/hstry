@@ -1,0 +1,136 @@
+[
+  {
+    "externalId": "conv-0002",
+    "createdAt": 1750001000000,
+    "updatedAt": 1750001010000,
+    "model": "gpt-4o-mini",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hi",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Hi"
+          }
+        ],
+        "createdAt": 1750001001000,
+        "metadata": {
+          "id": "a",
+          "nodeId": "a",
+          "parentId": "root",
+          "contentType": "text"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Hello!",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "Hello!"
+          }
+        ],
+        "createdAt": 1750001002000,
+        "model": "gpt-4o-mini",
+        "metadata": {
+          "id": "b",
+          "nodeId": "b",
+          "parentId": "a",
+          "contentType": "text"
+        }
+      }
+    ],
+    "metadata": {
+      "currentNode": "b"
+    }
+  },
+  {
+    "externalId": "conv-0001",
+    "title": "Sum a list",
+    "createdAt": 1750000000500,
+    "updatedAt": 1750000100250,
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Sum [1,2,3] in python",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Sum [1,2,3] in python"
+          }
+        ],
+        "createdAt": 1750000001100,
+        "metadata": {
+          "id": "n-user",
+          "nodeId": "n-user",
+          "parentId": "n-sys",
+          "contentType": "text"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "print(sum([1,2,3]))",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "print(sum([1,2,3]))"
+          }
+        ],
+        "createdAt": 1750000003300,
+        "model": "gpt-4o",
+        "metadata": {
+          "id": "n-code",
+          "nodeId": "n-code",
+          "parentId": "n-user",
+          "contentType": "code"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "6",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "6"
+          }
+        ],
+        "createdAt": 1750000004400,
+        "metadata": {
+          "id": "n-out",
+          "nodeId": "n-out",
+          "parentId": "n-code",
+          "contentType": "execution_output"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The sum is 6.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "The sum is 6."
+          }
+        ],
+        "createdAt": 1750000005500,
+        "model": "gpt-4o",
+        "metadata": {
+          "id": "n-final",
+          "nodeId": "n-final",
+          "parentId": "n-out",
+          "contentType": "text"
+        }
+      }
+    ],
+    "metadata": {
+      "currentNode": "n-final"
+    }
+  }
+]

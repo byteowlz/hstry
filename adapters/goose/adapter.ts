@@ -14,6 +14,7 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
@@ -22,6 +23,7 @@ import type {
 import {
   runAdapter,
   textOnlyParts,
+  thinkingPart,
   toolCallPart,
   toolResultPart,
 } from '../types/index.ts';
@@ -95,6 +97,10 @@ interface GooseContent {
   tool_name?: string;
   input?: unknown;
   output?: unknown;
+  id?: string;
+  thinking?: string;
+  toolCall?: unknown;
+  toolResult?: unknown;
 }
 
 interface GooseToolCall {
@@ -399,20 +405,70 @@ function parseSessionFromDb(row: {
     msg_metadata?: string;
   }>;
 }): Conversation | null {
-  const messages: Message[] = row.messages.map(m => {
-    let content = '';
+  const messages: Message[] = [];
+  const callIndex = new Map<string, ToolCall>();
+
+  for (const m of row.messages) {
+    let blocks: GooseContent[] = [];
     try {
-      const contentArray = JSON.parse(m.content_json) as GooseContent[];
-      content = extractContent(contentArray);
+      const parsed = JSON.parse(m.content_json);
+      blocks = Array.isArray(parsed) ? parsed : [];
     } catch { /* ignore */ }
 
-    return {
+    const text = extractContent(blocks);
+    const parts = textOnlyParts(text) ?? [];
+    const toolCalls: ToolCall[] = [];
+    const resultParts: CanonPart[] = [];
+    const resultTexts: string[] = [];
+    const createdAt = m.created_timestamp * 1000; // seconds -> ms
+
+    for (const block of blocks) {
+      if (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking) {
+        parts.unshift(thinkingPart(block.thinking));
+      } else if (block.type === 'toolRequest' && block.id) {
+        const call = unwrapToolResult(block.toolCall);
+        const value = call.value as { name?: string; arguments?: unknown } | undefined;
+        const toolName = value?.name ?? 'unknown';
+        const tc: ToolCall = {
+          toolName,
+          input: value?.arguments,
+          status: call.ok ? 'pending' : 'error',
+        };
+        toolCalls.push(tc);
+        callIndex.set(block.id, tc);
+        parts.push(toolCallPart(block.id, toolName, value?.arguments));
+      } else if (block.type === 'toolResponse' && block.id) {
+        const result = unwrapToolResult(block.toolResult);
+        const output = toolResultText(result.value);
+        const isError = !result.ok || (result.value as { isError?: boolean } | undefined)?.isError === true;
+        const tc = callIndex.get(block.id);
+        if (tc) {
+          tc.output = output;
+          tc.status = isError ? 'error' : 'success';
+        }
+        resultParts.push(toolResultPart(block.id, output, { name: tc?.toolName, isError }));
+        resultTexts.push(output);
+      }
+    }
+
+    if (resultParts.length > 0 && !text && toolCalls.length === 0) {
+      messages.push({
+        role: 'tool',
+        content: resultTexts.join('\n'),
+        parts: resultParts,
+        createdAt,
+      });
+      continue;
+    }
+    if (!text && toolCalls.length === 0 && parts.length === 0) continue;
+    messages.push({
       role: mapRole(m.role),
-      content,
-      parts: textOnlyParts(content),
-      createdAt: m.created_timestamp * 1000, // Convert seconds to milliseconds
-    };
-  }).filter((m): m is Message => m.content || m.tool_calls?.length);
+      content: text,
+      parts: parts.length > 0 ? parts : undefined,
+      createdAt,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    });
+  }
 
   if (messages.length === 0) return null;
 
@@ -438,6 +494,31 @@ function parseSessionFromDb(row: {
       ...metadata,
     },
   };
+}
+
+/** Goose serializes Result as {status:'success',value} | {status:'error',error}. */
+function unwrapToolResult(raw: unknown): { ok: boolean; value: unknown } {
+  const r = raw as { status?: string; value?: unknown; error?: unknown } | undefined;
+  if (r && typeof r === 'object' && 'status' in r) {
+    return r.status === 'success' ? { ok: true, value: r.value } : { ok: false, value: r.error };
+  }
+  return { ok: true, value: raw };
+}
+
+function toolResultText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray((value as { content?: unknown })?.content)
+      ? (value as { content: unknown[] }).content
+      : undefined;
+  if (items) {
+    return items
+      .map(item => (typeof (item as { text?: unknown })?.text === 'string' ? (item as { text: string }).text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return value === undefined ? '' : JSON.stringify(value);
 }
 
 function parseGooseMessage(msg: GooseMessage): Message | null {
@@ -579,7 +660,9 @@ function parseTimestamp(value?: string | number): number | undefined {
   if (typeof value === 'number') {
     return value < 1e12 ? value * 1000 : value;
   }
-  const parsed = Date.parse(value);
+  // SQLite CURRENT_TIMESTAMP / goose "%Y-%m-%d %H:%M:%S" values are UTC with no zone.
+  const bare = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(value);
+  const parsed = Date.parse(bare ? `${bare[1]}T${bare[2]}Z` : value);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 

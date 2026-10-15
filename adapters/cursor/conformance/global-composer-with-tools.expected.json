@@ -1,0 +1,110 @@
+[
+  {
+    "externalId": "comp-2",
+    "title": "Say hi",
+    "createdAt": 1750102400000,
+    "updatedAt": 1750102405000,
+    "provider": "cursor",
+    "workspace": "globalStorage",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hi",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Say hi"
+          }
+        ],
+        "createdAt": 1750102400000
+      },
+      {
+        "role": "assistant",
+        "content": "Hi!",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Hi!"
+          }
+        ],
+        "createdAt": 1750102405000
+      }
+    ],
+    "metadata": {
+      "source": "cursor-composer",
+      "composerId": "comp-2",
+      "file": "$HOME/.config/Cursor/User/globalStorage/state.vscdb"
+    }
+  },
+  {
+    "externalId": "comp-1",
+    "title": "Read the config",
+    "createdAt": 1750000000000,
+    "updatedAt": 1750000060000,
+    "provider": "cursor",
+    "workspace": "/work/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is in config.toml?",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "What is in config.toml?"
+          }
+        ],
+        "createdAt": 1750000000000
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "createdAt": 1750000002000,
+        "toolCalls": [
+          {
+            "toolName": "read_file_v2",
+            "input": {
+              "targetFile": "config.toml"
+            },
+            "output": "{\"contents\":\"port = 8080\"}",
+            "status": "success"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "createdAt": 1750000003000,
+        "toolCalls": [
+          {
+            "toolName": "read_file_v2",
+            "input": {
+              "targetFile": "missing.toml"
+            },
+            "output": "{\"error\":\"File not found\"}",
+            "status": "error"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "The config sets port = 8080.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "The config sets port = 8080."
+          }
+        ],
+        "createdAt": 1750000060000
+      }
+    ],
+    "metadata": {
+      "source": "cursor-composer",
+      "composerId": "comp-1",
+      "file": "$HOME/.config/Cursor/User/globalStorage/state.vscdb"
+    }
+  }
+]

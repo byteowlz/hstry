@@ -49,7 +49,8 @@ const adapter: Adapter = {
       const content = await readFile(filePath, 'utf-8');
       const stats = await stat(filePath).catch(() => null);
 
-      const messages = parseMarkdownMessages(content);
+      let messages = parseMarkdownMessages(content);
+      if (messages.length === 0) messages = parseNativeAiderMessages(content);
       if (messages.length === 0) continue;
 
       const createdAt = stats?.mtimeMs ? Math.floor(stats.mtimeMs) : Date.now();
@@ -137,6 +138,48 @@ function parseMarkdownMessages(content: string): Message[] {
 
   pushMessage();
 
+  return messages;
+}
+
+/**
+ * Aider's own history format: user input lines are prefixed with "#### ",
+ * tool/status output with "> ", and assistant replies are plain markdown.
+ */
+function parseNativeAiderMessages(content: string): Message[] {
+  const messages: Message[] = [];
+  let role: Message['role'] | null = null;
+  let buffer: string[] = [];
+
+  const flush = () => {
+    if (!role) return;
+    const text = buffer.join('\n').trim();
+    if (text.length > 0) {
+      messages.push({ role, content: text, parts: textOnlyParts(text) });
+    }
+    buffer = [];
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    if (line.startsWith('#### ')) {
+      if (role !== 'user') flush();
+      role = 'user';
+      buffer.push(line.slice(5));
+    } else if (/^# aider chat started at /.test(line) || /^>( |$)/.test(line)) {
+      flush();
+      role = null;
+    } else if (role === 'user') {
+      if (line.trim().length === 0) continue;
+      flush();
+      role = 'assistant';
+      buffer.push(line);
+    } else if (role === 'assistant') {
+      buffer.push(line);
+    } else if (line.trim().length > 0) {
+      role = 'assistant';
+      buffer.push(line);
+    }
+  }
+  flush();
   return messages;
 }
 

@@ -1,0 +1,165 @@
+[
+  {
+    "externalId": "20250602_1",
+    "title": "Greeting",
+    "createdAt": 1748851200000,
+    "updatedAt": 1748851205000,
+    "workspace": "/work/other",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello"
+          }
+        ],
+        "createdAt": 1748851201000
+      },
+      {
+        "role": "assistant",
+        "content": "Hi there!",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hi there!"
+          }
+        ],
+        "createdAt": 1748851205000
+      }
+    ],
+    "metadata": {
+      "source": "goose-db"
+    }
+  },
+  {
+    "externalId": "20250601_1",
+    "title": "List files",
+    "createdAt": 1748772000000,
+    "updatedAt": 1748772030000,
+    "workspace": "/work/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "List the files here",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "List the files here"
+          }
+        ],
+        "createdAt": 1748772001000
+      },
+      {
+        "role": "assistant",
+        "content": "Let me check.",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "thinking",
+            "text": "I should run ls."
+          },
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Let me check."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "developer__shell",
+            "input": {
+              "command": "ls"
+            }
+          }
+        ],
+        "createdAt": 1748772002000,
+        "toolCalls": [
+          {
+            "toolName": "developer__shell",
+            "input": {
+              "command": "ls"
+            },
+            "status": "success",
+            "output": "a.txt\nb.txt"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "a.txt\nb.txt",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "a.txt\nb.txt",
+            "name": "developer__shell"
+          }
+        ],
+        "createdAt": 1748772003000
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "tool_call",
+            "toolCallId": "call_2",
+            "name": "developer__shell",
+            "input": {
+              "command": "cat nope"
+            }
+          }
+        ],
+        "createdAt": 1748772004000,
+        "toolCalls": [
+          {
+            "toolName": "developer__shell",
+            "input": {
+              "command": "cat nope"
+            },
+            "status": "error",
+            "output": "cat: nope: No such file or directory"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "cat: nope: No such file or directory",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "tool_result",
+            "toolCallId": "call_2",
+            "output": "cat: nope: No such file or directory",
+            "name": "developer__shell",
+            "isError": true
+          }
+        ],
+        "createdAt": 1748772005000
+      },
+      {
+        "role": "assistant",
+        "content": "There are two files: a.txt and b.txt.",
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "There are two files: a.txt and b.txt."
+          }
+        ],
+        "createdAt": 1748772030000
+      }
+    ],
+    "metadata": {
+      "source": "goose-db"
+    }
+  }
+]

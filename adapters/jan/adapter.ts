@@ -32,7 +32,9 @@ const DEFAULT_PATHS = [
   join(homedir(), 'jan', 'threads'),
   // macOS
   join(homedir(), 'Library', 'Application Support', 'Jan', 'data', 'threads'),
-  // Linux
+  // Linux (current default, XDG_DATA_HOME)
+  join(homedir(), '.local', 'share', 'Jan', 'data', 'threads'),
+  // Linux (older releases)
   join(homedir(), '.config', 'Jan', 'data', 'threads'),
   // Windows
   join(process.env.APPDATA || '', 'Jan', 'data', 'threads'),
@@ -42,7 +44,8 @@ interface ThreadMeta {
   id?: string;
   object?: string;
   title?: string;
-  assistants?: { assistant_id?: string; model?: string }[];
+  assistants?: { assistant_id?: string; id?: string; model?: string | { id?: string } }[];
+  model?: { id?: string; provider?: string } | string;
   created?: number;
   updated?: number;
   created_at?: number;
@@ -202,7 +205,7 @@ async function parseThread(threadPath: string, opts?: ParseOptions): Promise<Con
     }
   }
 
-  const model = meta.assistants?.[0]?.model ?? deriveModel(messages);
+  const model = threadModel(meta) ?? deriveModel(messages);
 
   return {
     externalId: meta.id ?? threadId,
@@ -217,6 +220,16 @@ async function parseThread(threadPath: string, opts?: ParseOptions): Promise<Con
       ...meta.metadata,
     },
   };
+}
+
+/** Current Jan keeps the active model on thread.model ({id, provider}); the cloned assistant often says "*". */
+function threadModel(meta: ThreadMeta): string | undefined {
+  const candidates = [meta.model, meta.assistants?.[0]?.model];
+  for (const candidate of candidates) {
+    const id = typeof candidate === 'string' ? candidate : candidate?.id;
+    if (id && id !== '*') return id;
+  }
+  return undefined;
 }
 
 function parseMessage(msg: JanMessage): Message | null {

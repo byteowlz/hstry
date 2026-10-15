@@ -152,6 +152,15 @@ interface ComposerBubble {
   richText?: string;
   createdAt?: number | string;
   toolResults?: unknown;
+  /** Current Cursor: one tool call per assistant bubble; params/result are JSON strings. */
+  toolFormerData?: {
+    name?: string;
+    params?: unknown;
+    rawArgs?: unknown;
+    result?: unknown;
+    status?: string;
+    error?: unknown;
+  };
 }
 
 interface ComposerData {
@@ -339,7 +348,28 @@ function composerText(bubble?: ComposerBubble): string {
     : text;
 }
 
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function formerToolCall(bubble?: ComposerBubble): ToolCall[] {
+  const tool = bubble?.toolFormerData;
+  if (!tool?.name) return [];
+  const result = tool.result ?? tool.error;
+  const output = result === undefined ? '' : typeof result === 'string' ? result : JSON.stringify(result);
+  const failed = tool.status === 'error' || tool.status === 'failed' || tool.error !== undefined;
+  return [{
+    toolName: tool.name,
+    input: parseMaybeJson(tool.params ?? tool.rawArgs),
+    output: output.slice(0, 8_000),
+    status: failed ? 'error' : 'success',
+  }];
+}
+
 function composerToolCalls(bubble?: ComposerBubble): ToolCall[] {
+  const former = formerToolCall(bubble);
+  if (former.length > 0) return former;
   if (!bubble?.toolResults) return [];
   const rawTools = Array.isArray(bubble.toolResults) ? bubble.toolResults : [bubble.toolResults];
   return rawTools.flatMap(raw => {
@@ -374,7 +404,8 @@ function composerConversation(
 
   const append = (bubbleHeader: ComposerBubbleHeader, bubble?: ComposerBubble) => {
     const content = composerText(bubble);
-    if (!content) return;
+    const toolCalls = composerToolCalls(bubble);
+    if (!content && toolCalls.length === 0) return;
     const createdAt = toMilliseconds(bubble?.createdAt) ?? toMilliseconds(data.createdAt);
     if (createdAt !== undefined) {
       firstTimestamp = firstTimestamp === undefined ? createdAt : Math.min(firstTimestamp, createdAt);
@@ -384,7 +415,6 @@ function composerConversation(
     if (type === 1) {
       messages.push({ role: 'user', content, parts: textOnlyParts(content), createdAt });
     } else if (type === 2) {
-      const toolCalls = composerToolCalls(bubble);
       messages.push({
         role: 'assistant',
         content,

@@ -1,0 +1,45 @@
+[
+  {
+    "externalId": "test-codex-session-1",
+    "title": "project - 2023-11-14 - Hello Codex!",
+    "createdAt": 1699963200000,
+    "updatedAt": 1699963202000,
+    "model": "o1-mini",
+    "workspace": "/home/test/project",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello Codex!",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello Codex!"
+          }
+        ],
+        "createdAt": 1699963201000,
+        "model": "o1-mini"
+      },
+      {
+        "role": "assistant",
+        "content": "Hello! I'm Codex, ready to help you with your coding tasks.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello! I'm Codex, ready to help you with your coding tasks."
+          }
+        ],
+        "createdAt": 1699963202000,
+        "model": "o1-mini"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-fixture.jsonl",
+      "originator": "codex",
+      "cliVersion": "0.1.0",
+      "source": "cli",
+      "modelProvider": null
+    }
+  }
+]

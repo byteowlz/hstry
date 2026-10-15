@@ -1,0 +1,38 @@
+[
+  {
+    "externalId": "legacy-session",
+    "title": "Hello Goose!",
+    "createdAt": 1700000001000,
+    "updatedAt": 1700000002000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello Goose!",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello Goose!"
+          }
+        ],
+        "createdAt": 1700000001000
+      },
+      {
+        "role": "assistant",
+        "content": "Hello from Goose.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello from Goose."
+          }
+        ],
+        "createdAt": 1700000002000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.local/share/goose/sessions/legacy-session.jsonl",
+      "source": "goose-jsonl"
+    }
+  }
+]

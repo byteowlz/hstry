@@ -1,0 +1,84 @@
+[
+  {
+    "externalId": "c2222222-0000-0000-0000-000000000002",
+    "title": "",
+    "createdAt": 1748851200000,
+    "updatedAt": 1748851209000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hi",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Hi"
+          }
+        ],
+        "createdAt": 1748851201000
+      },
+      {
+        "role": "assistant",
+        "content": "Hello!",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Hello!"
+          }
+        ],
+        "createdAt": 1748851209000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/Downloads/data-2025-06-03-claude/conversations.json"
+    }
+  },
+  {
+    "externalId": "c1111111-0000-0000-0000-000000000001",
+    "title": "Fix a bug",
+    "createdAt": 1748772000000,
+    "updatedAt": 1748772300000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Why does my loop never end?",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Why does my loop never end?"
+          }
+        ],
+        "createdAt": 1748772001000
+      },
+      {
+        "role": "assistant",
+        "content": "You never increment i.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "You never increment i."
+          }
+        ],
+        "createdAt": 1748772005000
+      },
+      {
+        "role": "user",
+        "content": "Thanks!",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Thanks!"
+          }
+        ],
+        "createdAt": 1748772300000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/Downloads/data-2025-06-03-claude/conversations.json"
+    }
+  }
+]

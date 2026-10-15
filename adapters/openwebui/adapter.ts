@@ -4,7 +4,7 @@
  * Parses Open WebUI SQLite database (webui.db)
  * Location: data/webui.db (in Docker: /app/backend/data/webui.db)
  *
- * Requires: better-sqlite3 (npm install better-sqlite3)
+ * Uses bun:sqlite under Bun, or better-sqlite3 under Node.
  */
 
 import { readdir, stat } from 'fs/promises';
@@ -19,13 +19,27 @@ import type {
 } from '../types/index.ts';
 import { runAdapter, textOnlyParts } from '../types/index.ts';
 
-// Dynamic import for better-sqlite3 (optional dependency)
-let Database: typeof import('better-sqlite3') | null = null;
+// Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node). better-sqlite3 is not
+// loaded under Bun because its native addon crashes the runtime.
+interface SqliteDb {
+  prepare(sql: string): { all(...params: unknown[]): unknown[] };
+  close(): void;
+}
+let openDb: ((path: string) => SqliteDb) | null = null;
 try {
-  Database = (await import('better-sqlite3')).default;
+  if (typeof Bun !== 'undefined') {
+    // @ts-ignore - bun:sqlite is Bun-only
+    const { Database: BunDb } = await import('bun:sqlite');
+    openDb = (path: string) => new BunDb(path, { readonly: true }) as unknown as SqliteDb;
+  } else {
+    const BetterSqlite = (await import('better-sqlite3')).default;
+    openDb = (path: string) => new BetterSqlite(path, { readonly: true }) as unknown as SqliteDb;
+  }
 } catch {
   // SQLite not available - adapter will return empty results
 }
+
+declare const Bun: unknown;
 
 const DEFAULT_PATHS = [
   // Docker default
@@ -80,13 +94,13 @@ const adapter: Adapter = {
   },
 
   async detect(path: string): Promise<number | null> {
-    if (!Database) return null;
+    if (!openDb) return null;
 
     const dbPath = await findDatabase(path);
     if (!dbPath) return null;
 
     try {
-      const db = new Database(dbPath, { readonly: true });
+      const db = openDb(dbPath);
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
       db.close();
 
@@ -103,7 +117,7 @@ const adapter: Adapter = {
   },
 
   async parse(path: string, opts?: ParseOptions): Promise<Conversation[]> {
-    if (!Database) return [];
+    if (!openDb) return [];
 
     const dbPath = await findDatabase(path);
     if (!dbPath) return [];
@@ -111,7 +125,7 @@ const adapter: Adapter = {
     const conversations: Conversation[] = [];
 
     try {
-      const db = new Database(dbPath, { readonly: true });
+      const db = openDb(dbPath);
 
       let query = 'SELECT * FROM chat WHERE 1=1';
       const params: unknown[] = [];

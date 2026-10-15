@@ -1,0 +1,138 @@
+[
+  {
+    "externalId": "conv-0002",
+    "title": "Haiku",
+    "createdAt": 1738001000000,
+    "updatedAt": 1738001010000,
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a haiku about rain",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Write a haiku about rain"
+          }
+        ],
+        "createdAt": 1738001001000,
+        "metadata": {
+          "id": "u1",
+          "nodeId": "u1",
+          "parentId": "client-created-root",
+          "contentType": "text"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth"
+          }
+        ],
+        "createdAt": 1738001005000,
+        "model": "gpt-4o",
+        "metadata": {
+          "id": "a1",
+          "nodeId": "a1",
+          "parentId": "u1",
+          "contentType": "text"
+        }
+      }
+    ],
+    "metadata": {
+      "currentNode": "a1"
+    }
+  },
+  {
+    "externalId": "conv-0001",
+    "title": "Parse a CSV file",
+    "createdAt": 1738000000500,
+    "updatedAt": 1738000095250,
+    "model": "gpt-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Parse this CSV and sum column b",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Parse this CSV and sum column b"
+          }
+        ],
+        "createdAt": 1738000001125,
+        "metadata": {
+          "id": "usr-1",
+          "nodeId": "usr-1",
+          "parentId": "sys-1",
+          "contentType": "multimodal_text"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())"
+          }
+        ],
+        "createdAt": 1738000006000,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "code-1",
+          "nodeId": "code-1",
+          "parentId": "recap-1",
+          "contentType": "code"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "42",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "42"
+          }
+        ],
+        "createdAt": 1738000008000,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "out-1",
+          "nodeId": "out-1",
+          "parentId": "code-1",
+          "contentType": "execution_output"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The sum of column **b** is 42.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "The sum of column **b** is 42."
+          }
+        ],
+        "createdAt": 1738000009750,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "asst-1",
+          "nodeId": "asst-1",
+          "parentId": "out-1",
+          "contentType": "text"
+        }
+      }
+    ],
+    "metadata": {
+      "currentNode": "asst-1"
+    }
+  }
+]

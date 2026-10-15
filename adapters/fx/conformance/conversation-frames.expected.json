@@ -1,0 +1,152 @@
+[
+  {
+    "externalId": "fx-frames-1",
+    "title": "Fix the failing test in src/lib.rs",
+    "createdAt": 1700000000000,
+    "updatedAt": 1700000009000,
+    "model": "anthropic/claude-sonnet-4.6",
+    "provider": "vercel",
+    "workspace": "/work/demo",
+    "tokensIn": 120,
+    "tokensOut": 45,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Fix the failing test in src/lib.rs",
+        "createdAt": 1700000001000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Fix the failing test in src/lib.rs"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Let me look at the file.",
+        "createdAt": 1700000002000,
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Let me look at the file."
+          },
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "read_file",
+            "input": {
+              "path": "src/lib.rs"
+            }
+          },
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "call_2",
+            "name": "shell",
+            "input": {
+              "command": "cargo test"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "read_file",
+            "input": {
+              "path": "src/lib.rs"
+            },
+            "status": "pending"
+          },
+          {
+            "toolName": "shell",
+            "input": {
+              "command": "cargo test"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "fn add(a: i32, b: i32) -> i32 { a - b }",
+        "createdAt": 1700000003000,
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "fn add(a: i32, b: i32) -> i32 { a - b }",
+            "name": "read_file"
+          }
+        ],
+        "metadata": {
+          "status": "success"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "error: test failed, exit code 101",
+        "createdAt": 1700000004000,
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_result",
+            "toolCallId": "call_2",
+            "output": "error: test failed, exit code 101",
+            "name": "shell",
+            "isError": true
+          }
+        ],
+        "metadata": {
+          "status": "failure"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The add function subtracts; fixed.",
+        "createdAt": 1700000006000,
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "The add function subtracts; fixed."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Thanks",
+        "createdAt": 1700000008000,
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "Thanks"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "You are welc",
+        "createdAt": 1700000009000,
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "You are welc"
+          }
+        ],
+        "metadata": {
+          "interrupted": true,
+          "reason": "cancelled"
+        }
+      }
+    ],
+    "metadata": {
+      "storageFormat": "event_log_v1",
+      "source": "fx"
+    }
+  }
+]

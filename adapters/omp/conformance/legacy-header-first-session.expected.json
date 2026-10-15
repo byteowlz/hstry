@@ -1,0 +1,60 @@
+[
+  {
+    "externalId": "019b0000-aaaa-7bbb-8ccc-ddddeeeeffff",
+    "title": "Explain this repo",
+    "createdAt": 1790950501000,
+    "updatedAt": 1790950503000,
+    "workspace": "/work/legacy",
+    "model": "gpt-5",
+    "provider": "openai",
+    "tokensIn": 200,
+    "tokensOut": 10,
+    "costUsd": 0.001,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain this repo",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Explain this repo"
+          }
+        ],
+        "createdAt": 1790950501000,
+        "metadata": {
+          "entryType": "message",
+          "id": "c0000001",
+          "parentId": null
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "A small Rust CLI.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "A small Rust CLI."
+          }
+        ],
+        "createdAt": 1790950503000,
+        "model": "gpt-5",
+        "tokens": 210,
+        "costUsd": 0.001,
+        "metadata": {
+          "entryType": "message",
+          "id": "c0000002",
+          "parentId": "c0000001",
+          "provider": "openai",
+          "api": "openai-responses",
+          "stopReason": "stop"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.omp/agent/sessions/--work-legacy--/2026-10-02T14-15-00-000Z_019b0000-aaaa-7bbb-8ccc-ddddeeeeffff.jsonl",
+      "version": 3
+    }
+  }
+]

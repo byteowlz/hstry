@@ -77,7 +77,8 @@ interface RawBlock {
   name?: string;
   input?: unknown;
   output?: unknown;
-  content?: string;
+  content?: string | RawBlock[];
+  is_error?: boolean;
   id?: string;
   tool_use_id?: string;
 }
@@ -328,8 +329,8 @@ function buildParts(content?: string | RawBlock[]): CanonPart[] | undefined {
     } else if (block.type === 'tool_use' && block.name) {
       parts.push(toolCallPart(block.id ?? block.name, block.name, block.input));
     } else if (block.type === 'tool_result') {
-      const output = typeof block.content === 'string' ? block.content : JSON.stringify(block.output);
-      parts.push(toolResultPart(block.tool_use_id ?? 'unknown', output));
+      const output = toolResultText(block) ?? JSON.stringify(block.output);
+      parts.push(toolResultPart(block.tool_use_id ?? 'unknown', output, { isError: block.is_error }));
     }
   }
   return parts.length > 0 ? parts : undefined;
@@ -346,11 +347,21 @@ function extractContent(content?: string | RawBlock[]): string {
       parts.push(block.text.trim());
     } else if (block.type === 'thinking' && block.thinking) {
       parts.push(block.thinking.trim());
-    } else if (block.type === 'tool_result' && typeof block.content === 'string') {
-      parts.push(block.content.trim());
+    } else if (block.type === 'tool_result') {
+      parts.push(toolResultText(block)?.trim() ?? '');
     }
   }
   return parts.filter(Boolean).join('\n').trim();
+}
+
+/** Claude Code tool_result content is either a string or an array of text blocks. */
+function toolResultText(block: RawBlock): string | undefined {
+  if (typeof block.content === 'string') return block.content;
+  if (!Array.isArray(block.content)) return undefined;
+  return block.content
+    .map(inner => (inner?.type === 'text' && typeof inner.text === 'string' ? inner.text : ''))
+    .filter(Boolean)
+    .join('\n');
 }
 
 function mapRole(role: string): Message['role'] {

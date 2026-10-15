@@ -1,0 +1,148 @@
+[
+  {
+    "externalId": "session-two",
+    "title": "Summarize notes.md",
+    "createdAt": 1790000005000,
+    "updatedAt": 1790000006000,
+    "model": "workbuddy-model",
+    "workspace": "/projects/other",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Summarize notes.md",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "Summarize notes.md"
+          }
+        ],
+        "createdAt": 1790000005000
+      },
+      {
+        "role": "assistant",
+        "content": "The notes cover the Q3 plan.",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "The notes cover the Q3 plan."
+          }
+        ],
+        "createdAt": 1790000006000,
+        "model": "workbuddy-model"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.workbuddy/projects/project-a/session-two.jsonl",
+      "skipsSubagents": true
+    }
+  },
+  {
+    "externalId": "session-one",
+    "title": "Deploy the service",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000000800,
+    "model": "workbuddy-model",
+    "workspace": "/projects/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Deploy the service",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Deploy the service"
+          }
+        ],
+        "createdAt": 1790000000200
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Run the deploy script, then verify."
+          },
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "call-1",
+            "name": "shell",
+            "input": {
+              "command": "./deploy.sh"
+            }
+          }
+        ],
+        "createdAt": 1790000000400,
+        "model": "workbuddy-model"
+      },
+      {
+        "role": "tool",
+        "content": "deploy.sh: permission denied",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "tool_result",
+            "toolCallId": "call-1",
+            "output": "deploy.sh: permission denied",
+            "name": "shell",
+            "isError": true
+          }
+        ],
+        "createdAt": 1790000000500
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_call",
+            "toolCallId": "call-2",
+            "name": "shell",
+            "input": {
+              "command": "chmod +x deploy.sh && ./deploy.sh"
+            }
+          }
+        ],
+        "createdAt": 1790000000600,
+        "model": "workbuddy-model"
+      },
+      {
+        "role": "tool",
+        "content": "deployed",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_result",
+            "toolCallId": "call-2",
+            "output": "deployed",
+            "name": "shell"
+          }
+        ],
+        "createdAt": 1790000000700
+      },
+      {
+        "role": "assistant",
+        "content": "Deployment complete.",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "Deployment complete."
+          }
+        ],
+        "createdAt": 1790000000800,
+        "model": "workbuddy-model"
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.workbuddy/projects/project-a/session-one.jsonl",
+      "skipsSubagents": true
+    }
+  }
+]

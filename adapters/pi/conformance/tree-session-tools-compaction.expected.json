@@ -1,0 +1,562 @@
+[
+  {
+    "externalId": "0199f0a1-1111-7222-8333-444455556666",
+    "title": "Fix sum tests",
+    "createdAt": 1790845200100,
+    "updatedAt": 1790845230000,
+    "workspace": "/work/demo",
+    "model": "claude-sonnet-5-5",
+    "provider": "anthropic",
+    "tokensIn": 8300,
+    "tokensOut": 180,
+    "costUsd": 0.024999999999999998,
+    "messages": [
+      {
+        "role": "system",
+        "content": "Model changed to anthropic/claude-sonnet-5-5",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000002:0",
+            "type": "text",
+            "text": "Model changed to anthropic/claude-sonnet-5-5"
+          }
+        ],
+        "createdAt": 1790845200100,
+        "model": "claude-sonnet-5-5",
+        "metadata": {
+          "entryType": "model_change",
+          "id": "a0000002",
+          "parentId": "a0000001",
+          "provider": "anthropic",
+          "modelId": "claude-sonnet-5-5",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000002",
+          "nativePiEntry": {
+            "type": "model_change",
+            "id": "a0000002",
+            "parentId": "a0000001",
+            "timestamp": "2026-10-01T09:00:00.100Z",
+            "provider": "anthropic",
+            "modelId": "claude-sonnet-5-5"
+          }
+        }
+      },
+      {
+        "role": "system",
+        "content": "Thinking level changed to: medium",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000003:0",
+            "type": "text",
+            "text": "Thinking level changed to: medium"
+          }
+        ],
+        "createdAt": 1790845200200,
+        "metadata": {
+          "entryType": "thinking_level_change",
+          "id": "a0000003",
+          "parentId": "a0000002",
+          "thinkingLevel": "medium",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000003",
+          "nativePiEntry": {
+            "type": "thinking_level_change",
+            "id": "a0000003",
+            "parentId": "a0000002",
+            "timestamp": "2026-10-01T09:00:00.200Z",
+            "thinkingLevel": "medium"
+          }
+        }
+      },
+      {
+        "role": "user",
+        "content": "Run the tests and fix failures",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000004:0",
+            "type": "text",
+            "text": "Run the tests and fix failures"
+          }
+        ],
+        "createdAt": 1790845201000,
+        "model": "claude-sonnet-5-5",
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000004",
+          "parentId": "a0000003",
+          "provider": "anthropic",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000004",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000004",
+            "parentId": "a0000003",
+            "timestamp": "2026-10-01T09:00:01.000Z",
+            "message": {
+              "role": "user",
+              "content": "Run the tests and fix failures",
+              "timestamp": 1790845201000
+            }
+          }
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Run the test suite first.\nRunning the tests.",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000005:0",
+            "type": "thinking",
+            "text": "Run the test suite first.",
+            "meta": {
+              "native": {
+                "type": "thinking",
+                "thinking": "Run the test suite first.",
+                "thinkingSignature": "sig-1"
+              }
+            }
+          },
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000005:1",
+            "type": "text",
+            "text": "Running the tests.",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "Running the tests."
+              }
+            }
+          },
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000005:2",
+            "type": "tool_call",
+            "toolCallId": "call_001|fc_001",
+            "name": "bash",
+            "input": {
+              "command": "npm test"
+            },
+            "meta": {
+              "native": {
+                "type": "toolCall",
+                "id": "call_001|fc_001",
+                "name": "bash",
+                "arguments": {
+                  "command": "npm test"
+                }
+              }
+            }
+          }
+        ],
+        "createdAt": 1790845203000,
+        "model": "claude-sonnet-5-5",
+        "tokens": 1280,
+        "costUsd": 0.012,
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "npm test"
+            }
+          }
+        ],
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000005",
+          "parentId": "a0000004",
+          "provider": "anthropic",
+          "api": "anthropic-messages",
+          "stopReason": "toolUse",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000005",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000005",
+            "parentId": "a0000004",
+            "timestamp": "2026-10-01T09:00:03.000Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": "Run the test suite first.",
+                  "thinkingSignature": "sig-1"
+                },
+                {
+                  "type": "text",
+                  "text": "Running the tests."
+                },
+                {
+                  "type": "toolCall",
+                  "id": "call_001|fc_001",
+                  "name": "bash",
+                  "arguments": {
+                    "command": "npm test"
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-sonnet-5-5",
+              "usage": {
+                "input": 1200,
+                "output": 80,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 1280,
+                "cost": {
+                  "input": 0.006,
+                  "output": 0.006,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0.012
+                }
+              },
+              "stopReason": "toolUse",
+              "thinkingLevel": "medium",
+              "timestamp": 1790845203000
+            }
+          }
+        }
+      },
+      {
+        "role": "tool",
+        "content": "FAIL src/sum.test.ts\nExpected 3, received -1",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000006:0",
+            "type": "tool_result",
+            "toolCallId": "call_001|fc_001",
+            "output": [
+              {
+                "type": "text",
+                "text": "FAIL src/sum.test.ts\nExpected 3, received -1"
+              }
+            ],
+            "name": "bash",
+            "isError": true
+          }
+        ],
+        "createdAt": 1790845205000,
+        "model": "claude-sonnet-5-5",
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000006",
+          "parentId": "a0000005",
+          "provider": "anthropic",
+          "isError": true,
+          "toolCallId": "call_001|fc_001",
+          "toolName": "bash",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000006",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000006",
+            "parentId": "a0000005",
+            "timestamp": "2026-10-01T09:00:05.000Z",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "call_001|fc_001",
+              "toolName": "bash",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "FAIL src/sum.test.ts\nExpected 3, received -1"
+                }
+              ],
+              "isError": true,
+              "timestamp": 1790845205000
+            }
+          }
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000007:0",
+            "type": "tool_call",
+            "toolCallId": "call_002|fc_002",
+            "name": "bash",
+            "input": {
+              "command": "sed -i 's/a - b/a + b/' src/sum.ts && npm test"
+            },
+            "meta": {
+              "native": {
+                "type": "toolCall",
+                "id": "call_002|fc_002",
+                "name": "bash",
+                "arguments": {
+                  "command": "sed -i 's/a - b/a + b/' src/sum.ts && npm test"
+                }
+              }
+            }
+          }
+        ],
+        "createdAt": 1790845208000,
+        "model": "claude-sonnet-5-5",
+        "tokens": 2760,
+        "costUsd": 0.009,
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "sed -i 's/a - b/a + b/' src/sum.ts && npm test"
+            }
+          }
+        ],
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000007",
+          "parentId": "a0000006",
+          "provider": "anthropic",
+          "api": "anthropic-messages",
+          "stopReason": "toolUse",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000007",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000007",
+            "parentId": "a0000006",
+            "timestamp": "2026-10-01T09:00:08.000Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "toolCall",
+                  "id": "call_002|fc_002",
+                  "name": "bash",
+                  "arguments": {
+                    "command": "sed -i 's/a - b/a + b/' src/sum.ts && npm test"
+                  }
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-sonnet-5-5",
+              "usage": {
+                "input": 1500,
+                "output": 60,
+                "cacheRead": 1200,
+                "cacheWrite": 0,
+                "totalTokens": 2760,
+                "cost": {
+                  "input": 0.0045,
+                  "output": 0.0045,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0.009
+                }
+              },
+              "stopReason": "toolUse",
+              "thinkingLevel": "medium",
+              "timestamp": 1790845208000
+            }
+          }
+        }
+      },
+      {
+        "role": "tool",
+        "content": "PASS src/sum.test.ts",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000008:0",
+            "type": "tool_result",
+            "toolCallId": "call_002|fc_002",
+            "output": [
+              {
+                "type": "text",
+                "text": "PASS src/sum.test.ts"
+              }
+            ],
+            "name": "bash"
+          }
+        ],
+        "createdAt": 1790845211000,
+        "model": "claude-sonnet-5-5",
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000008",
+          "parentId": "a0000007",
+          "provider": "anthropic",
+          "isError": false,
+          "toolCallId": "call_002|fc_002",
+          "toolName": "bash",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000008",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000008",
+            "parentId": "a0000007",
+            "timestamp": "2026-10-01T09:00:11.000Z",
+            "message": {
+              "role": "toolResult",
+              "toolCallId": "call_002|fc_002",
+              "toolName": "bash",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "PASS src/sum.test.ts"
+                }
+              ],
+              "isError": false,
+              "timestamp": 1790845211000
+            }
+          }
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Fixed: `sum` subtracted instead of adding. Tests pass.",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000009:0",
+            "type": "text",
+            "text": "Fixed: `sum` subtracted instead of adding. Tests pass.",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "Fixed: `sum` subtracted instead of adding. Tests pass."
+              }
+            }
+          }
+        ],
+        "createdAt": 1790845213000,
+        "model": "claude-sonnet-5-5",
+        "tokens": 4440,
+        "costUsd": 0.004,
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000009",
+          "parentId": "a0000008",
+          "provider": "anthropic",
+          "api": "anthropic-messages",
+          "stopReason": "stop",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000009",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000009",
+            "parentId": "a0000008",
+            "timestamp": "2026-10-01T09:00:13.000Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Fixed: `sum` subtracted instead of adding. Tests pass."
+                }
+              ],
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "model": "claude-sonnet-5-5",
+              "usage": {
+                "input": 1700,
+                "output": 40,
+                "cacheRead": 2700,
+                "cacheWrite": 0,
+                "totalTokens": 4440,
+                "cost": {
+                  "input": 0.002,
+                  "output": 0.002,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0.004
+                }
+              },
+              "stopReason": "stop",
+              "thinkingLevel": "medium",
+              "timestamp": 1790845213000
+            }
+          }
+        }
+      },
+      {
+        "role": "system",
+        "content": "The user asked to fix failing tests; sum() was corrected.",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000011:0",
+            "type": "text",
+            "text": "The user asked to fix failing tests; sum() was corrected."
+          }
+        ],
+        "createdAt": 1790845220000,
+        "metadata": {
+          "entryType": "compaction",
+          "id": "a0000011",
+          "parentId": "a0000010",
+          "firstKeptEntryId": "a0000009",
+          "tokensBefore": 7000,
+          "details": {
+            "readFiles": [],
+            "modifiedFiles": [
+              "src/sum.ts"
+            ]
+          },
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000011",
+          "nativePiEntry": {
+            "type": "compaction",
+            "id": "a0000011",
+            "parentId": "a0000010",
+            "timestamp": "2026-10-01T09:00:20.000Z",
+            "summary": "The user asked to fix failing tests; sum() was corrected.",
+            "firstKeptEntryId": "a0000009",
+            "tokensBefore": 7000,
+            "details": {
+              "readFiles": [],
+              "modifiedFiles": [
+                "src/sum.ts"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "role": "user",
+        "content": "Thanks, commit it",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000012:0",
+            "type": "text",
+            "text": "Thanks, commit it",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "Thanks, commit it"
+              }
+            }
+          }
+        ],
+        "createdAt": 1790845230000,
+        "model": "claude-sonnet-5-5",
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000012",
+          "parentId": "a0000011",
+          "provider": "anthropic",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000012",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000012",
+            "parentId": "a0000011",
+            "timestamp": "2026-10-01T09:00:30.000Z",
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Thanks, commit it"
+                }
+              ],
+              "timestamp": 1790845230000
+            }
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.pi/agent/sessions/--work-demo--/2026-10-01T09-00-00-000Z_0199f0a1-1111-7222-8333-444455556666.jsonl",
+      "version": 3,
+      "nativeQualification": {
+        "qualified": false,
+        "reason": "Unsupported native Pi message role"
+      },
+      "parseWarnings": [
+        "not qualified for native Pi export: Unsupported native Pi message role"
+      ]
+    }
+  }
+]

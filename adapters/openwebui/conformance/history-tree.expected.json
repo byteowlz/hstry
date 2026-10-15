@@ -1,0 +1,103 @@
+[
+  {
+    "externalId": "7c1d7a2e-0002-4a55-9a10-bbbbbbbbbbbb",
+    "title": "Second chat",
+    "createdAt": 1790000100000,
+    "updatedAt": 1790000120000,
+    "model": "gpt-4.1",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hi",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Say hi"
+          }
+        ],
+        "createdAt": 1790000101000,
+        "metadata": {
+          "id": "b1",
+          "parentId": null
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Hi!",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hi!"
+          }
+        ],
+        "createdAt": 1790000103000,
+        "model": "gpt-4.1",
+        "metadata": {
+          "id": "b2",
+          "parentId": "b1",
+          "done": true
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "shareId": null,
+      "archived": false,
+      "pinned": false
+    }
+  },
+  {
+    "externalId": "7c1d7a2e-0001-4a55-9a10-aaaaaaaaaaaa",
+    "title": "Explain Rust lifetimes",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000030000,
+    "model": "llama3.3:70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain Rust lifetimes in one paragraph",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Explain Rust lifetimes in one paragraph"
+          }
+        ],
+        "createdAt": 1790000001000,
+        "metadata": {
+          "id": "m-user-1",
+          "parentId": null
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Lifetimes tell the compiler how long references stay valid.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Lifetimes tell the compiler how long references stay valid."
+          }
+        ],
+        "createdAt": 1790000005000,
+        "model": "llama3.3:70b",
+        "metadata": {
+          "id": "m-asst-1",
+          "parentId": "m-user-1",
+          "done": true
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "shareId": null,
+      "archived": false,
+      "pinned": true,
+      "tags": [
+        "rust"
+      ]
+    }
+  }
+]

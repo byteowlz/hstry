@@ -1,0 +1,179 @@
+[
+  {
+    "externalId": "pi-durable:golden-pi-store:1",
+    "title": "Golden interoperability session",
+    "createdAt": 1700000000008,
+    "updatedAt": 1700000000015,
+    "messages": [
+      {
+        "role": "system",
+        "content": "{\"sourcePiHeader\":{\"type\":\"session\",\"version\":3,\"id\":\"00000000-0000-4000-8000-000000000001\",\"timestamp\":\"2023-11-14T22:13:20.000Z\",\"cwd\":\"/synthetic/hstry\"},\"sourcePiTitle\":\"Golden interoperability session\"}",
+        "metadata": {
+          "sourceMessageId": "pi-durable:golden-pi-store:1:7:event",
+          "sourceEntryId": 7,
+          "nativeEntry": {
+            "kind": "hstry.pi.source",
+            "data": {
+              "sourcePiHeader": {
+                "type": "session",
+                "version": 3,
+                "id": "00000000-0000-4000-8000-000000000001",
+                "timestamp": "2023-11-14T22:13:20.000Z",
+                "cwd": "/synthetic/hstry"
+              },
+              "sourcePiTitle": "Golden interoperability session"
+            },
+            "id": 7,
+            "conversationId": 1
+          }
+        }
+      },
+      {
+        "role": "user",
+        "content": "golden reset continuation",
+        "parts": [
+          {
+            "id": "pi-durable:golden-pi-store:1:8:0:0",
+            "type": "text",
+            "text": "golden reset continuation",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "golden reset continuation"
+              }
+            }
+          }
+        ],
+        "createdAt": 1700000000008,
+        "metadata": {
+          "sourceMessageId": "pi-durable:golden-pi-store:1:8:0",
+          "sourceEntryId": 8,
+          "sourceConversationId": 1,
+          "sourceMessageIndex": 0,
+          "nativeEntry": {
+            "kind": "pi.user",
+            "model": [
+              {
+                "role": "user",
+                "content": "golden reset continuation",
+                "timestamp": 1700000000008
+              }
+            ],
+            "data": {
+              "hstryPiEntry": {
+                "type": "message",
+                "id": "1000000e",
+                "parentId": null,
+                "timestamp": "2023-11-14T22:13:20.014Z",
+                "message": {
+                  "role": "user",
+                  "content": "golden reset continuation",
+                  "timestamp": 1700000000008
+                }
+              },
+              "publicSessionId": "00000000-0000-4000-8000-000000000001",
+              "sourcePiHeader": {
+                "type": "session",
+                "version": 3,
+                "id": "00000000-0000-4000-8000-000000000001",
+                "timestamp": "2023-11-14T22:13:20.000Z",
+                "cwd": "/synthetic/hstry"
+              },
+              "sourcePiTitle": "Golden interoperability session",
+              "sourcePiEntryIndex": 14
+            },
+            "id": 8,
+            "conversationId": 1
+          }
+        }
+      },
+      {
+        "role": "user",
+        "content": "fixture attachment reference",
+        "parts": [
+          {
+            "id": "pi-durable:golden-pi-store:1:9:0:0",
+            "type": "text",
+            "text": "fixture attachment reference",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "fixture attachment reference"
+              }
+            }
+          }
+        ],
+        "createdAt": 1700000000015,
+        "metadata": {
+          "sourceMessageId": "pi-durable:golden-pi-store:1:9:0",
+          "sourceEntryId": 9,
+          "sourceConversationId": 1,
+          "sourceMessageIndex": 0,
+          "nativeEntry": {
+            "kind": "hstry.pi.custom_message",
+            "model": [
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "fixture attachment reference"
+                  }
+                ],
+                "timestamp": 1700000000015
+              }
+            ],
+            "data": {
+              "hstryPiEntry": {
+                "type": "custom_message",
+                "customType": "fixture-reference",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "fixture attachment reference"
+                  }
+                ],
+                "display": true,
+                "details": {
+                  "uri": "fixture://attachments/example.txt"
+                },
+                "id": "1000000f",
+                "parentId": "1000000e",
+                "timestamp": "2023-11-14T22:13:20.015Z"
+              },
+              "publicSessionId": "00000000-0000-4000-8000-000000000001",
+              "sourcePiHeader": {
+                "type": "session",
+                "version": 3,
+                "id": "00000000-0000-4000-8000-000000000001",
+                "timestamp": "2023-11-14T22:13:20.000Z",
+                "cwd": "/synthetic/hstry"
+              },
+              "sourcePiTitle": "Golden interoperability session",
+              "sourcePiEntryIndex": 15
+            },
+            "id": 9,
+            "conversationId": 1
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "storeId": "golden-pi-store",
+      "nativeConversationId": 1,
+      "sourceCursor": {
+        "sourceVersion": "sha256:578eab923e661b0276e4e644c2098a9bdbbc10f2bcb5585221544d8fdc789ef7",
+        "capturedAt": 1700000000000,
+        "lastEntryId": 9
+      },
+      "selection": "selected-branch",
+      "nativeConversation": {
+        "id": 1
+      },
+      "sourceProvenance": {
+        "publicSessionId": "00000000-0000-4000-8000-000000000001"
+      },
+      "sdkVersion": "1.1.0"
+    }
+  }
+]

@@ -125,6 +125,7 @@ interface PartInfo {
     status?: string;
     input?: unknown;
     output?: string;
+    error?: string;
     title?: string;
   };
   /** patch parts: edited file paths */
@@ -910,8 +911,8 @@ async function loadMessagesNew(
             toolCalls = toolParts.map(p => ({
               toolName: p.tool!,
               input: p.state?.input,
-              output: p.state?.output,
-              status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
+              output: p.state?.output ?? p.state?.error,
+              status: mapToolStatus(p.state?.status),
             }));
           }
         }
@@ -1147,8 +1148,8 @@ async function loadMessagesOld(
             toolCalls = toolParts.map(p => ({
               toolName: p.tool!,
               input: p.state?.input,
-              output: p.state?.output,
-              status: p.state?.status as 'pending' | 'success' | 'error' | undefined,
+              output: p.state?.output ?? p.state?.error,
+              status: mapToolStatus(p.state?.status),
             }));
           }
         }
@@ -1250,7 +1251,8 @@ function buildCanonParts(oparts: PartInfo[], role: string, includeTools: boolean
       const callId = p.id || p.tool;
       canon.push(toolCallPart(callId, p.tool, p.state?.input));
       if (p.state?.output !== undefined || p.state?.status === 'error') {
-        canon.push(toolResultPart(callId, p.state?.output, { name: p.tool, isError: p.state?.status === 'error' }));
+        // Errored tool states carry their message in `error`, not `output`.
+        canon.push(toolResultPart(callId, p.state?.output ?? p.state?.error, { name: p.tool, isError: p.state?.status === 'error' }));
       }
     } else if (p.type === 'patch') {
       canon.push({ id: `x-patch-${p.id}`, type: 'x-patch', payload: { hash: p.hash, files: p.files } });

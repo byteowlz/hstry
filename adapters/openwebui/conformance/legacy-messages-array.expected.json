@@ -1,0 +1,49 @@
+[
+  {
+    "externalId": "legacy-0001",
+    "title": "Legacy chat",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000010000,
+    "model": "mistral",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello"
+          }
+        ],
+        "createdAt": 1790000001000,
+        "metadata": {
+          "id": "l1"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Hello! How can I help?",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hello! How can I help?"
+          }
+        ],
+        "createdAt": 1790000002000,
+        "model": "mistral",
+        "metadata": {
+          "id": "l2",
+          "done": true
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "shareId": null,
+      "archived": false,
+      "pinned": false
+    }
+  }
+]

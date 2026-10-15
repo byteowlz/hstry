@@ -1,0 +1,172 @@
+[
+  {
+    "externalId": "0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff",
+    "title": "What does this repo do?",
+    "createdAt": 1790845801000,
+    "updatedAt": 1790845804000,
+    "workspace": "/work/other",
+    "model": "gpt-5",
+    "provider": "openai",
+    "tokensIn": 300,
+    "tokensOut": 20,
+    "costUsd": 0.002,
+    "messages": [
+      {
+        "role": "user",
+        "content": "What does this repo do?",
+        "parts": [
+          {
+            "id": "pi:0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff:b0000001:0",
+            "type": "text",
+            "text": "What does this repo do?"
+          }
+        ],
+        "createdAt": 1790845801000,
+        "metadata": {
+          "entryType": "message",
+          "id": "b0000001",
+          "parentId": null,
+          "sourceMessageId": "pi:0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff:b0000001",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "b0000001",
+            "parentId": null,
+            "timestamp": "2026-10-01T09:10:01.000Z",
+            "message": {
+              "role": "user",
+              "content": "What does this repo do?",
+              "timestamp": 1790845801000
+            }
+          }
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "It is a small CLI for syncing notes.",
+        "parts": [
+          {
+            "id": "pi:0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff:b0000002:0",
+            "type": "text",
+            "text": "It is a small CLI for syncing notes.",
+            "meta": {
+              "native": {
+                "type": "text",
+                "text": "It is a small CLI for syncing notes."
+              }
+            }
+          }
+        ],
+        "createdAt": 1790845804000,
+        "model": "gpt-5",
+        "tokens": 320,
+        "costUsd": 0.002,
+        "metadata": {
+          "entryType": "message",
+          "id": "b0000002",
+          "parentId": "b0000001",
+          "provider": "openai",
+          "api": "openai-responses",
+          "stopReason": "stop",
+          "sourceMessageId": "pi:0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff:b0000002",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "b0000002",
+            "parentId": "b0000001",
+            "timestamp": "2026-10-01T09:10:04.000Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "It is a small CLI for syncing notes."
+                }
+              ],
+              "api": "openai-responses",
+              "provider": "openai",
+              "model": "gpt-5",
+              "usage": {
+                "input": 300,
+                "output": 20,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 320,
+                "cost": {
+                  "input": 0.001,
+                  "output": 0.001,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0.002
+                }
+              },
+              "stopReason": "stop",
+              "timestamp": 1790845804000
+            }
+          }
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.pi/agent/sessions/--work-other--/2026-10-01T09-10-00-000Z_0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff.jsonl",
+      "version": 3,
+      "nativePiSession": {
+        "header": {
+          "type": "session",
+          "version": 3,
+          "id": "0199f0a2-aaaa-7bbb-8ccc-ddddeeeeffff",
+          "timestamp": "2026-10-01T09:10:00.000Z",
+          "cwd": "/work/other"
+        },
+        "entries": [
+          {
+            "type": "message",
+            "id": "b0000001",
+            "parentId": null,
+            "timestamp": "2026-10-01T09:10:01.000Z",
+            "message": {
+              "role": "user",
+              "content": "What does this repo do?",
+              "timestamp": 1790845801000
+            }
+          },
+          {
+            "type": "message",
+            "id": "b0000002",
+            "parentId": "b0000001",
+            "timestamp": "2026-10-01T09:10:04.000Z",
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "It is a small CLI for syncing notes."
+                }
+              ],
+              "api": "openai-responses",
+              "provider": "openai",
+              "model": "gpt-5",
+              "usage": {
+                "input": 300,
+                "output": 20,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 320,
+                "cost": {
+                  "input": 0.001,
+                  "output": 0.001,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0.002
+                }
+              },
+              "stopReason": "stop",
+              "timestamp": 1790845804000
+            }
+          }
+        ]
+      },
+      "nativeQualification": {
+        "qualified": true
+      }
+    }
+  }
+]

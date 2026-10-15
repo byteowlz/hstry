@@ -1,0 +1,200 @@
+[
+  {
+    "externalId": "ses_5f3a1c2d4ffeZyXwVuTsRqPoNm",
+    "title": "Subagent: check types",
+    "createdAt": 1791014405000,
+    "updatedAt": 1791014408000,
+    "workspace": "/work/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Check the TypeScript types",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Check the TypeScript types"
+          }
+        ],
+        "createdAt": 1791014405000,
+        "metadata": {
+          "id": "msg_b01",
+          "agent": "general"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Types look fine.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Types look fine."
+          }
+        ],
+        "createdAt": 1791014406000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 220,
+        "costUsd": 0.001,
+        "metadata": {
+          "id": "msg_b02",
+          "parentId": "msg_b01",
+          "provider": "anthropic",
+          "agent": "general"
+        }
+      }
+    ],
+    "metadata": {
+      "version": "1.2.0",
+      "slug": "brave-owl",
+      "parentId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+      "projectId": "9b7a3c5d1e2f4a6b8c0d1e2f3a4b5c6d7e8f9a0b"
+    },
+    "tokensOut": 220,
+    "costUsd": 0.001,
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic"
+  },
+  {
+    "externalId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+    "title": "Fix the build",
+    "createdAt": 1791014400000,
+    "updatedAt": 1791014412000,
+    "workspace": "/work/demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "The build is failing, can you fix it?",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "The build is failing, can you fix it?"
+          }
+        ],
+        "createdAt": 1791014401000,
+        "metadata": {
+          "id": "msg_a01",
+          "agent": "build"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Let me run the build.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "Run the build to see the error."
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Let me run the build."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "prt_a05",
+            "name": "bash",
+            "input": {
+              "command": "npm run buidl"
+            }
+          },
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "prt_a05",
+            "output": "Missing script: \"buidl\"",
+            "name": "bash",
+            "isError": true
+          },
+          {
+            "id": "p-8",
+            "type": "tool_call",
+            "toolCallId": "prt_a06",
+            "name": "bash",
+            "input": {
+              "command": "npm run build"
+            }
+          },
+          {
+            "id": "p-9",
+            "type": "tool_result",
+            "toolCallId": "prt_a06",
+            "output": "error TS2304: Cannot find name \"foo\"",
+            "name": "bash"
+          }
+        ],
+        "createdAt": 1791014403000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 1660,
+        "costUsd": 0.012,
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "npm run buidl"
+            },
+            "output": "Missing script: \"buidl\"",
+            "status": "error"
+          },
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "npm run build"
+            },
+            "output": "error TS2304: Cannot find name \"foo\"",
+            "status": "success"
+          }
+        ],
+        "metadata": {
+          "id": "msg_a02",
+          "parentId": "msg_a01",
+          "provider": "anthropic",
+          "agent": "build"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Fixed the undefined name in src/index.ts.",
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "Fixed the undefined name in src/index.ts."
+          },
+          {
+            "id": "x-patch-prt_a10",
+            "type": "x-patch",
+            "payload": {
+              "hash": "abc123",
+              "files": [
+                "/work/demo/src/index.ts"
+              ]
+            }
+          }
+        ],
+        "createdAt": 1791014409000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 1860,
+        "costUsd": 0.008,
+        "metadata": {
+          "id": "msg_a03",
+          "parentId": "msg_a01",
+          "provider": "anthropic",
+          "agent": "build"
+        }
+      }
+    ],
+    "metadata": {
+      "version": "1.2.0",
+      "slug": "quiet-river",
+      "projectId": "9b7a3c5d1e2f4a6b8c0d1e2f3a4b5c6d7e8f9a0b"
+    },
+    "tokensOut": 3520,
+    "costUsd": 0.02,
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic"
+  }
+]

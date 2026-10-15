@@ -60,6 +60,7 @@ async function parseSession(dir: string, opts?: ParseOptions): Promise<Conversat
   let tokensIn = integer(manifest.total_input_tokens) ?? 0;
   let tokensOut = integer(manifest.total_output_tokens) ?? 0;
   const messages: Message[] = [];
+  let open: Message | undefined;
 
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -67,6 +68,10 @@ async function parseSession(dir: string, opts?: ParseOptions): Promise<Conversat
     try { event = JSON.parse(line); } catch { continue; }
     const ts = integer(event.timestamp_ms);
     if (ts !== undefined) updatedAt = Math.max(updatedAt, ts);
+    if (event.kind === undefined && event.event && typeof event.event === 'object') {
+      open = appendFrame(messages, event.event, open, ts ?? updatedAt, opts);
+      continue;
+    }
     const payload = event.payload ?? event.event?.[event.kind];
     if (!payload || typeof payload !== 'object') continue;
     if (event.kind === 'session_started') {
@@ -104,6 +109,55 @@ async function parseSession(dir: string, opts?: ParseOptions): Promise<Conversat
     messages,
     metadata: { storageFormat: manifest.storage_format ?? 'event_log_v1', source: 'fx' },
   };
+}
+
+/** Current fx (conversation frames): {"seq","timestamp_ms","event":{"<kind>":{...}}}. */
+function appendFrame(messages: Message[], frame: Json, open: Message | undefined, timestamp: number, opts?: ParseOptions): Message | undefined {
+  const kind = Object.keys(frame)[0];
+  const value = frame[kind];
+  if (!value || typeof value !== 'object') return open;
+  if (kind === 'assistant') {
+    const text = stringValue(value.text) ?? '';
+    if (!text) return open;
+    const message: Message = { role: 'assistant', content: text, createdAt: timestamp, parts: textOnlyParts(text) };
+    messages.push(message);
+    return message;
+  }
+  if (kind === 'tool_call') {
+    const callId = stringValue(value.call_id) ?? `call-${messages.length}`;
+    const name = stringValue(value.tool_name) ?? 'tool';
+    const input = parseMaybeJson(value.arguments_json);
+    let target = open;
+    if (!target) {
+      target = { role: 'assistant', content: '', createdAt: timestamp, parts: [] };
+      messages.push(target);
+    }
+    (target.toolCalls ??= []).push({ toolName: name, input, status: 'pending' });
+    (target.parts ??= []).push(toolCallPart(callId, name, input));
+    return target;
+  }
+  if (kind === 'tool_result') {
+    if (opts?.includeTools !== false) {
+      const output = stringValue(value.preview) ?? '';
+      messages.push({
+        role: 'tool', content: output, createdAt: integer(value.created_at_ms) || timestamp,
+        parts: [toolResultPart(stringValue(value.call_id) ?? 'unknown', output, { name: stringValue(value.tool_name), isError: value.status === 'failure' })],
+        metadata: { status: value.status },
+      });
+    }
+    return undefined;
+  }
+  if (kind === 'user' || kind === 'steering') {
+    const text = stringValue(value.text);
+    if (text) messages.push({ role: 'user', content: text, createdAt: timestamp, parts: textOnlyParts(text), metadata: kind === 'steering' ? { steering: true } : undefined });
+  } else if (kind === 'interrupted') {
+    const text = stringValue(value.partial_text);
+    if (text) messages.push({ role: 'assistant', content: text, createdAt: timestamp, parts: textOnlyParts(text), metadata: { interrupted: true, reason: value.reason } });
+  } else if (kind === 'context_checkpoint') {
+    const text = stringValue(value.summary);
+    if (text) messages.push({ role: 'system', content: text, createdAt: timestamp, parts: textOnlyParts(text), metadata: { compacted: true } });
+  }
+  return undefined;
 }
 
 function appendTurn(messages: Message[], turn: Json, timestamp: number, opts?: ParseOptions): void {

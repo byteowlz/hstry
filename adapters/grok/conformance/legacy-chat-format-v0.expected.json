@@ -1,0 +1,86 @@
+[
+  {
+    "externalId": "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+    "title": "List files",
+    "createdAt": 1767261600000,
+    "updatedAt": 1767261660000,
+    "model": "grok-code-fast-1",
+    "provider": "xai",
+    "workspace": "/work/old",
+    "messages": [
+      {
+        "role": "system",
+        "content": "rules",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "rules"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "List files",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "List files"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "c1",
+            "name": "ls",
+            "input": {
+              "dir": "."
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "ls",
+            "input": {
+              "dir": "."
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "a.txt",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "c1",
+            "output": "a.txt"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "One file: a.txt",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "One file: a.txt"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "grok-build",
+      "chatFormatVersion": 0
+    }
+  }
+]

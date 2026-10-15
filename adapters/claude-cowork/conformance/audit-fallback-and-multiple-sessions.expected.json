@@ -1,0 +1,62 @@
+[
+  {
+    "externalId": "local_00000000-1111-4222-8333-444444444444",
+    "title": "Stub session",
+    "createdAt": 1790100000000,
+    "updatedAt": 1790100005000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Draft an email to the team",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Draft an email to the team"
+          }
+        ],
+        "createdAt": 1790100000000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.config/Claude/local-agent-mode-sessions/acct-0001/org-0001/local_00000000-1111-4222-8333-444444444444.json"
+    }
+  },
+  {
+    "externalId": "local_99999999-8888-4777-8666-555555555555",
+    "title": "Rename the files in my folder",
+    "createdAt": 1790064000000,
+    "updatedAt": 1790064060000,
+    "model": "claude-opus-5-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Rename the files in my folder",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Rename the files in my folder"
+          }
+        ],
+        "createdAt": 1790064001000
+      },
+      {
+        "role": "assistant",
+        "content": "Done: 12 files renamed.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Done: 12 files renamed."
+          }
+        ],
+        "createdAt": 1790064030000
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.config/Claude/local-agent-mode-sessions/acct-0001/org-0001/local_99999999-8888-4777-8666-555555555555.json",
+      "processName": "calm-otter"
+    }
+  }
+]

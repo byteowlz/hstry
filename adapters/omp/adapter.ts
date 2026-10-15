@@ -44,6 +44,7 @@ interface SessionHeader {
   id: string;
   timestamp: string;
   cwd: string;
+  title?: string;
   parentSession?: string;
 }
 
@@ -64,8 +65,18 @@ interface MessageEntry extends SessionEntryBase {
 // Model change entry
 interface ModelChangeEntry extends SessionEntryBase {
   type: 'model_change';
-  provider: string;
-  modelId: string;
+  /** Current omp: "provider/modelId". */
+  model?: string;
+  /** Older entries: separate provider and modelId. */
+  provider?: string;
+  modelId?: string;
+}
+
+function modelChangeTarget(entry: ModelChangeEntry): { provider?: string; modelId?: string } {
+  if (entry.modelId) return { provider: entry.provider, modelId: entry.modelId };
+  const slash = entry.model?.indexOf('/') ?? -1;
+  if (entry.model && slash > 0) return { provider: entry.model.slice(0, slash), modelId: entry.model.slice(slash + 1) };
+  return { modelId: entry.model };
 }
 
 // Compaction entry (context summarization)
@@ -182,14 +193,16 @@ const adapter: Adapter = {
     // Check if any file looks like a Pi session (has session header with cwd)
     for (const file of files.slice(0, 3)) {
       const content = await readFile(file, 'utf-8').catch(() => '');
-      const firstLine = content.split('\n')[0];
-      try {
-        const header = JSON.parse(firstLine);
-        if (header.type === 'session' && header.cwd && header.id) {
-          return 0.95;
+      // Current omp files begin with a fixed-width `type: "title"` slot before the header.
+      for (const line of content.split('\n').slice(0, 3)) {
+        try {
+          const header = JSON.parse(line);
+          if (header.type === 'session' && header.cwd && header.id) {
+            return 0.95;
+          }
+        } catch {
+          continue;
         }
-      } catch {
-        continue;
       }
     }
 
@@ -484,23 +497,24 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
     // Track model changes for subsequent messages
     if (entry.type === 'model_change') {
       const modelEntry = entry as ModelChangeEntry;
-      currentModel = modelEntry.modelId;
-      currentProvider = modelEntry.provider;
+      const target = modelChangeTarget(modelEntry);
+      currentModel = target.modelId;
+      currentProvider = target.provider;
       
       // Add as system message to preserve the event
-      const sysContent = `Model changed to ${modelEntry.provider}/${modelEntry.modelId}`;
+      const sysContent = `Model changed to ${target.provider ? `${target.provider}/` : ''}${target.modelId}`;
       messages.push({
         role: 'system',
         content: sysContent,
         parts: textOnlyParts(sysContent),
         createdAt,
-        model: modelEntry.modelId,
+        model: target.modelId,
         metadata: {
           entryType: 'model_change',
           id: entry.id,
           parentId: entry.parentId,
-          provider: modelEntry.provider,
-          modelId: modelEntry.modelId,
+          provider: target.provider,
+          modelId: target.modelId,
         },
       });
       continue;
@@ -676,11 +690,12 @@ function calculateTotals(entries: SessionEntry[]): {
   for (const entry of entries) {
     if (entry.type === 'model_change') {
       const modelEntry = entry as ModelChangeEntry;
-      if (modelEntry.provider) {
-        provider = modelEntry.provider;
+      const target = modelChangeTarget(modelEntry);
+      if (target.provider) {
+        provider = target.provider;
       }
-      if (modelEntry.modelId) {
-        model = modelEntry.modelId;
+      if (target.modelId) {
+        model = target.modelId;
       }
       continue;
     }
@@ -841,7 +856,11 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
       (e): e is SessionInfoEntry => e.type === 'session_info' && 'name' in e && !!e.name
     );
     const latestSessionInfo = sessionInfoEntries[sessionInfoEntries.length - 1];
-    const rawTitle = latestSessionInfo?.name || deriveTitle(messages);
+    // Current omp: latest title_change entry, else the header title (folded from the title slot).
+    const titleChanges = entries.filter(
+      (e): e is SessionEntryBase & { title: string } => e.type === 'title_change' && typeof (e as { title?: unknown }).title === 'string' && !!(e as { title: string }).title
+    );
+    const rawTitle = titleChanges[titleChanges.length - 1]?.title || header.title || latestSessionInfo?.name || deriveTitle(messages);
 
     // Parse Pi title format: "workspace: Title Text [readable-id]"
     const { title: parsedTitle, readableId } = parsePiTitle(rawTitle);

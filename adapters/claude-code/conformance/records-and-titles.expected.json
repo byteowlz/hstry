@@ -1,0 +1,108 @@
+[
+  {
+    "externalId": "test-claude-code-records",
+    "title": "renamed: release audit",
+    "createdAt": 1704067201000,
+    "updatedAt": 1704067204000,
+    "workspace": "/work",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Audit the release.",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Audit the release."
+          }
+        ],
+        "createdAt": 1704067201000,
+        "metadata": {
+          "uuid": "msg-001",
+          "type": "message"
+        }
+      },
+      {
+        "role": "system",
+        "content": "- deep-research: research things",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "- deep-research: research things"
+          }
+        ],
+        "createdAt": 1704067202000,
+        "metadata": {
+          "uuid": "att-001",
+          "type": "attachment",
+          "attachmentType": "skill_listing"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Let me think.\nChecking now.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "thinking",
+            "text": "Let me think."
+          },
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "",
+            "visibility": "hidden",
+            "meta": {
+              "redacted": true,
+              "data": "openrouter.reasoning:AAAA"
+            }
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Checking now."
+          }
+        ],
+        "createdAt": 1704067203000,
+        "model": "claude-fable-5",
+        "metadata": {
+          "uuid": "msg-002",
+          "type": "message"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Done.",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "x-claude-fallback",
+            "meta": {
+              "from": "claude-fable-5",
+              "to": "claude-opus-4-8"
+            },
+            "payload": {
+              "from": "claude-fable-5",
+              "to": "claude-opus-4-8"
+            }
+          },
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "Done."
+          }
+        ],
+        "createdAt": 1704067204000,
+        "model": "claude-opus-4-8",
+        "metadata": {
+          "uuid": "msg-003",
+          "type": "message"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.claude/projects/-work/session.jsonl"
+    }
+  }
+]

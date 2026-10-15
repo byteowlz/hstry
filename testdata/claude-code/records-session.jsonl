@@ -1,0 +1,6 @@
+{"type":"ai-title","aiTitle":"Auto generated title","sessionId":"test-claude-code-records","timestamp":"2024-01-01T00:00:00.000Z"}
+{"type":"custom-title","customTitle":"renamed: release audit","sessionId":"test-claude-code-records"}
+{"type":"message","sessionId":"test-claude-code-records","uuid":"msg-001","timestamp":"2024-01-01T00:00:01.000Z","cwd":"/work","message":{"role":"user","content":[{"type":"text","text":"Audit the release."}]}}
+{"type":"attachment","sessionId":"test-claude-code-records","uuid":"att-001","timestamp":"2024-01-01T00:00:02.000Z","cwd":"/work","attachment":{"type":"skill_listing","content":"- deep-research: research things","skillCount":1,"isInitial":true,"names":["deep-research"]}}
+{"type":"message","sessionId":"test-claude-code-records","uuid":"msg-002","timestamp":"2024-01-01T00:00:03.000Z","cwd":"/work","message":{"role":"assistant","model":"claude-fable-5","content":[{"type":"thinking","thinking":"Let me think."},{"type":"redacted_thinking","data":"openrouter.reasoning:AAAA"},{"type":"text","text":"Checking now."}]}}
+{"type":"message","sessionId":"test-claude-code-records","uuid":"msg-003","timestamp":"2024-01-01T00:00:04.000Z","cwd":"/work","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"fallback","from":{"model":"claude-fable-5"},"to":{"model":"claude-opus-4-8"}},{"type":"text","text":"Done."}]}}

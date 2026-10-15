@@ -22,6 +22,7 @@ import {
   toolCallPart,
   toolResultPart,
   textOnlyParts,
+  partId,
   isUnderCanonicalRoot,
 } from '../types/index.ts';
 import { findFirstRealUserMessage, formatFrumTitle } from '../types/first-message.ts';
@@ -33,6 +34,8 @@ interface JsonlEntry {
   type?: string;
   summary?: string;
   aiTitle?: string;
+  customTitle?: string;
+  attachment?: ClaudeAttachment;
   leafUuid?: string;
   uuid?: string;
   timestamp?: string | number;
@@ -76,6 +79,28 @@ interface ClaudeContentBlock {
   input?: unknown;
   output?: unknown;
   content?: string;
+  /** redacted_thinking: opaque provider-encrypted reasoning payload. */
+  data?: string;
+  /** fallback: the model pair the provider fell back between. */
+  from?: { model?: string };
+  to?: { model?: string };
+}
+
+/** A system-injected context record (`type: "attachment"`), not a chat turn. */
+interface ClaudeAttachment {
+  type?: string;
+  content?: string | ClaudeContentBlock[];
+  stdout?: string;
+  hookName?: string;
+  hookEvent?: string;
+  skillCount?: number;
+  names?: string[];
+  addedNames?: string[];
+  removedNames?: string[];
+  addedBlocks?: string[];
+  itemCount?: number;
+  filename?: string;
+  snippet?: string;
 }
 
 const adapter: Adapter = {
@@ -144,7 +169,13 @@ const adapter: Adapter = {
         }
       }
 
+      // Title precedence: an explicit /rename (custom-title) is the user's own
+      // choice and outranks the auto-generated ai-title; a compaction summary
+      // is a reasonable session label when no rename happened. The latest
+      // custom-title entry wins (older ones are superseded renames).
+      const customTitle = entries.filter(e => e.type === 'custom-title' && e.customTitle).at(-1)?.customTitle;
       const summary =
+        customTitle ??
         entries.find(e => e.type === 'summary' && e.summary)?.summary ??
         entries.find(e => e.type === 'ai-title' && e.aiTitle)?.aiTitle;
       const titleFallback = summary
@@ -261,6 +292,23 @@ function extractMessages(entries: JsonlEntry[]): Message[] {
     if (entry.isCompactSummary) continue;
     if (entry.isVisibleInTranscriptOnly) continue;
 
+    // System-injected context (hook output, skill listings, file snippets,
+    // MCP/tool deltas) is recorded as type:"attachment", not as a chat turn.
+    // Keep it as a system message so the model/tool context stays searchable
+    // without masquerading as something the user typed.
+    if (entry.type === 'attachment') {
+      const attachment = renderAttachment(entry.attachment);
+      if (!attachment) continue;
+      messages.push({
+        role: 'system',
+        content: attachment.content,
+        parts: attachment.parts,
+        createdAt: parseTimestamp(entry.timestamp),
+        metadata: { uuid: entry.uuid, type: 'attachment', attachmentType: entry.attachment?.type },
+      });
+      continue;
+    }
+
     const msg = entry.message;
     if (!msg || !msg.role) continue;
 
@@ -307,16 +355,58 @@ function buildClaudeCodeParts(content?: string | ClaudeContentBlock[]): CanonPar
       parts.push(textPart(block.text));
     } else if (block.type === 'thinking' && block.thinking) {
       parts.push(thinkingPart(block.thinking));
+    } else if (block.type === 'redacted_thinking') {
+      // Provider-encrypted reasoning. Retain the opaque payload byte-for-byte
+      // as a hidden reasoning part so the transcript round-trips, but keep it
+      // out of readable/searchable content and out of visible reasoning.
+      parts.push({
+        id: partId(),
+        type: 'thinking',
+        text: '',
+        visibility: 'hidden',
+        meta: { redacted: true, ...(block.data ? { data: block.data } : {}) },
+      });
+    } else if (block.type === 'fallback') {
+      // The provider silently switched models (e.g. capacity/rate limits).
+      // Record it opaquely; it is not user-visible text.
+      const from = block.from?.model;
+      const to = block.to?.model;
+      parts.push({ id: partId(), type: 'x-claude-fallback', meta: { from, to }, payload: { from, to } });
     } else if (block.type === 'tool_use' && block.name) {
       const callId = (block as Record<string, unknown>).id as string ?? block.name;
       parts.push(toolCallPart(callId, block.name, block.input));
     } else if (block.type === 'tool_result') {
       const callId = (block as Record<string, unknown>).tool_use_id as string ?? 'unknown';
       const output = typeof block.content === 'string' ? block.content : JSON.stringify(block.output);
-      parts.push(toolResultPart(callId, output));
+      const isError = (block as Record<string, unknown>).is_error === true;
+      parts.push(toolResultPart(callId, output, { isError }));
     }
   }
   return parts.length > 0 ? parts : undefined;
+}
+
+/**
+ * Render a system-injected attachment record. Returns readable text for
+ * content-bearing attachments (hook output, skill listings, file snippets)
+ * and an opaque part for bookkeeping-only records (tool/MCP deltas).
+ */
+function renderAttachment(attachment?: ClaudeAttachment): { content: string; parts?: CanonPart[] } | undefined {
+  if (!attachment) return undefined;
+  const content = (typeof attachment.content === 'string' ? attachment.content : extractContent(attachment.content))?.trim() || attachment.stdout?.trim() || '';
+  if (content) {
+    return { content, parts: [textPart(content)] };
+  }
+  if (attachment.snippet) {
+    const text = attachment.filename ? `${attachment.filename}: ${attachment.snippet}` : attachment.snippet;
+    return { content: text.trim(), parts: [textPart(text.trim())] };
+  }
+  // Bookkeeping records without readable text: surfaced opaquely so the type is
+  // visible, but they carry no searchable content of their own.
+  if (attachment.names?.length || attachment.addedNames?.length) {
+    const names = (attachment.addedNames ?? attachment.names ?? []).join(', ');
+    return { content: names, parts: [textPart(names)] };
+  }
+  return { content: attachment.type ?? 'attachment', parts: [{ id: partId(), type: 'x-claude-attachment', payload: { type: attachment.type } }] };
 }
 
 function summarizeToolCalls(parts: CanonPart[]): string {

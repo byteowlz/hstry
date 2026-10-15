@@ -26,7 +26,8 @@ import {
 } from '../types/index.ts';
 import { findFirstRealUserMessage, formatFrumTitle } from '../types/first-message.ts';
 
-const DEFAULT_CLAUDE_PATH = join(homedir(), '.claude', 'projects');
+// Claude Code honors CLAUDE_CONFIG_DIR; fall back to ~/.claude like the CLI.
+const DEFAULT_CLAUDE_PATH = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
 
 interface JsonlEntry {
   type?: string;

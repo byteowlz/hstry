@@ -5,7 +5,9 @@
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
-import { basename, extname, join } from 'path';
+import { existsSync } from 'fs';
+import { basename, join } from 'path';
+import { zstdDecompressSync } from 'zlib';
 import { homedir } from 'os';
 
 // Dynamic SQLite support: bun:sqlite (Bun) or better-sqlite3 (Node)
@@ -30,7 +32,7 @@ try {
     openDb = (path: string) => BetterSqlite(path, { readonly: true }) as unknown as SqliteDb;
   }
 } catch {
-  // SQLite not available - state_5.sqlite thread titles will be skipped
+  // SQLite not available - state_<N>.sqlite thread titles will be skipped
 }
 
 declare const Bun: unknown;
@@ -51,7 +53,8 @@ import {
 } from '../types/index.ts';
 import { isSystemContext } from '../types/first-message.ts';
 
-const DEFAULT_CODEX_HOME = join(homedir(), '.codex');
+// Codex honors CODEX_HOME; fall back to ~/.codex like the CLI itself.
+const DEFAULT_CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex');
 const DEFAULT_PATHS = [
   join(DEFAULT_CODEX_HOME, 'sessions'),
   join(DEFAULT_CODEX_HOME, 'archived_sessions'),
@@ -189,7 +192,7 @@ const adapter: Adapter = {
 
 /**
  * Load thread metadata (titles, model, archived flag) from Codex's
- * state_5.sqlite index. The desktop app and newer CLIs maintain it in
+ * newest state_<N>.sqlite index. The desktop app and newer CLIs maintain it in
  * CODEX_HOME next to the sessions directory; rollout JSONL files stay
  * authoritative for message content.
  */
@@ -197,7 +200,8 @@ function loadThreadIndex(searchPath: string): Map<string, ThreadRow> {
   const index = new Map<string, ThreadRow>();
   if (!openDb) return index;
 
-  const dbPath = join(resolveCodexHome(searchPath), 'state_5.sqlite');
+  const dbPath = latestStateDb(resolveCodexHome(searchPath));
+  if (!dbPath) return index;
   let db: SqliteDb | null = null;
   try {
     db = openDb(dbPath);
@@ -219,6 +223,15 @@ function loadThreadIndex(searchPath: string): Map<string, ThreadRow> {
   return index;
 }
 
+/** Codex bumps state_<N>.sqlite on schema changes; use the newest present. */
+function latestStateDb(home: string): string | null {
+  for (let generation = 128; generation >= 1; generation--) {
+    const path = join(home, `state_${generation}.sqlite`);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
 function resolveCodexHome(searchPath: string): string {
   const segments = searchPath.split(/[\\/]/);
   for (let i = segments.length - 1; i >= 0; i--) {
@@ -235,7 +248,10 @@ async function parseRolloutFile(
   threadIndex: Map<string, ThreadRow>,
   opts?: ParseOptions
 ): Promise<Conversation | null> {
-  const raw = await readFile(filePath, 'utf-8');
+  // Newer Codex builds may compress rollouts as rollout-*.jsonl.zst.
+  const raw = filePath.endsWith('.zst')
+    ? zstdDecompressSync(await readFile(filePath)).toString('utf-8')
+    : await readFile(filePath, 'utf-8');
   const lines = raw.split(/\r?\n/).filter(line => line.trim().length > 0);
   if (lines.length === 0) return null;
 
@@ -411,7 +427,7 @@ async function parseRolloutFile(
   const title = thread?.title || derivedTitle;
 
   return {
-    externalId: sessionMeta?.id ?? basename(filePath),
+    externalId: sessionMeta?.id ?? basename(filePath).replace(/\.zst$/, ''),
     title: title || undefined,
     createdAt,
     updatedAt: lastTimestamp,
@@ -591,7 +607,7 @@ async function findRolloutFiles(
   if (!stats) return [];
 
   if (stats.isFile()) {
-    return extname(path) === '.jsonl' ? [path] : [];
+    return isRolloutName(path) ? [path] : [];
   }
 
   const roots: string[] = [];
@@ -605,11 +621,14 @@ async function findRolloutFiles(
 
   const files: string[] = [];
   for (const root of roots) {
-    const found = await walkForJsonl(root, opts.shallowOnly ? 2 : 4);
-    files.push(...found.filter(file => file.includes('rollout-') || file.endsWith('.jsonl')));
+    const found = await walkForJsonl(root, opts.shallowOnly ? 3 : 4);
+    files.push(...found);
   }
 
-  return files;
+  // A rollout may exist both plain and compressed; the plain file wins so
+  // the same session is never imported twice.
+  const plain = new Set(files.filter(file => file.endsWith('.jsonl')));
+  return [...new Set(files)].filter(file => !file.endsWith('.zst') || !plain.has(file.slice(0, -4)));
 }
 
 async function walkForJsonl(root: string, depth: number): Promise<string[]> {
@@ -619,13 +638,17 @@ async function walkForJsonl(root: string, depth: number): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     const entryPath = join(root, entry.name);
-    if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+    if (entry.isFile() && isRolloutName(entry.name)) {
       results.push(entryPath);
     } else if (entry.isDirectory()) {
       results.push(...(await walkForJsonl(entryPath, depth - 1)));
     }
   }
   return results;
+}
+
+function isRolloutName(path: string): boolean {
+  return path.endsWith('.jsonl') || path.endsWith('.jsonl.zst');
 }
 
 async function existsDir(path: string): Promise<boolean> {

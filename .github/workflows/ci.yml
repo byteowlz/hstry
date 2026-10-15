@@ -60,6 +60,7 @@ jobs:
       - run: bun run adapters/cursor/test.js
       - run: bun run adapters/gemini-cli/test.js
       - run: bun run adapters/workbuddy/test.js
+      - run: bun run adapters/codex/test.js
       - uses: actions/setup-node@v4
         with:
           node-version: '26.8.1'

@@ -1,0 +1,21 @@
+# Canonical release packaging consumed by byt release (ADR-0021).
+[release]
+name = "hstry"
+lang = "rust"
+bins = ["hstry", "hstry-tui", "hstry-mcp"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[release.homebrew]
+formula = "hstry"
+
+[release.aur]
+pkgname = "hstry"
+pkgdesc = "Universal AI chat history database with full-text search"
+license = "MIT"
+url = "https://github.com/byteowlz/hstry"
+depends = ["gcc-libs", "sqlite"]

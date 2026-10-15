@@ -1,0 +1,3 @@
+# trx central mode: the authoritative ledger for this repository lives in the
+# per-user central store. Remove this file to return to the repo-local .trx/ ledger.
+store_root = "/home/wismut/.local/share/trx"

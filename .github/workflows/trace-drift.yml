@@ -1,0 +1,38 @@
+name: Adapter trace drift
+
+# Weekly check that adapters still parse current public Hugging Face agent
+# traces. Fetched traces stay in the runner's temp dir; only the report
+# (dataset ids, revisions, file names, pass/fail, unseen native types) is
+# uploaded as an artifact. Nothing is committed.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: Number of most recently updated datasets to sample
+        default: '40'
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Sample traces and parse with adapters
+        run: bun scripts/trace-drift.ts --datasets "${{ inputs.datasets || '40' }}" --files 2 --report drift-report.json | tee drift-summary.txt
+      - name: Job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat drift-summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trace-drift-report
+          path: drift-report.json
+          retention-days: 30

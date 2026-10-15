@@ -1,0 +1,125 @@
+[
+  {
+    "externalId": "thread-2",
+    "title": "Quick question",
+    "createdAt": 1788343200000,
+    "updatedAt": 1788343205000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "ping",
+        "createdAt": 1788343201000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "ping"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "pong",
+        "createdAt": 1788343205000,
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "pong"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "mastracode"
+    }
+  },
+  {
+    "externalId": "thread-1",
+    "title": "Inspect the repo",
+    "createdAt": 1788256800000,
+    "updatedAt": 1788256820000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is in src/?",
+        "createdAt": 1788256801000,
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "What is in src/?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Listing src/.",
+        "createdAt": 1788256805000,
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "List the directory."
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Listing src/."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "call_a",
+            "name": "list_files",
+            "input": {
+              "path": "src"
+            }
+          },
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "call_a",
+            "output": [
+              "main.ts",
+              "util.ts"
+            ]
+          },
+          {
+            "id": "p-8",
+            "type": "tool_call",
+            "toolCallId": "call_b",
+            "name": "read_file",
+            "input": {
+              "path": "src/gone.ts"
+            }
+          },
+          {
+            "id": "p-9",
+            "type": "tool_result",
+            "toolCallId": "call_b",
+            "output": {
+              "error": "ENOENT: src/gone.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "src/ has main.ts and util.ts.",
+        "createdAt": 1788256820000,
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "src/ has main.ts and util.ts."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "mastracode"
+    }
+  }
+]

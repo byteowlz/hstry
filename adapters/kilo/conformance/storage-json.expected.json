@@ -1,0 +1,129 @@
+[
+  {
+    "externalId": "ses_aaa",
+    "title": "Read two files",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000060000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Read package.json and the missing file",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "Read package.json and the missing file"
+          }
+        ],
+        "createdAt": 1790000001000,
+        "metadata": {
+          "id": "msg_001",
+          "agent": "code"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Reading both files.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Need two reads."
+          },
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Reading both files."
+          },
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "prt_005",
+            "name": "read",
+            "input": {
+              "filePath": "/work/proj/package.json"
+            }
+          },
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "prt_005",
+            "output": "{\"name\":\"proj\"}",
+            "name": "read"
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "prt_006",
+            "name": "read",
+            "input": {
+              "filePath": "/work/proj/missing.txt"
+            }
+          },
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "prt_006",
+            "output": "File not found: /work/proj/missing.txt",
+            "name": "read",
+            "isError": true
+          }
+        ],
+        "createdAt": 1790000002000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 160,
+        "costUsd": 0.01,
+        "toolCalls": [
+          {
+            "toolName": "read",
+            "input": {
+              "filePath": "/work/proj/package.json"
+            },
+            "output": "{\"name\":\"proj\"}",
+            "status": "success"
+          },
+          {
+            "toolName": "read",
+            "input": {
+              "filePath": "/work/proj/missing.txt"
+            },
+            "output": "File not found: /work/proj/missing.txt",
+            "status": "error"
+          }
+        ],
+        "metadata": {
+          "id": "msg_002",
+          "parentId": "msg_001",
+          "provider": "anthropic",
+          "agent": "code"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "package.json is named proj; missing.txt does not exist.",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "package.json is named proj; missing.txt does not exist."
+          }
+        ],
+        "createdAt": 1790000010000,
+        "model": "claude-sonnet-4-5",
+        "metadata": {
+          "id": "msg_003",
+          "provider": "anthropic"
+        }
+      }
+    ],
+    "metadata": {
+      "version": "1.1.30",
+      "projectId": "proj1"
+    },
+    "tokensOut": 160,
+    "costUsd": 0.01,
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic"
+  }
+]

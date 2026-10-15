@@ -1,0 +1,128 @@
+[
+  {
+    "externalId": "7e1f0c2a-0000-4000-8000-0000000000c1",
+    "title": "Run the tests",
+    "createdAt": 1775116800000,
+    "updatedAt": 1775116806500,
+    "workspace": "/work/proj",
+    "model": "gpt-5.1",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Run the tests",
+        "createdAt": 1775116801000,
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Run the tests"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Running the test suite.",
+        "createdAt": 1775116803000,
+        "model": "gpt-5.1",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "Use the shell tool."
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Running the test suite."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "bash",
+            "input": {
+              "command": "npm test"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "npm test"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "exit code 1: 2 tests failed",
+        "createdAt": 1775116805000,
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "exit code 1: 2 tests failed",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Two tests failed.",
+        "createdAt": 1775116806000,
+        "model": "gpt-5.1",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "Two tests failed."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "github-copilot-cli"
+    }
+  },
+  {
+    "externalId": "a0b1c2d3-0000-4000-8000-0000000000c2",
+    "title": "hello",
+    "createdAt": 1775030400000,
+    "updatedAt": 1775030402000,
+    "workspace": "/work/old",
+    "model": "claude-sonnet-4.5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hello",
+        "createdAt": 1775030401000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "hi there",
+        "createdAt": 1775030402000,
+        "model": "claude-sonnet-4.5",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "hi there"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "github-copilot-cli"
+    }
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "externalId": "4c5d6e7f-0000-4000-8000-0000000000f1",
+    "title": "List the files here",
+    "createdAt": 1782900000000,
+    "updatedAt": 1782900008000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "List the files here",
+        "createdAt": 1782900001000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "List the files here"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "I will list the directory.",
+        "createdAt": 1782900003000,
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Use ls via run_command."
+          },
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "step-2-0",
+            "name": "run_command",
+            "input": {
+              "CommandLine": "ls",
+              "Cwd": "/work/proj"
+            }
+          },
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "I will list the directory."
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "run_command",
+            "input": {
+              "CommandLine": "ls",
+              "Cwd": "/work/proj"
+            },
+            "status": "pending"
+          }
+        ],
+        "metadata": {
+          "eventType": "PLANNER_RESPONSE",
+          "status": "DONE"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "Cargo.toml\nsrc\n",
+        "createdAt": 1782900005000,
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "step-2-0",
+            "output": "Cargo.toml\nsrc\n",
+            "name": "run_command"
+          }
+        ],
+        "metadata": {
+          "eventType": "RUN_COMMAND",
+          "status": "DONE"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "There are Cargo.toml and src.",
+        "createdAt": 1782900007000,
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "There are Cargo.toml and src."
+          }
+        ],
+        "metadata": {
+          "eventType": "PLANNER_RESPONSE",
+          "status": "DONE"
+        }
+      }
+    ],
+    "metadata": {
+      "source": "antigravity"
+    }
+  }
+]

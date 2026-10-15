@@ -1,0 +1,136 @@
+[
+  {
+    "externalId": "019e0000-0000-7000-8000-000000000002",
+    "title": "ping",
+    "createdAt": 1790001000000,
+    "updatedAt": 1790001005000,
+    "model": "anthropic/claude-haiku-4-5",
+    "workspace": "/work/other",
+    "tokensIn": 5,
+    "tokensOut": 1,
+    "messages": [
+      {
+        "role": "user",
+        "content": "ping",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "ping"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "pong",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "pong"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "maki"
+    }
+  },
+  {
+    "externalId": "019e0000-0000-7000-8000-000000000001",
+    "title": "Show me the config file",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000060000,
+    "model": "anthropic/claude-sonnet-4-5",
+    "workspace": "/work/proj",
+    "tokensIn": 120,
+    "tokensOut": 40,
+    "costUsd": 0.0123,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Show me the config file",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Show me the config file"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Let me read it.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "Need to read config.toml"
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Let me read it."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "tu_1",
+            "name": "read",
+            "input": {
+              "path": "config.toml"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "read",
+            "input": {
+              "path": "config.toml"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "tu_1",
+            "output": "No such file: config.toml",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "{\"Plain\":{\"text\":\"No such file: config.toml\"}}",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "tool_result",
+            "toolCallId": "tu_1",
+            "output": "{\"Plain\":{\"text\":\"No such file: config.toml\"}}"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "The file does not exist in this directory.",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "The file does not exist in this directory."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "maki"
+    }
+  }
+]

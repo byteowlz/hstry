@@ -1,0 +1,127 @@
+[
+  {
+    "externalId": "T-0a1b2c3d-0000-4000-8000-000000000001",
+    "title": "List project files",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000000000,
+    "model": "claude-opus-4-6",
+    "messages": [
+      {
+        "role": "user",
+        "content": "List the files in /work/proj",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "List the files in /work/proj"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Reading the directory.",
+        "model": "claude-opus-4-6",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "I should read the directory."
+          },
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Reading the directory."
+          },
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "toolu_01",
+            "name": "Read",
+            "input": {
+              "path": "/work/proj"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "Read",
+            "input": {
+              "path": "/work/proj"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "[\"index.js\",\"README.md\"]",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "toolu_01",
+            "output": [
+              "index.js",
+              "README.md"
+            ]
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "model": "claude-opus-4-6",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "toolu_02",
+            "name": "Read",
+            "input": {
+              "path": "/work/proj/missing"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "Read",
+            "input": {
+              "path": "/work/proj/missing"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "{\"message\":\"ENOENT: no such file\"}",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "toolu_02",
+            "output": {
+              "message": "ENOENT: no such file"
+            },
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "The project has index.js and README.md; the second path does not exist.",
+        "model": "claude-opus-4-6",
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "The project has index.js and README.md; the second path does not exist."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "amp"
+    }
+  }
+]

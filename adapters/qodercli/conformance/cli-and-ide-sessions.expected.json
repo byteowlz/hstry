@@ -1,0 +1,147 @@
+[
+  {
+    "externalId": "5a4b3c2d-0000-4000-8000-0000000000b2",
+    "title": "hello",
+    "createdAt": 1785661200000,
+    "updatedAt": 1785661201000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hello",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "createdAt": 1785661200000,
+        "metadata": {
+          "uuid": "5a4b3c2d-0000-4000-8000-0000000000b2-1",
+          "type": "user"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "hi!",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "text",
+            "text": "hi!"
+          }
+        ],
+        "createdAt": 1785661201000,
+        "metadata": {
+          "uuid": "5a4b3c2d-0000-4000-8000-0000000000b2-2",
+          "type": "assistant"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.qoder/projects/-work-proj/transcript/5a4b3c2d-0000-4000-8000-0000000000b2.jsonl"
+    }
+  },
+  {
+    "externalId": "86379a0e-0000-4000-8000-0000000000a1",
+    "title": "Delete comments from test.py",
+    "createdAt": 1785574800000,
+    "updatedAt": 1785574806000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Delete comments from test.py",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Delete comments from test.py"
+          }
+        ],
+        "createdAt": 1785574800000,
+        "metadata": {
+          "uuid": "86379a0e-0000-4000-8000-0000000000a1-1",
+          "type": "user"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "I'll read the file first.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "I'll read the file first."
+          }
+        ],
+        "createdAt": 1785574802000,
+        "model": "qwen3-coder",
+        "metadata": {
+          "uuid": "86379a0e-0000-4000-8000-0000000000a1-2",
+          "type": "assistant"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "read_file: /work/proj/test.py",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "read_file",
+            "input": {
+              "file_path": "/work/proj/test.py"
+            }
+          }
+        ],
+        "createdAt": 1785574803000,
+        "model": "qwen3-coder",
+        "metadata": {
+          "uuid": "86379a0e-0000-4000-8000-0000000000a1-3",
+          "type": "assistant"
+        }
+      },
+      {
+        "role": "user",
+        "content": "File not found: /work/proj/test.py",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "File not found: /work/proj/test.py",
+            "isError": true
+          }
+        ],
+        "createdAt": 1785574804000,
+        "metadata": {
+          "uuid": "86379a0e-0000-4000-8000-0000000000a1-4",
+          "type": "user"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "test.py does not exist.",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "test.py does not exist."
+          }
+        ],
+        "createdAt": 1785574806000,
+        "model": "qwen3-coder",
+        "metadata": {
+          "uuid": "86379a0e-0000-4000-8000-0000000000a1-5",
+          "type": "assistant"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.qoder/projects/-work-proj/86379a0e-0000-4000-8000-0000000000a1.jsonl"
+    }
+  }
+]

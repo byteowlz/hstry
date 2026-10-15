@@ -57,10 +57,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun run adapters/cursor/test.js
-      - run: bun run adapters/gemini-cli/test.js
-      - run: bun run adapters/workbuddy/test.js
-      - run: bun run adapters/codex/test.js
+      - run: bun install --frozen-lockfile
+        working-directory: adapters/pi-durable
+      - name: Adapter conformance (every adapter must ship fixtures)
+        run: bun run ./adapters/conformance.ts
+      - name: Adapter regression tests
+        run: |
+          for test in adapters/*/test.js adapters/*/*-test.js adapters/test-new-harnesses.js; do
+            [ -f "$test" ] || continue
+            echo "== $test"
+            bun run "./$test"
+          done
       - uses: actions/setup-node@v4
         with:
           node-version: '26.8.1'

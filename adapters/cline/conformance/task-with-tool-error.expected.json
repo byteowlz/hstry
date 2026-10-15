@@ -1,0 +1,84 @@
+[
+  {
+    "externalId": "1790000000000",
+    "title": "Create hello.txt",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000009000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "<task>\nCreate hello.txt\n</task>\n<environment_details>\ncwd: /work\n</environment_details>",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "<task>\nCreate hello.txt\n</task>"
+          },
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "<environment_details>\ncwd: /work\n</environment_details>"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "I will create the file.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "I will create the file."
+          },
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "toolu_w1",
+            "name": "write_to_file",
+            "input": {
+              "path": "hello.txt",
+              "content": "hello"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "write_to_file",
+            "input": {
+              "path": "hello.txt",
+              "content": "hello"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "Permission denied: hello.txt",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "toolu_w1",
+            "output": "Permission denied: hello.txt",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "I could not write the file.",
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "I could not write the file."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "cline"
+    }
+  }
+]

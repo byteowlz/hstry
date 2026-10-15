@@ -312,7 +312,7 @@ function buildClaudeCodeParts(content?: string | ClaudeContentBlock[]): CanonPar
     } else if (block.type === 'tool_result') {
       const callId = (block as Record<string, unknown>).tool_use_id as string ?? 'unknown';
       const output = typeof block.content === 'string' ? block.content : JSON.stringify(block.output);
-      parts.push(toolResultPart(callId, output));
+      parts.push(toolResultPart(callId, output, { isError: (block as Record<string, unknown>).is_error === true }));
     }
   }
   return parts.length > 0 ? parts : undefined;

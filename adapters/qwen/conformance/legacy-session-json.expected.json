@@ -1,0 +1,52 @@
+[
+  {
+    "externalId": "5b6c7d8e-0000-4000-8000-0000000000aa",
+    "title": "What does main.rs do?",
+    "createdAt": 1772359200000,
+    "updatedAt": 1772359209000,
+    "model": "qwen3-coder-plus",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What does main.rs do?",
+        "createdAt": 1772359201000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "What does main.rs do?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "It parses CLI arguments and starts the server.",
+        "createdAt": 1772359205000,
+        "model": "qwen3-coder-plus",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "It parses CLI arguments and starts the server."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "Thanks\nbye",
+        "createdAt": 1772359208000,
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Thanks\nbye"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "qwen-code",
+      "projectHash": "abc123hash"
+    }
+  }
+]

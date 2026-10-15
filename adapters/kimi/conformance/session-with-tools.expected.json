@@ -1,0 +1,93 @@
+[
+  {
+    "externalId": "session-9d8c7b6a-0000-4000-8000-0000000000e1",
+    "title": "Count lines",
+    "createdAt": 1780315200000,
+    "updatedAt": 1780315210000,
+    "workspace": "/work/proj",
+    "model": "kimi-k2-thinking",
+    "messages": [
+      {
+        "role": "user",
+        "content": "How many lines in main.py?",
+        "createdAt": 1780315201000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "How many lines in main.py?"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "createdAt": 1780315203000,
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Use wc -l."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Counting lines.",
+        "createdAt": 1780315204000,
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Counting lines."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "createdAt": 1780315205000,
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "tc_1",
+            "name": "Shell",
+            "input": {
+              "command": "wc -l main.py"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "wc: main.py: No such file or directory",
+        "createdAt": 1780315206000,
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "tc_1",
+            "output": "wc: main.py: No such file or directory",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "main.py does not exist.",
+        "createdAt": 1780315209000,
+        "parts": [
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "main.py does not exist."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "kimi-code"
+    }
+  }
+]

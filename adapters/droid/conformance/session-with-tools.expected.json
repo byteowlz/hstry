@@ -1,0 +1,123 @@
+[
+  {
+    "externalId": "3f2a1b00-0000-4000-8000-0000000000d2",
+    "title": "Second",
+    "createdAt": 1777885200000,
+    "updatedAt": 1777885201000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi",
+        "createdAt": 1777885200000,
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "hello",
+        "createdAt": 1777885201000,
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "factory-droid"
+    }
+  },
+  {
+    "externalId": "3f2a1b00-0000-4000-8000-0000000000d1",
+    "title": "Fix the failing build",
+    "createdAt": 1777798800000,
+    "updatedAt": 1777798806000,
+    "workspace": "/work/proj",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Fix the failing build",
+        "createdAt": 1777798800000,
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Fix the failing build"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "Running the build.",
+        "createdAt": 1777798802000,
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "thinking",
+            "text": "Run the build first."
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "Running the build."
+          },
+          {
+            "id": "p-6",
+            "type": "tool_call",
+            "toolCallId": "toolu_a",
+            "name": "Execute",
+            "input": {
+              "command": "make"
+            }
+          }
+        ],
+        "toolCalls": [
+          {
+            "toolName": "Execute",
+            "input": {
+              "command": "make"
+            },
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "make: *** No rule to make target",
+        "createdAt": 1777798804000,
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_result",
+            "toolCallId": "toolu_a",
+            "output": "make: *** No rule to make target",
+            "isError": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "The Makefile is missing a target.",
+        "createdAt": 1777798806000,
+        "parts": [
+          {
+            "id": "p-8",
+            "type": "text",
+            "text": "The Makefile is missing a target."
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "source": "factory-droid"
+    }
+  }
+]

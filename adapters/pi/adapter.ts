@@ -342,8 +342,10 @@ function buildContentParts(content?: PiContentBlock[] | string, includeTools?: b
       parts.push({...textPart(block.text), meta: {native: block}});
     } else if (block.type === 'thinking' && block.thinking) {
       parts.push({...thinkingPart(block.thinking), meta: {native: block}});
+    } else if (block.type === 'toolCall' && block.name && includeTools && !block.id) {
+      // Never fabricate an association; keep the call as opaque content.
+      parts.push({id: '', type: 'x-pi-content', payload: block});
     } else if (block.type === 'toolCall' && block.name && includeTools) {
-      if (!block.id) throw new Error('Pi tool call is missing its native ID');
       parts.push({...toolCallPart(block.id, block.name, block.arguments), meta: {native: block}});
     } else if (block.type !== 'toolCall') {
       parts.push({id: '', type: 'x-pi-content', payload: block});
@@ -355,8 +357,8 @@ function buildContentParts(content?: PiContentBlock[] | string, includeTools?: b
 /** Build CanonPart[] for a toolResult message. */
 function buildToolResultParts(msg: PiMessage): CanonPart[] | undefined {
   const toolCallId = msg.toolCallId;
-  if (!toolCallId) throw new Error('Pi tool result is missing its native toolCallId');
   const output = msg.content;
+  if (!toolCallId) return [{id: '', type: 'x-pi-content', payload: {type: 'toolResult', toolName: msg.toolName, isError: msg.isError, content: output}}];
   return [toolResultPart(toolCallId, output, { name: msg.toolName ?? undefined, isError: msg.isError ?? false })];
 }
 
@@ -685,10 +687,16 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
     const lines = raw.split(/\r?\n/).filter(line => line.trim().length > 0);
     if (lines.length === 0) continue;
 
+    // Indexing is lenient per session: a session Pi is still writing (partial
+    // last line) or one with unusual content must stay searchable and must
+    // never abort the other sessions in this batch. Every deviation is
+    // recorded in metadata.parseWarnings, and only fully valid trees qualify
+    // for lossless native Pi export.
     const entries: SessionEntry[] = [];
+    const parseWarnings: string[] = [];
     let header: SessionHeader | null = null;
 
-    for (const line of lines) {
+    for (const [index, line] of lines.entries()) {
       try {
         const entry = JSON.parse(line) as SessionEntry;
         if (entry.type === 'session') {
@@ -696,14 +704,28 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
         }
         entries.push(entry);
       } catch {
-        throw new Error('Invalid Pi session JSONL; incomplete or corrupt sources must be exported consistently before import');
+        parseWarnings.push(index === lines.length - 1
+          ? `line ${index + 1}: incomplete trailing line skipped (session may still be written)`
+          : `line ${index + 1}: invalid JSON skipped`);
       }
     }
 
-    if (!header) throw new Error('Pi session header missing');
+    if (!header) {
+      console.error(`pi adapter: skipped ${filePath}: no session header`);
+      continue;
+    }
 
-    const nativePiSession = validateNativePiSession({header, entries: entries.filter(entry => entry.type !== 'session')});
-    const byId = new Map(nativePiSession.entries.map(entry => [entry.id, entry]));
+    let nativePiSession: ReturnType<typeof validateNativePiSession> | undefined;
+    let nativeQualification: { qualified: boolean; reason?: string };
+    try {
+      if (parseWarnings.length) throw new Error('session JSONL has skipped lines');
+      nativePiSession = validateNativePiSession({header, entries: entries.filter(entry => entry.type !== 'session')});
+      nativeQualification = { qualified: true };
+    } catch (error) {
+      nativeQualification = { qualified: false, reason: (error as Error).message };
+      parseWarnings.push(`not qualified for native Pi export: ${(error as Error).message}`);
+    }
+    const byId = new Map(entries.filter(entry => entry.type !== 'session').map(entry => [(entry as {id?: string}).id, entry]));
     const messages = extractMessages(entries, opts?.includeTools ?? true);
     for (const message of messages) {
       const entryId = message.metadata?.id as string;
@@ -776,6 +798,8 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
         version: header.version,
         parentSession: header.parentSession,
         nativePiSession,
+        nativeQualification,
+        ...(parseWarnings.length ? { parseWarnings } : {}),
       },
     });
 

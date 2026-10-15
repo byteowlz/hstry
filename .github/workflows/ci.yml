@@ -60,3 +60,10 @@ jobs:
       - run: bun run adapters/cursor/test.js
       - run: bun run adapters/gemini-cli/test.js
       - run: bun run adapters/workbuddy/test.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.8.1'
+      - run: bun install --frozen-lockfile && bun run typecheck && bun test && bun run test:sqlite
+        working-directory: adapters/pi-durable
+      - run: cargo build -p hstry-cli
+      - run: bun adapters/pi-durable/cli-proof.ts

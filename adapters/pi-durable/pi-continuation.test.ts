@@ -1,0 +1,50 @@
+import {test, expect} from 'bun:test';
+import {mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {SessionManager, ModelRuntime, SettingsManager, DefaultResourceLoader, createAgentSession} from '@earendil-works/pi-coding-agent';
+import {Harness, MemoryStorage, createRegistry} from '@earendil-works/pi-durable';
+import {createModels} from '@earendil-works/pi-ai/models';
+import {Type} from '@earendil-works/pi-ai';
+import {BACKGROUND_CONTEXT as context} from '@earendil-works/chord/context';
+import {fauxProvider, fauxAssistantMessage} from '@earendil-works/pi-ai/providers/faux';
+import {snapshotFromPi, restoreSnapshot, captureSnapshot} from './interop.ts';
+import {exportPiSourceTree} from './tree.ts';
+import {goldenPiSource} from './golden-source.ts';
+
+test('ordinary Pi SDK continues the same full golden Pi -> native Durable -> Pi corpus without replay', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hstry-pi-sdk-'));
+  let session: Awaited<ReturnType<typeof createAgentSession>>['session'] | undefined;
+  const storage = new MemoryStorage();
+  const native = await Harness.open(storage, {models: createModels(), registry: createRegistry()}, context);
+  try {
+    const {session: original} = goldenPiSource();
+    const sourceEntries = structuredClone(original.getEntries());
+    const snapshot = await snapshotFromPi([original.getHeader()!, ...original.getEntries()], original.getCwd(), 'pi-source', 'full-tree');
+    await restoreSnapshot(snapshot, native);
+    const converted = exportPiSourceTree(await captureSnapshot({harness: native, storage}, 'pi-sdk-target'));
+    const artifact = converted.files.find(file => file.path.endsWith('.jsonl'))!;
+    const manager = SessionManager.inMemory(directory, undefined, artifact.content.trim().split('\n').map(line => JSON.parse(line)));
+    expect(manager.getSessionId()).not.toBe(original.getSessionId());
+    expect(manager.getSessionName()).toBe('Golden interoperability session');
+    expect(manager.getEntries().filter(e => e.type === 'compaction').map(e => e.summary)).toEqual(['golden-compaction-summary']);
+    expect(original.getEntries()).toEqual(sourceEntries);
+    const faux = fauxProvider();
+    faux.setResponses([fauxAssistantMessage('continued Pi')]);
+    const runtime = await ModelRuntime.create({authPath: join(directory, 'auth.json'), modelsPath: null, modelsStorePath: join(directory, 'models.json'), refreshOnCreate: false, allowModelNetwork: false});
+    runtime.registerNativeProvider(faux.provider);
+    const settings = SettingsManager.inMemory({compaction: {enabled: false}});
+    const loader = new DefaultResourceLoader({cwd: directory, agentDir: directory, settingsManager: settings, noExtensions: true, noSkills: true, noPromptTemplates: true, systemPrompt: 'Synthetic test only.'});
+    await loader.reload();
+    let toolExecutions = 0;
+    ({session} = await createAgentSession({cwd: directory, agentDir: directory, sessionManager: manager, settingsManager: settings, modelRuntime: runtime, resourceLoader: loader, model: faux.getModel(), noTools: 'builtin', tools: ['historical_guard'], customTools: [{name: 'historical_guard', label: 'Historical replay guard', description: 'Synthetic history must not execute', parameters: Type.Object({fixture: Type.Number()}), execute: async () => {toolExecutions++; return {content: [{type: 'text', text: 'should not execute'}], details: {}};}}]}));
+    expect(faux.state.callCount).toBe(0);
+    expect(toolExecutions).toBe(0);
+    await session.prompt('new input');
+    expect(faux.state.callCount).toBe(1);
+    expect(toolExecutions).toBe(0);
+    expect(manager.getEntries().flatMap(e => e.type === 'message' && e.message.role === 'toolResult' ? [e.message.toolCallId] : [])).toEqual(['golden-call-a', 'golden-call-b']);
+    const roles = (entries: ReturnType<SessionManager['getEntries']>) => entries.flatMap(e => e.type === 'message' && ['user', 'assistant'].includes(e.message.role) ? [e.message.role] : []);
+    expect(roles(manager.getEntries())).toEqual([...roles(sourceEntries), 'user', 'assistant']);
+  } finally {session?.dispose(); await native.close(context); await rm(directory, {recursive: true, force: true});}
+});

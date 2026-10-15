@@ -1466,7 +1466,36 @@ impl Database {
     /// the content matches, the insert is skipped entirely (no unnecessary
     /// writes, no version bump). If the content differs, the existing message
     /// is updated. Returns `true` if a write actually occurred.
+    async fn validate_native_identity(
+        connection: &mut sqlx::SqliteConnection,
+        msg: &Message,
+    ) -> Result<()> {
+        let Some(source_id) = msg
+            .metadata
+            .get("sourceMessageId")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(());
+        };
+        let existing: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT id, idx FROM messages WHERE conversation_id = ? AND (idx = ? OR client_id = ?)",
+        )
+        .bind(msg.conversation_id.to_string())
+        .bind(msg.idx)
+        .bind(source_id)
+        .fetch_all(connection)
+        .await?;
+        if existing
+            .iter()
+            .any(|(id, idx)| id != &msg.id.to_string() || *idx != i64::from(msg.idx))
+        {
+            return Err(Error::Other("Native source identity/position changed; refusing index or content reconciliation. Import rewritten history into a fresh source namespace.".into()));
+        }
+        Ok(())
+    }
+
     pub async fn insert_message(&self, msg: &Message) -> Result<bool> {
+        Self::validate_native_identity(&mut *self.pool.acquire().await?, msg).await?;
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
         let sender_json = msg
@@ -1476,7 +1505,7 @@ impl Database {
 
         // Check for existing message with same (conversation_id, idx)
         let existing = sqlx::query(
-            "SELECT content, parts_json FROM messages WHERE conversation_id = ? AND idx = ?",
+            "SELECT content, parts_json, metadata FROM messages WHERE conversation_id = ? AND idx = ?",
         )
         .bind(msg.conversation_id.to_string())
         .bind(msg.idx)
@@ -1491,7 +1520,13 @@ impl Database {
                 .get::<Option<String>, _>("parts_json")
                 .unwrap_or_default();
             // Content-hash idempotency: skip if content and parts match
-            if existing_content == content && existing_parts == parts_json_str {
+            let native_metadata_matches = msg.metadata.get("sourceMessageId").is_none()
+                || row.get::<Option<String>, _>("metadata").as_deref()
+                    == Some(msg.metadata.to_string().as_str());
+            if existing_content == content
+                && existing_parts == parts_json_str
+                && native_metadata_matches
+            {
                 return Ok(false);
             }
         }
@@ -1582,6 +1617,7 @@ impl Database {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         msg: &Message,
     ) -> Result<()> {
+        Self::validate_native_identity(tx, msg).await?;
         let parts_json = normalize_parts_json(&msg.parts_json);
         let content = project_content(&msg.content, &parts_json);
         let sender_json = msg
@@ -3150,6 +3186,9 @@ impl Database {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         messages: &[Message],
     ) -> Result<()> {
+        for message in messages {
+            Self::validate_native_identity(tx, message).await?;
+        }
         if messages.is_empty() {
             return Ok(());
         }

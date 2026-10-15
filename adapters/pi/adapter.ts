@@ -23,7 +23,6 @@ import type {
   ToolCall,
   ExportOptions,
   ExportResult,
-  ExportFile,
 } from '../types/index.ts';
 import {
   runAdapter,
@@ -34,6 +33,10 @@ import {
   textOnlyParts,
   isUnderCanonicalRoot,
 } from '../types/index.ts';
+
+import {exportNativePi, validateNativePiSession, type FidelityReport} from './native.ts';
+import {exportDurableConversation} from '../pi-durable/export.ts';
+import {exportGenericPi} from './generic.ts';
 
 const DEFAULT_PI_PATH = join(homedir(), '.pi', 'agent', 'sessions');
 
@@ -119,7 +122,7 @@ type SessionEntry =
 // Pi message types
 interface PiMessage {
   role: 'user' | 'assistant' | 'toolResult' | 'custom';
-  content?: PiContentBlock[];
+  content?: PiContentBlock[] | string;
   timestamp?: number;
   // Assistant-specific fields
   api?: string;
@@ -259,13 +262,31 @@ const adapter: Adapter = {
       throw new Error(`Unsupported export format: ${opts.format}`);
     }
 
-    const files = buildPiFiles(conversations, opts);
+    const reports: FidelityReport[] = [];
+    const files = conversations.flatMap(conversation => {
+      if (conversation.metadata?.nativeConversation && conversation.metadata?.storeId) {
+        const exported = exportDurableConversation(conversation);
+        reports.push(exported.report);
+        return exported.files;
+      }
+      const native = conversation.metadata?.nativePiSession;
+      if (native) {
+        const exported = exportNativePi(conversation, validateNativePiSession(native));
+        reports.push(exported.report);
+        return exported.files;
+      }
+      const exported = exportGenericPi(conversation, opts);
+      reports.push(exported.report);
+      return exported.files;
+    });
     return {
       format: 'pi',
       files,
       mimeType: 'application/x-ndjson',
       metadata: {
-        root: 'sessions/',
+        root: 'detached/',
+        disposition: 'detached-continuation',
+        fidelityReports: reports,
       },
     };
   },
@@ -302,137 +323,6 @@ function conversationsToMarkdown(conversations: Conversation[]): string {
   return blocks.join('\n').trim() + '\n';
 }
 
-function buildPiFiles(conversations: Conversation[], opts: ExportOptions): ExportFile[] {
-  const files: ExportFile[] = [];
-
-  for (const conv of conversations) {
-    const sessionId = conv.externalId ?? randomId('ses_');
-    const workspace = conv.workspace ?? process.cwd();
-    const safePath = `--${workspace.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
-    const timestamp = new Date(conv.createdAt).toISOString().replace(/[:.]/g, '-');
-    const filename = `${timestamp}_${sessionId}.jsonl`;
-    const filePath = `sessions/${safePath}/${filename}`;
-
-    const lines: string[] = [];
-
-    // Session header
-    const header: SessionHeader = {
-      type: 'session',
-      version: 3,
-      id: sessionId,
-      timestamp: new Date(conv.createdAt).toISOString(),
-      cwd: workspace,
-    };
-    lines.push(JSON.stringify(header));
-
-    // Model change entry (if we have model info)
-    let lastEntryId: string | null = null;
-    if (conv.model) {
-      const modelEntry = {
-        type: 'model_change',
-        id: randomId(''),
-        parentId: lastEntryId,
-        timestamp: new Date(conv.createdAt).toISOString(),
-        provider: conv.provider ?? deriveProvider(conv.model),
-        modelId: conv.model,
-      };
-      lines.push(JSON.stringify(modelEntry));
-      lastEntryId = modelEntry.id;
-    }
-
-    // Session name (if title exists and isn't derived from first message)
-    if (conv.title) {
-      const infoEntry: SessionInfoEntry = {
-        type: 'session_info',
-        id: randomId(''),
-        parentId: lastEntryId,
-        timestamp: new Date(conv.createdAt).toISOString(),
-        name: conv.title,
-      };
-      lines.push(JSON.stringify(infoEntry));
-      lastEntryId = infoEntry.id;
-    }
-
-    // Messages
-    for (const msg of conv.messages) {
-      const msgId = randomId('msg_');
-      const msgTimestamp = msg.createdAt
-        ? new Date(msg.createdAt).toISOString()
-        : new Date(conv.createdAt).toISOString();
-
-      const contentBlocks: PiContentBlock[] = [];
-      if (msg.content) {
-        contentBlocks.push({ type: 'text', text: msg.content });
-      }
-
-      // Add tool calls if present
-      if (opts.includeTools && msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          contentBlocks.push({
-            type: 'toolCall',
-            id: randomId('call_'),
-            name: tc.toolName,
-            arguments: tc.input as Record<string, unknown> | undefined,
-          });
-        }
-      }
-
-      const piRole = mapRoleToPi(msg.role);
-      const piMessage: PiMessage = {
-        role: piRole,
-        content: contentBlocks.length > 0 ? contentBlocks : undefined,
-        timestamp: msg.createdAt,
-        model: msg.model,
-        // Pi's interactive footer unconditionally reads usage and usage.cost
-        // from every assistant entry. Converted histories often lack token or
-        // cost data, so emit a complete zero-valued structure rather than
-        // omitting fields required by the native session schema.
-        usage: piRole === 'assistant' ? {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: msg.tokens ?? 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: msg.costUsd ?? 0,
-          },
-        } : undefined,
-      };
-
-      const msgEntry: MessageEntry = {
-        type: 'message',
-        id: msgId,
-        parentId: lastEntryId,
-        timestamp: msgTimestamp,
-        message: piMessage,
-      };
-      lines.push(JSON.stringify(msgEntry));
-      lastEntryId = msgId;
-    }
-
-    files.push({
-      path: filePath,
-      content: lines.join('\n') + '\n',
-    });
-  }
-
-  return files;
-}
-
-function mapRoleToPi(role: Message['role']): PiMessage['role'] {
-  switch (role) {
-    case 'user': return 'user';
-    case 'assistant': return 'assistant';
-    case 'tool': return 'toolResult';
-    case 'system': return 'custom';
-    default: return 'user';
-  }
-}
-
 function deriveProvider(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes('claude') || lower.includes('anthropic')) return 'anthropic';
@@ -442,25 +332,21 @@ function deriveProvider(model: string): string {
   return 'unknown';
 }
 
-function randomId(prefix: string): string {
-  const uuid = typeof globalThis.crypto?.randomUUID === 'function'
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now()}${Math.random().toString(16).slice(2)}`;
-  return `${prefix}${uuid.replace(/-/g, '').slice(0, 12)}`;
-}
-
 /** Build CanonPart[] from Pi content blocks for user/assistant messages. */
-function buildContentParts(content?: PiContentBlock[], includeTools?: boolean): CanonPart[] | undefined {
+function buildContentParts(content?: PiContentBlock[] | string, includeTools?: boolean): CanonPart[] | undefined {
   if (!content || !Array.isArray(content) || content.length === 0) return undefined;
   const parts: CanonPart[] = [];
   for (const block of content) {
     if (!block) continue;
     if (block.type === 'text' && block.text) {
-      parts.push(textPart(block.text));
+      parts.push({...textPart(block.text), meta: {native: block}});
     } else if (block.type === 'thinking' && block.thinking) {
-      parts.push(thinkingPart(block.thinking));
+      parts.push({...thinkingPart(block.thinking), meta: {native: block}});
     } else if (block.type === 'toolCall' && block.name && includeTools) {
-      parts.push(toolCallPart(block.id ?? block.name, block.name, block.arguments));
+      if (!block.id) throw new Error('Pi tool call is missing its native ID');
+      parts.push({...toolCallPart(block.id, block.name, block.arguments), meta: {native: block}});
+    } else if (block.type !== 'toolCall') {
+      parts.push({id: '', type: 'x-pi-content', payload: block});
     }
   }
   return parts.length > 0 ? parts : undefined;
@@ -468,8 +354,9 @@ function buildContentParts(content?: PiContentBlock[], includeTools?: boolean): 
 
 /** Build CanonPart[] for a toolResult message. */
 function buildToolResultParts(msg: PiMessage): CanonPart[] | undefined {
-  const toolCallId = msg.toolCallId ?? msg.toolName ?? 'unknown';
-  const output = extractContent(msg.content) || undefined;
+  const toolCallId = msg.toolCallId;
+  if (!toolCallId) throw new Error('Pi tool result is missing its native toolCallId');
+  const output = msg.content;
   return [toolResultPart(toolCallId, output, { name: msg.toolName ?? undefined, isError: msg.isError ?? false })];
 }
 
@@ -575,7 +462,7 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       
       // Skip empty messages unless they have tool calls
       const toolCalls = includeTools ? extractToolCalls(msg.content) : undefined;
-      if (!content && (!toolCalls || toolCalls.length === 0)) continue;
+      if (!content && (!toolCalls || toolCalls.length === 0) && (!Array.isArray(msg.content) || !msg.content.length)) continue;
 
       const msgCreatedAt = msg.timestamp ?? createdAt;
 
@@ -613,7 +500,8 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
   return messages;
 }
 
-function extractContent(content?: PiContentBlock[]): string {
+function extractContent(content?: PiContentBlock[] | string): string {
+  if (typeof content === 'string') return content;
   if (!content || !Array.isArray(content)) return '';
 
   const parts: string[] = [];
@@ -629,7 +517,7 @@ function extractContent(content?: PiContentBlock[]): string {
   return parts.filter(Boolean).join('\n').trim();
 }
 
-function extractToolCalls(content?: PiContentBlock[]): ToolCall[] | undefined {
+function extractToolCalls(content?: PiContentBlock[] | string): ToolCall[] | undefined {
   if (!content || !Array.isArray(content)) return undefined;
 
   const calls: ToolCall[] = [];
@@ -808,13 +696,21 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
         }
         entries.push(entry);
       } catch {
-        continue;
+        throw new Error('Invalid Pi session JSONL; incomplete or corrupt sources must be exported consistently before import');
       }
     }
 
-    if (!header) continue;
+    if (!header) throw new Error('Pi session header missing');
 
+    const nativePiSession = validateNativePiSession({header, entries: entries.filter(entry => entry.type !== 'session')});
+    const byId = new Map(nativePiSession.entries.map(entry => [entry.id, entry]));
     const messages = extractMessages(entries, opts?.includeTools ?? true);
+    for (const message of messages) {
+      const entryId = message.metadata?.id as string;
+      const anchor = `pi:${header.id}:${entryId}`;
+      message.metadata = {...message.metadata, sourceMessageId: anchor, nativePiEntry: byId.get(entryId)};
+      message.parts = message.parts?.map((part, index) => ({...part, id: `${anchor}:${index}`}));
+    }
 
     const timestamps = messages
       .map(msg => msg.createdAt)
@@ -879,6 +775,7 @@ async function parseFiles(files: string[], opts?: ParseOptions): Promise<Convers
         file: filePath,
         version: header.version,
         parentSession: header.parentSession,
+        nativePiSession,
       },
     });
 
@@ -965,4 +862,5 @@ function decodeWorkspaceFromPath(_filePath: string): string | undefined {
   return undefined;
 }
 
-runAdapter(adapter);
+if (import.meta.main) runAdapter(adapter);
+export default adapter;

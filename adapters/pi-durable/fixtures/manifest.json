@@ -1,0 +1,20 @@
+{
+  "protocol": 1,
+  "sdkVersions": {
+    "pi": "1.1.0",
+    "durable": "1.1.0",
+    "ai": "1.1.0",
+    "chord": "1.1.0"
+  },
+  "swiftWrapper": {
+    "repo": "https://github.com/finnvoor/PiDurableKit",
+    "revision": "e9a3bca038017053a57fe88d09ee47f711c4174d",
+    "qualification": "reference-pin-only; Apple/Swift runtime not qualified"
+  },
+  "sourceKind": "synthetic-sdk-created-detached",
+  "fixtures": {
+    "ordinary-pi.jsonl": "4e7b6252a31741243b82623f1dce4ad58c917aa3e731a3403e73f79781bdde16",
+    "full.pi-durable.json": "6fee17bd6b1bbf8b7e9cd9feb2e2b780aa2af9d4c2520771878f2c16747bbff0",
+    "selected.pi-durable.json": "b7d4e99eab59f50713dac53b50240cd778419ef0c182db62794cf21731d4dc3a"
+  }
+}

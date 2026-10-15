@@ -32,7 +32,7 @@ async fn fixture() -> anyhow::Result<(tempfile::TempDir, PathBuf, String)> {
     })
     .await?;
     let conv = serde_json::from_value(
-        json!({"externalId":"foreign-id","workspace":dir.path(),"createdAt":1767225600000_i64,"messages":[{"role":"user","content":"fixture request"},{"role":"assistant","content":"fixture answer"},{"role":"tool","content":"x".repeat(15000)}]}),
+        json!({"externalId":"foreign-id","workspace":dir.path(),"createdAt":1767225600000_i64,"messages":[{"role":"user","content":"fixture request"},{"role":"assistant","content":"fixture answer","parts":[{"id":"fixture-text","type":"text","text":"fixture answer"},{"id":"fixture-call-part","type":"tool_call","toolCallId":"fixture-call","name":"fixture","input":{}}]},{"role":"tool","content":"x".repeat(15000),"metadata":{"toolCallId":"fixture-call","toolName":"fixture","isError":false}}]}),
     )?;
     ingest_batch(&db, "test", vec![conv]).await?;
     let id = db.list_conversations(Default::default()).await?[0]

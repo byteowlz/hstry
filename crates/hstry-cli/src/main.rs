@@ -2110,13 +2110,19 @@ async fn cmd_import(
             let role_str = msg.role.as_str();
             // Stable, content-addressable id (trx-hjjw.4) so re-imports of
             // the same source produce idempotent rows.
+            let source_message_id = msg
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("sourceMessageId"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty());
             let stable_id = hstry_core::stable_message_id(
                 &source_id,
                 hstry_conv.external_id.as_deref(),
                 idx,
                 role_str,
                 &msg.content,
-                None,
+                source_message_id,
             );
             let hstry_msg = hstry_core::models::Message {
                 id: stable_id,
@@ -2132,11 +2138,14 @@ async fn cmd_import(
                 model: msg.model.clone(),
                 tokens: msg.tokens,
                 cost_usd: msg.cost_usd,
-                metadata: serde_json::Value::Object(serde_json::Map::default()),
+                metadata: msg
+                    .metadata
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({})),
                 sender: None,
                 provider: None,
                 harness: None,
-                client_id: None,
+                client_id: source_message_id.map(str::to_owned),
             };
             db.insert_message(&hstry_msg).await?;
             imported_msgs += 1;
@@ -5580,6 +5589,20 @@ async fn cmd_resume(
         .export(&adapter_path, vec![export_conv], export_opts)
         .await?;
 
+    // Qualified detached Pi exports allocate their own native target identity.
+    // The resume plan must describe the actual artifact, not an earlier guess.
+    if let Some(target_id) = result
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("fidelityReports"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|reports| reports.first())
+        .and_then(|report| report.get("targetSessionId"))
+        .and_then(serde_json::Value::as_str)
+    {
+        target_conversation.external_id = Some(target_id.to_owned());
+    }
+
     // Step 5: Place the exported file(s) in the agent's native session directory
     let session_dir = Config::expand_path(&agent_config.session_dir);
     let placed_paths = place_exported_session(&result, &session_dir, &target_conversation, true)?;
@@ -5600,6 +5623,7 @@ async fn cmd_resume(
                     "launched": false,
                     "native_verification": "not_checked",
                     "fidelity": "adapter_projection_not_runtime_state",
+                    "adapter_fidelity": result.metadata,
                     "warnings": ["Native load/continuation is not verified for this installed agent version; runtime state, permissions, reasoning signatures and attachment availability may not survive conversion"],
                     "target_session_id": target_conversation.external_id,
                     "origin": target_conversation.metadata["hstry_origin"],

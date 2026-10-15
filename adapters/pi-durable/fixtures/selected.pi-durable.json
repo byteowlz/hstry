@@ -1,0 +1,117 @@
+{
+  "format": "hstry.pi-durable.snapshot",
+  "version": 1,
+  "sdkVersion": "1.1.0",
+  "storeId": "golden-pi-store",
+  "capturedAt": 1700000000000,
+  "sourceVersion": "sha256:578eab923e661b0276e4e644c2098a9bdbbc10f2bcb5585221544d8fdc789ef7",
+  "selection": "selected-branch",
+  "conversations": [
+    {
+      "record": {
+        "id": 1
+      },
+      "provenance": {
+        "publicSessionId": "00000000-0000-4000-8000-000000000001"
+      },
+      "entries": [
+        {
+          "kind": "hstry.pi.source",
+          "data": {
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session"
+          },
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": "golden reset continuation",
+              "timestamp": 1700000000008
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "1000000e",
+              "parentId": null,
+              "timestamp": "2023-11-14T22:13:20.014Z",
+              "message": {
+                "role": "user",
+                "content": "golden reset continuation",
+                "timestamp": 1700000000008
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 14
+          },
+          "id": 8,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.custom_message",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "fixture attachment reference"
+                }
+              ],
+              "timestamp": 1700000000015
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "custom_message",
+              "customType": "fixture-reference",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "fixture attachment reference"
+                }
+              ],
+              "display": true,
+              "details": {
+                "uri": "fixture://attachments/example.txt"
+              },
+              "id": "1000000f",
+              "parentId": "1000000e",
+              "timestamp": "2023-11-14T22:13:20.015Z"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 15
+          },
+          "id": 9,
+          "conversationId": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,923 @@
+{
+  "format": "hstry.pi-durable.snapshot",
+  "version": 1,
+  "sdkVersion": "1.1.0",
+  "storeId": "golden-pi-store",
+  "capturedAt": 1700000000000,
+  "sourceVersion": "sha256:06151e317ecec2dc0bd569a8b03363bb3be95de61fabb27d5e4fdab4db8d8c81",
+  "selection": "full-tree",
+  "conversations": [
+    {
+      "record": {
+        "id": 1
+      },
+      "provenance": {
+        "publicSessionId": "00000000-0000-4000-8000-000000000001"
+      },
+      "entries": [
+        {
+          "kind": "hstry.pi.source",
+          "data": {
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session"
+          },
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "golden-root-archive"
+                },
+                {
+                  "type": "image",
+                  "mimeType": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jG1cAAAAASUVORK5CYII="
+                }
+              ],
+              "timestamp": 1700000000000
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000000",
+              "parentId": null,
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "golden-root-archive"
+                  },
+                  {
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jG1cAAAAASUVORK5CYII="
+                  }
+                ],
+                "timestamp": 1700000000000
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 0
+          },
+          "id": 8,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.assistant",
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": "synthetic reasoning",
+                  "thinkingSignature": "synthetic-unverified-signature"
+                },
+                {
+                  "type": "text",
+                  "text": "synthetic signed text",
+                  "textSignature": "synthetic-text-signature"
+                },
+                {
+                  "type": "toolCall",
+                  "id": "golden-call-a",
+                  "name": "historical_guard",
+                  "arguments": {
+                    "fixture": 0
+                  }
+                }
+              ],
+              "api": "faux",
+              "provider": "faux",
+              "model": "faux-1",
+              "usage": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1700000000001
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000001",
+              "parentId": "10000000",
+              "timestamp": "2023-11-14T22:13:20.001Z",
+              "message": {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "thinking",
+                    "thinking": "synthetic reasoning",
+                    "thinkingSignature": "synthetic-unverified-signature"
+                  },
+                  {
+                    "type": "text",
+                    "text": "synthetic signed text",
+                    "textSignature": "synthetic-text-signature"
+                  },
+                  {
+                    "type": "toolCall",
+                    "id": "golden-call-a",
+                    "name": "historical_guard",
+                    "arguments": {
+                      "fixture": 0
+                    }
+                  }
+                ],
+                "api": "faux",
+                "provider": "faux",
+                "model": "faux-1",
+                "usage": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "totalTokens": 0,
+                  "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "total": 0
+                  }
+                },
+                "stopReason": "toolUse",
+                "timestamp": 1700000000001
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 1
+          },
+          "id": 9,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.tool-result",
+          "model": [
+            {
+              "role": "toolResult",
+              "toolCallId": "golden-call-a",
+              "toolName": "historical_guard",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "identical golden result"
+                }
+              ],
+              "isError": false,
+              "timestamp": 1700000000003
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000002",
+              "parentId": "10000001",
+              "timestamp": "2023-11-14T22:13:20.002Z",
+              "message": {
+                "role": "toolResult",
+                "toolCallId": "golden-call-a",
+                "toolName": "historical_guard",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "identical golden result"
+                  }
+                ],
+                "isError": false,
+                "timestamp": 1700000000003
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 2
+          },
+          "id": 10,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.assistant",
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "thinking",
+                  "thinking": "synthetic reasoning",
+                  "thinkingSignature": "synthetic-unverified-signature"
+                },
+                {
+                  "type": "text",
+                  "text": "synthetic signed text",
+                  "textSignature": "synthetic-text-signature"
+                },
+                {
+                  "type": "toolCall",
+                  "id": "golden-call-b",
+                  "name": "historical_guard",
+                  "arguments": {
+                    "fixture": 1
+                  }
+                }
+              ],
+              "api": "faux",
+              "provider": "faux",
+              "model": "faux-1",
+              "usage": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              },
+              "stopReason": "toolUse",
+              "timestamp": 1700000000002
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000003",
+              "parentId": "10000002",
+              "timestamp": "2023-11-14T22:13:20.003Z",
+              "message": {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "thinking",
+                    "thinking": "synthetic reasoning",
+                    "thinkingSignature": "synthetic-unverified-signature"
+                  },
+                  {
+                    "type": "text",
+                    "text": "synthetic signed text",
+                    "textSignature": "synthetic-text-signature"
+                  },
+                  {
+                    "type": "toolCall",
+                    "id": "golden-call-b",
+                    "name": "historical_guard",
+                    "arguments": {
+                      "fixture": 1
+                    }
+                  }
+                ],
+                "api": "faux",
+                "provider": "faux",
+                "model": "faux-1",
+                "usage": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "totalTokens": 0,
+                  "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "total": 0
+                  }
+                },
+                "stopReason": "toolUse",
+                "timestamp": 1700000000002
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 3
+          },
+          "id": 11,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.tool-result",
+          "model": [
+            {
+              "role": "toolResult",
+              "toolCallId": "golden-call-b",
+              "toolName": "historical_guard",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "identical golden result"
+                }
+              ],
+              "isError": true,
+              "timestamp": 1700000000004
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000004",
+              "parentId": "10000003",
+              "timestamp": "2023-11-14T22:13:20.004Z",
+              "message": {
+                "role": "toolResult",
+                "toolCallId": "golden-call-b",
+                "toolName": "historical_guard",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "identical golden result"
+                  }
+                ],
+                "isError": true,
+                "timestamp": 1700000000004
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 4
+          },
+          "id": 12,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.assistant",
+          "model": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "golden answer"
+                }
+              ],
+              "api": "faux",
+              "provider": "faux",
+              "model": "faux-1",
+              "usage": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "totalTokens": 0,
+                "cost": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "total": 0
+                }
+              },
+              "stopReason": "stop",
+              "timestamp": 1700000000006
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000005",
+              "parentId": "10000004",
+              "timestamp": "2023-11-14T22:13:20.005Z",
+              "message": {
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "golden answer"
+                  }
+                ],
+                "api": "faux",
+                "provider": "faux",
+                "model": "faux-1",
+                "usage": {
+                  "input": 0,
+                  "output": 0,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "totalTokens": 0,
+                  "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "total": 0
+                  }
+                },
+                "stopReason": "stop",
+                "timestamp": 1700000000006
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 5
+          },
+          "id": 13,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.model_change",
+          "data": {
+            "hstryPiEntry": {
+              "type": "model_change",
+              "id": "10000006",
+              "parentId": "10000005",
+              "timestamp": "2023-11-14T22:13:20.006Z",
+              "provider": "faux",
+              "modelId": "faux-alt"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 6
+          },
+          "id": 14,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.model_change",
+          "data": {
+            "hstryPiEntry": {
+              "type": "model_change",
+              "id": "10000007",
+              "parentId": "10000006",
+              "timestamp": "2023-11-14T22:13:20.007Z",
+              "provider": "faux",
+              "modelId": "faux-1"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 7
+          },
+          "id": 15,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.session_info",
+          "data": {
+            "hstryPiEntry": {
+              "type": "session_info",
+              "id": "10000008",
+              "parentId": "10000007",
+              "timestamp": "2023-11-14T22:13:20.008Z",
+              "name": "Golden interoperability session"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 8
+          },
+          "id": 16,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.label",
+          "data": {
+            "hstryPiEntry": {
+              "type": "label",
+              "id": "10000009",
+              "parentId": "10000008",
+              "timestamp": "2023-11-14T22:13:20.009Z",
+              "targetId": "10000005",
+              "label": "verified-answer"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 9
+          },
+          "id": 17,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.context_edit",
+          "edits": [
+            {
+              "target": 8,
+              "action": "replace",
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "golden root edited for model context",
+                  "timestamp": 1700000000000
+                }
+              ]
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "context_edit",
+              "id": "1000000a",
+              "parentId": "10000009",
+              "timestamp": "2023-11-14T22:13:20.010Z",
+              "targetId": "10000000",
+              "replacement": {
+                "content": "golden root edited for model context"
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 10
+          },
+          "id": 18,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.compaction",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "golden-compaction-summary"
+                }
+              ],
+              "timestamp": 1700000000011
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "compaction",
+              "id": "1000000b",
+              "parentId": "1000000a",
+              "timestamp": "2023-11-14T22:13:20.011Z",
+              "summary": "golden-compaction-summary",
+              "firstKeptEntryId": "10000005",
+              "tokensBefore": 100,
+              "details": {
+                "opaqueFixture": true
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 11
+          },
+          "id": 19,
+          "conversationId": 1,
+          "head": 13
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": 20,
+        "parent": {
+          "conversationId": 1,
+          "at": 8
+        }
+      },
+      "provenance": {
+        "publicSessionId": "00000000-0000-4000-8000-000000000001"
+      },
+      "entries": [
+        {
+          "kind": "hstry.pi.source",
+          "data": {
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session"
+          },
+          "id": 7,
+          "conversationId": 1
+        },
+        {
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "golden-root-archive"
+                },
+                {
+                  "type": "image",
+                  "mimeType": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jG1cAAAAASUVORK5CYII="
+                }
+              ],
+              "timestamp": 1700000000000
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "10000000",
+              "parentId": null,
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "message": {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "golden-root-archive"
+                  },
+                  {
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jG1cAAAAASUVORK5CYII="
+                  }
+                ],
+                "timestamp": 1700000000000
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 0
+          },
+          "id": 8,
+          "conversationId": 1
+        },
+        {
+          "kind": "hstry.pi.branch_summary",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "golden branch handoff"
+                }
+              ],
+              "timestamp": 1700000000012
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "branch_summary",
+              "id": "1000000c",
+              "parentId": "10000000",
+              "timestamp": "2023-11-14T22:13:20.012Z",
+              "fromId": "10000000",
+              "summary": "golden branch handoff",
+              "details": {
+                "opaqueBranch": true
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 12
+          },
+          "id": 26,
+          "conversationId": 20
+        },
+        {
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": "golden fork continuation",
+              "timestamp": 1700000000007
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "1000000d",
+              "parentId": "1000000c",
+              "timestamp": "2023-11-14T22:13:20.013Z",
+              "message": {
+                "role": "user",
+                "content": "golden fork continuation",
+                "timestamp": 1700000000007
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 13
+          },
+          "id": 27,
+          "conversationId": 20
+        }
+      ]
+    },
+    {
+      "record": {
+        "id": 28
+      },
+      "provenance": {
+        "publicSessionId": "00000000-0000-4000-8000-000000000001"
+      },
+      "entries": [
+        {
+          "kind": "pi.user",
+          "model": [
+            {
+              "role": "user",
+              "content": "golden reset continuation",
+              "timestamp": 1700000000008
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "message",
+              "id": "1000000e",
+              "parentId": null,
+              "timestamp": "2023-11-14T22:13:20.014Z",
+              "message": {
+                "role": "user",
+                "content": "golden reset continuation",
+                "timestamp": 1700000000008
+              }
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 14
+          },
+          "id": 34,
+          "conversationId": 28
+        },
+        {
+          "kind": "hstry.pi.custom_message",
+          "model": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "fixture attachment reference"
+                }
+              ],
+              "timestamp": 1700000000015
+            }
+          ],
+          "data": {
+            "hstryPiEntry": {
+              "type": "custom_message",
+              "customType": "fixture-reference",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "fixture attachment reference"
+                }
+              ],
+              "display": true,
+              "details": {
+                "uri": "fixture://attachments/example.txt"
+              },
+              "id": "1000000f",
+              "parentId": "1000000e",
+              "timestamp": "2023-11-14T22:13:20.015Z"
+            },
+            "publicSessionId": "00000000-0000-4000-8000-000000000001",
+            "sourcePiHeader": {
+              "type": "session",
+              "version": 3,
+              "id": "00000000-0000-4000-8000-000000000001",
+              "timestamp": "2023-11-14T22:13:20.000Z",
+              "cwd": "/synthetic/hstry"
+            },
+            "sourcePiTitle": "Golden interoperability session",
+            "sourcePiEntryIndex": 15
+          },
+          "id": 35,
+          "conversationId": 28
+        }
+      ]
+    }
+  ]
+}

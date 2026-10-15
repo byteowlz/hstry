@@ -1,0 +1,19 @@
+{
+  "name": "@hstry/pi-durable-interop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "test:sqlite": "node sqlite-proof.ts",
+    "test:cli": "bun cli-proof.ts",
+    "fixtures": "bun generate-fixtures.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {"typescript": "5.9.3", "@types/bun": "1.3.13"},
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/chord": "1.1.0"
+  }
+}

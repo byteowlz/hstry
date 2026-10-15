@@ -327,6 +327,11 @@ impl AdapterRunner {
         let output = child.wait_with_output().await?;
 
         if !output.status.success() {
+            // runAdapter emits structured protocol errors on stdout before
+            // exiting non-zero. Preserve that diagnostic rather than losing it.
+            if let Ok(AdapterResponse::Error { error }) = serde_json::from_slice(&output.stdout) {
+                anyhow::bail!("Adapter error: {error}");
+            }
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("Adapter failed: {stderr}");
         }

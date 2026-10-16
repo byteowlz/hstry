@@ -10,11 +10,19 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter, textOnlyParts } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  textPart,
+  thinkingPart,
+  toolCallPart,
+  toolResultPart,
+} from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -227,15 +235,17 @@ function parseMessageArray(entries: unknown[]): Message[] {
 
     if (!role) continue;
 
-    const content = extractContent(msg.content ?? msg.text ?? msg.message ?? msg.parts);
-    if (!content) continue;
+    const built = buildClaudeWebParts(msg.content ?? msg.text ?? msg.message ?? msg.parts);
+    const parts = built.parts;
+    const content = built.content || (parts ? summarizeParts(parts) : '');
+    if (!content && !parts) continue;
 
     const createdAt = parseTimestamp(msg.created_at ?? msg.create_time ?? msg.timestamp);
 
     messages.push({
       role: mapRole(role),
       content,
-      parts: textOnlyParts(content),
+      parts: parts ?? textOnlyParts(content),
       createdAt,
       model: stringOrUndefined(msg.model ?? msg.model_name ?? msg.model_slug),
     });
@@ -261,15 +271,17 @@ function extractMessagesFromMapping(mapping: Record<string, unknown>): Message[]
     );
     if (!role) continue;
 
-    const content = extractContent(msg.content ?? (msg as unknown));
-    if (!content) continue;
+    const built = buildClaudeWebParts(msg.content ?? (msg as unknown));
+    const parts = built.parts;
+    const content = built.content || (parts ? summarizeParts(parts) : '');
+    if (!content && !parts) continue;
 
     const createdAt = parseTimestamp(msg.create_time ?? msg.created_at ?? msg.timestamp);
 
     messages.push({
       role: mapRole(role),
       content,
-      parts: textOnlyParts(content),
+      parts: parts ?? textOnlyParts(content),
       createdAt,
       model: stringOrUndefined((msg.metadata as Record<string, unknown> | undefined)?.model_slug),
     });
@@ -279,33 +291,95 @@ function extractMessagesFromMapping(mapping: Record<string, unknown>): Message[]
   return messages;
 }
 
-function extractContent(source: unknown): string {
-  if (!source) return '';
-  if (typeof source === 'string') return source.trim();
+interface ClaudeWebContentBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: unknown;
+  is_error?: boolean;
+}
+
+/**
+ * Map the export's typed content blocks to canonical parts. The claude.ai
+ * export carries `text`, `thinking`, `tool_use` and `tool_result` blocks;
+ * keeping them as parts preserves reasoning and tool association instead of
+ * flattening everything to prose.
+ */
+function buildClaudeWebParts(source: unknown): { content: string; parts?: CanonPart[] } {
+  if (!source) return { content: '' };
+  if (typeof source === 'string') return { content: source.trim() };
 
   if (Array.isArray(source)) {
-    const parts = source
-      .map(part => {
-        if (typeof part === 'string') return part;
-        if (part && typeof part === 'object') {
-          const text = (part as Record<string, unknown>).text;
-          if (typeof text === 'string') return text;
+    const parts: CanonPart[] = [];
+    const chunks: string[] = [];
+    for (const block of source) {
+      if (typeof block === 'string') {
+        if (block.trim()) {
+          parts.push(textPart(block));
+          chunks.push(block.trim());
         }
-        return '';
-      })
-      .map(part => part.trim())
-      .filter(Boolean);
-    return parts.join('\n');
+        continue;
+      }
+      if (!block || typeof block !== 'object') continue;
+      const b = block as ClaudeWebContentBlock;
+      if (b.type === 'thinking' || (b.type === undefined && typeof b.thinking === 'string')) {
+        const text = (b.thinking ?? b.text ?? '').trim();
+        if (text) {
+          parts.push(thinkingPart(text));
+          chunks.push(text);
+        }
+      } else if (b.type === 'tool_use') {
+        parts.push(toolCallPart(String(b.id ?? b.name ?? 'tool'), String(b.name ?? 'tool'), b.input));
+      } else if (b.type === 'tool_result') {
+        const output = typeof b.content === 'string' ? b.content : blockText(b.content);
+        parts.push(toolResultPart(String(b.tool_use_id ?? 'unknown'), output, { isError: b.is_error === true }));
+        if (output) chunks.push(output);
+      } else if (typeof b.text === 'string' && b.text.trim()) {
+        parts.push(textPart(b.text));
+        chunks.push(b.text.trim());
+      }
+    }
+    return { content: chunks.join('\n').trim(), parts: parts.length ? parts : undefined };
   }
 
   if (typeof source === 'object') {
     const obj = source as Record<string, unknown>;
-    if (typeof obj.text === 'string') return obj.text.trim();
-    if (typeof obj.content === 'string') return obj.content.trim();
-    if (Array.isArray(obj.parts)) return extractContent(obj.parts);
+    if (typeof obj.text === 'string') return { content: obj.text.trim() };
+    if (typeof obj.content === 'string') return { content: obj.content.trim() };
+    if (Array.isArray(obj.content)) return buildClaudeWebParts(obj.content);
+    if (Array.isArray(obj.parts)) return buildClaudeWebParts(obj.parts);
   }
 
+  return { content: '' };
+}
+
+function blockText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map(item => (typeof item === 'string' ? item : typeof item?.text === 'string' ? item.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
   return '';
+}
+
+/** Compact searchable text for a turn that only has structured parts. */
+function summarizeParts(parts: CanonPart[]): string {
+  return parts
+    .map(part => {
+      if (part.type === 'tool_call') return `\u{2699} ${part.name}`;
+      if (part.type === 'thinking') return part.text;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 }
 
 function mapRole(role: string): Message['role'] {

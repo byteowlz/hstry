@@ -79,6 +79,9 @@ interface CompactionEntry extends SessionEntryBase {
   tokensBefore: number;
   details?: unknown;
   fromHook?: boolean;
+  /** Usage from generating the summary; included in session totals. */
+  usage?: PiUsage;
+  systemMessage?: PiMessage;
 }
 
 // Branch summary entry (created when forking a session)
@@ -87,6 +90,7 @@ interface BranchSummaryEntry extends SessionEntryBase {
   fromId: string;
   summary: string;
   details?: unknown;
+  usage?: PiUsage;
 }
 
 // Thinking level change entry
@@ -108,6 +112,24 @@ interface LabelEntry extends SessionEntryBase {
   label: string | undefined;
 }
 
+/** Model-attributed usage that is not an assistant message (e.g. cache warming). */
+interface UsageEntry extends SessionEntryBase {
+  type: 'usage';
+  kind?: string;
+  provider?: string;
+  model?: string;
+  usage?: PiUsage;
+}
+
+/** Extension-provided message that participates in LLM context. */
+interface CustomMessageEntry extends SessionEntryBase {
+  type: 'custom_message';
+  customType?: string;
+  content?: PiContentBlock[] | string;
+  display?: boolean;
+  attribution?: string;
+}
+
 type SessionEntry = 
   | SessionHeader 
   | MessageEntry 
@@ -117,13 +139,19 @@ type SessionEntry =
   | ThinkingLevelChangeEntry 
   | SessionInfoEntry 
   | LabelEntry
+  | UsageEntry
+  | CustomMessageEntry
   | SessionEntryBase;
 
 // Pi message types
 interface PiMessage {
-  role: 'user' | 'assistant' | 'toolResult' | 'custom';
+  role: 'user' | 'assistant' | 'toolResult' | 'custom' | 'system';
   content?: PiContentBlock[] | string;
   timestamp?: number;
+  /** System messages carry the prompt sections and tool loadout; later messages patch by name. */
+  sections?: Record<string, string | null>;
+  toolsAdded?: { name?: string }[];
+  toolsRemoved?: { name?: string }[];
   // Assistant-specific fields
   api?: string;
   provider?: string;
@@ -454,17 +482,43 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       continue;
     }
 
+    // Extension-injected messages participate in LLM context.
+    if (entry.type === 'custom_message') {
+      const custom = entry as CustomMessageEntry;
+      const content = typeof custom.content === 'string' ? custom.content.trim() : extractContent(custom.content);
+      if (content) {
+        messages.push({
+          role: 'system',
+          content,
+          parts: textOnlyParts(content),
+          createdAt,
+          metadata: {
+            entryType: 'custom_message',
+            id: entry.id,
+            parentId: entry.parentId,
+            customType: custom.customType,
+            display: custom.display,
+            attribution: custom.attribution,
+          },
+        });
+      }
+      continue;
+    }
+
     // Regular messages
     if (entry.type === 'message') {
       const msgEntry = entry as MessageEntry;
       const msg = msgEntry.message;
       if (!msg || !msg.role) continue;
 
-      const content = extractContent(msg.content);
-      
+      let content = extractContent(msg.content);
+      // System messages carry the prompt/tool checkpoint in `sections` with an
+      // empty `content`; surface the section text instead of dropping the turn.
+      if (!content && msg.sections) content = sectionsToText(msg.sections);
+
       // Skip empty messages unless they have tool calls
       const toolCalls = includeTools ? extractToolCalls(msg.content) : undefined;
-      if (!content && (!toolCalls || toolCalls.length === 0) && (!Array.isArray(msg.content) || !msg.content.length)) continue;
+      if (!content && (!toolCalls || toolCalls.length === 0) && (!Array.isArray(msg.content) || !msg.content.length) && !msg.sections) continue;
 
       const msgCreatedAt = msg.timestamp ?? createdAt;
 
@@ -493,6 +547,9 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
           isError: msg.isError,
           toolCallId: msg.toolCallId,
           toolName: msg.toolName,
+          sections: msg.sections,
+          toolsAdded: msg.toolsAdded?.map(tool => tool?.name).filter(Boolean),
+          toolsRemoved: msg.toolsRemoved?.map(tool => tool?.name).filter(Boolean),
         },
       });
     }
@@ -500,6 +557,14 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
 
   // Messages are already in tree order from the JSONL append-only format
   return messages;
+}
+
+function sectionsToText(sections: Record<string, string | null>): string {
+  return Object.entries(sections)
+    .filter(([, value]) => typeof value === 'string' && value.trim())
+    .map(([name, value]) => `${name}:\n${value}`)
+    .join('\n\n')
+    .trim();
 }
 
 function extractContent(content?: PiContentBlock[] | string): string {
@@ -571,6 +636,26 @@ function calculateTotals(entries: SessionEntry[]): {
       }
       if (modelEntry.modelId) {
         model = modelEntry.modelId;
+      }
+      continue;
+    }
+    if (entry.type === 'usage') {
+      const usageEntry = entry as UsageEntry;
+      if (usageEntry.usage) {
+        tokensIn += usageEntry.usage.input + usageEntry.usage.cacheRead;
+        tokensOut += usageEntry.usage.output;
+        costUsd += usageEntry.usage.cost?.total ?? 0;
+      }
+      if (usageEntry.model) model = usageEntry.model;
+      if (usageEntry.provider) provider = usageEntry.provider;
+      continue;
+    }
+    if (entry.type === 'compaction' || entry.type === 'branch_summary') {
+      const usage = (entry as { usage?: PiUsage }).usage;
+      if (usage) {
+        tokensIn += usage.input + usage.cacheRead;
+        tokensOut += usage.output;
+        costUsd += usage.cost?.total ?? 0;
       }
       continue;
     }

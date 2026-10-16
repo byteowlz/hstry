@@ -49,9 +49,20 @@ export const cases: ConformanceCase[] = [
         { type: 'usage', id: 'a0000010', parentId: 'a0000009', timestamp: iso(14000), kind: 'cache_warm', provider: 'anthropic', model: 'claude-sonnet-5-5', usage: usage(0, 0, 5000, 0.0015) },
         { type: 'compaction', id: 'a0000011', parentId: 'a0000010', timestamp: iso(20000), summary: 'The user asked to fix failing tests; sum() was corrected.', firstKeptEntryId: 'a0000009', tokensBefore: 7000, details: { readFiles: [], modifiedFiles: ['src/sum.ts'] } },
         { type: 'message', id: 'a0000012', parentId: 'a0000011', timestamp: iso(30000), message: { role: 'user', content: [{ type: 'text', text: 'Thanks, commit it' }], timestamp: T + 30000 } },
-        { type: 'session_info', id: 'a0000013', parentId: 'a0000012', timestamp: iso(31000), name: 'Fix sum tests' },
+        { type: 'custom_message', id: 'a0000014', parentId: 'a0000012', timestamp: iso(30500), customType: 'my-extension', content: 'Remember to update the changelog.', display: true, attribution: 'agent' },
+        { type: 'session_info', id: 'a0000013', parentId: 'a0000014', timestamp: iso(31000), name: 'Fix sum tests' },
       ]));
       return sessionsRoot(home);
+    },
+    check(conversations) {
+      const [conversation] = conversations as { messages: { role: string; content: string }[]; tokensIn?: number; tokensOut?: number; costUsd?: number }[];
+      // The leading system message has content:"" and carries the prompt in `sections`.
+      if (!conversation.messages.some(m => m.role === 'system' && m.content.includes('expert coding assistant'))) throw new Error('system sections message dropped');
+      if (!conversation.messages.some(m => m.role === 'system' && m.content.includes('update the changelog'))) throw new Error('custom_message dropped');
+      // usage entries (cache_warm) must contribute to the session totals.
+      if (conversation.tokensIn !== 13300) throw new Error(`tokensIn did not include usage entries: ${conversation.tokensIn}`);
+      if (conversation.tokensOut !== 180) throw new Error(`tokensOut wrong: ${conversation.tokensOut}`);
+      if (Math.abs((conversation.costUsd ?? 0) - 0.0265) > 1e-9) throw new Error(`costUsd did not include usage entries: ${conversation.costUsd}`);
     },
   },
   {

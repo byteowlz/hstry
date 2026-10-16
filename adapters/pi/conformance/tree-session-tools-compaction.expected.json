@@ -2,15 +2,62 @@
   {
     "externalId": "0199f0a1-1111-7222-8333-444455556666",
     "title": "Fix sum tests",
-    "createdAt": 1790845200100,
-    "updatedAt": 1790845230000,
+    "createdAt": 1790845200000,
+    "updatedAt": 1790845230500,
     "workspace": "/work/demo",
     "model": "claude-sonnet-5-5",
     "provider": "anthropic",
-    "tokensIn": 8300,
+    "tokensIn": 13300,
     "tokensOut": 180,
-    "costUsd": 0.024999999999999998,
+    "costUsd": 0.0265,
     "messages": [
+      {
+        "role": "system",
+        "content": "preamble:\nYou are an expert coding assistant.\n\ncwd:\n/work/demo",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000001:0",
+            "type": "text",
+            "text": "preamble:\nYou are an expert coding assistant.\n\ncwd:\n/work/demo"
+          }
+        ],
+        "createdAt": 1790845200000,
+        "metadata": {
+          "entryType": "message",
+          "id": "a0000001",
+          "parentId": null,
+          "sections": {
+            "preamble": "You are an expert coding assistant.",
+            "cwd": "/work/demo"
+          },
+          "toolsAdded": [
+            "bash"
+          ],
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000001",
+          "nativePiEntry": {
+            "type": "message",
+            "id": "a0000001",
+            "parentId": null,
+            "timestamp": "2026-10-01T09:00:00.000Z",
+            "message": {
+              "role": "system",
+              "content": "",
+              "sections": {
+                "preamble": "You are an expert coding assistant.",
+                "cwd": "/work/demo"
+              },
+              "toolsAdded": [
+                {
+                  "name": "bash",
+                  "description": "Run shell",
+                  "parameters": {}
+                }
+              ],
+              "timestamp": 1790845200000
+            }
+          }
+        }
+      },
       {
         "role": "system",
         "content": "Model changed to anthropic/claude-sonnet-5-5",
@@ -543,6 +590,37 @@
               ],
               "timestamp": 1790845230000
             }
+          }
+        }
+      },
+      {
+        "role": "system",
+        "content": "Remember to update the changelog.",
+        "parts": [
+          {
+            "id": "pi:0199f0a1-1111-7222-8333-444455556666:a0000014:0",
+            "type": "text",
+            "text": "Remember to update the changelog."
+          }
+        ],
+        "createdAt": 1790845230500,
+        "metadata": {
+          "entryType": "custom_message",
+          "id": "a0000014",
+          "parentId": "a0000012",
+          "customType": "my-extension",
+          "display": true,
+          "attribution": "agent",
+          "sourceMessageId": "pi:0199f0a1-1111-7222-8333-444455556666:a0000014",
+          "nativePiEntry": {
+            "type": "custom_message",
+            "id": "a0000014",
+            "parentId": "a0000012",
+            "timestamp": "2026-10-01T09:00:30.500Z",
+            "customType": "my-extension",
+            "content": "Remember to update the changelog.",
+            "display": true,
+            "attribution": "agent"
           }
         }
       }

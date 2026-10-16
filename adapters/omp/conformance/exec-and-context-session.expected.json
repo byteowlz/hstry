@@ -1,0 +1,248 @@
+[
+  {
+    "externalId": "019c7000-1111-7222-8333-444455556666",
+    "title": "Context records",
+    "createdAt": 1790951601000,
+    "updatedAt": 1790951608000,
+    "workspace": "/work/ctx",
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "tokensIn": 300,
+    "tokensOut": 10,
+    "costUsd": 0.001,
+    "messages": [
+      {
+        "role": "system",
+        "content": "Follow the house style.",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Follow the house style."
+          }
+        ],
+        "createdAt": 1790951601000,
+        "metadata": {
+          "entryType": "message",
+          "id": "d0000001",
+          "parentId": null
+        }
+      },
+      {
+        "role": "user",
+        "content": "Check the disk.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Check the disk."
+          }
+        ],
+        "createdAt": 1790951602000,
+        "metadata": {
+          "entryType": "message",
+          "id": "d0000002",
+          "parentId": "d0000001"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "df -h /\n/dev/sda1 100G 40G 60G 40% /",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "d0000003",
+            "name": "bash",
+            "input": {
+              "command": "df -h /"
+            }
+          },
+          {
+            "id": "p-4",
+            "type": "tool_result",
+            "toolCallId": "d0000003",
+            "output": "/dev/sda1 100G 40G 60G 40% /",
+            "name": "bash"
+          }
+        ],
+        "createdAt": 1790951603000,
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "df -h /"
+            },
+            "output": "/dev/sda1 100G 40G 60G 40% /",
+            "status": "success"
+          }
+        ],
+        "metadata": {
+          "entryType": "message",
+          "role": "bashExecution",
+          "id": "d0000003",
+          "parentId": "d0000002",
+          "exitCode": 0,
+          "cancelled": false,
+          "truncated": false
+        }
+      },
+      {
+        "role": "tool",
+        "content": "nosuchcmd\nnosuchcmd: command not found",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "tool_call",
+            "toolCallId": "d0000004",
+            "name": "bash",
+            "input": {
+              "command": "nosuchcmd"
+            }
+          },
+          {
+            "id": "p-6",
+            "type": "tool_result",
+            "toolCallId": "d0000004",
+            "output": "nosuchcmd: command not found",
+            "name": "bash",
+            "isError": true
+          }
+        ],
+        "createdAt": 1790951604000,
+        "toolCalls": [
+          {
+            "toolName": "bash",
+            "input": {
+              "command": "nosuchcmd"
+            },
+            "output": "nosuchcmd: command not found",
+            "status": "error"
+          }
+        ],
+        "metadata": {
+          "entryType": "message",
+          "role": "bashExecution",
+          "id": "d0000004",
+          "parentId": "d0000003",
+          "exitCode": 127,
+          "cancelled": false,
+          "truncated": false
+        }
+      },
+      {
+        "role": "tool",
+        "content": "print(1 + 1)\n2",
+        "parts": [
+          {
+            "id": "p-7",
+            "type": "tool_call",
+            "toolCallId": "d0000005",
+            "name": "python",
+            "input": {
+              "command": "print(1 + 1)"
+            }
+          },
+          {
+            "id": "p-8",
+            "type": "tool_result",
+            "toolCallId": "d0000005",
+            "output": "2",
+            "name": "python"
+          }
+        ],
+        "createdAt": 1790951605000,
+        "toolCalls": [
+          {
+            "toolName": "python",
+            "input": {
+              "command": "print(1 + 1)"
+            },
+            "output": "2",
+            "status": "success"
+          }
+        ],
+        "metadata": {
+          "entryType": "message",
+          "role": "pythonExecution",
+          "id": "d0000005",
+          "parentId": "d0000004",
+          "exitCode": 0,
+          "cancelled": false,
+          "truncated": false
+        }
+      },
+      {
+        "role": "system",
+        "content": "@src/main.ts\nexport const x = 1;",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "@src/main.ts\nexport const x = 1;"
+          },
+          {
+            "id": "x-file-d0000006-1",
+            "type": "file_ref",
+            "uri": "src/main.ts",
+            "originText": "export const x = 1;"
+          }
+        ],
+        "createdAt": 1790951606000,
+        "metadata": {
+          "entryType": "message",
+          "role": "fileMention",
+          "id": "d0000006",
+          "parentId": "d0000005"
+        }
+      },
+      {
+        "role": "system",
+        "content": "Injected context",
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "Injected context"
+          }
+        ],
+        "createdAt": 1790951607000,
+        "metadata": {
+          "entryType": "custom_message",
+          "id": "d0000007",
+          "parentId": "d0000006",
+          "customType": "my-extension",
+          "display": true,
+          "attribution": "agent"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Disk looks fine.",
+        "parts": [
+          {
+            "id": "p-11",
+            "type": "text",
+            "text": "Disk looks fine."
+          }
+        ],
+        "createdAt": 1790951608000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 310,
+        "costUsd": 0.001,
+        "metadata": {
+          "entryType": "message",
+          "id": "d0000008",
+          "parentId": "d0000007",
+          "provider": "anthropic",
+          "api": "anthropic-messages",
+          "stopReason": "stop"
+        }
+      }
+    ],
+    "metadata": {
+      "file": "$HOME/.omp/agent/sessions/--work-ctx--/2026-10-02T14-33-20-000Z_019c7000-1111-7222-8333-444455556666.jsonl",
+      "version": 3
+    }
+  }
+]

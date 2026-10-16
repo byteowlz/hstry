@@ -80,4 +80,36 @@ export const cases: ConformanceCase[] = [
       return sessionsRoot(home);
     },
   },
+  {
+    name: 'exec-and-context-session',
+    async setup(home) {
+      const dir = join(sessionsRoot(home), '--work-ctx--');
+      await mkdir(dir, { recursive: true });
+      const sid = '019c7000-1111-7222-8333-444455556666';
+      await writeFile(join(dir, `${iso(2000000).replace(/[:.]/g, '-')}_${sid}.jsonl`), lines([
+        { type: 'session', version: 3, id: sid, title: 'Context records', timestamp: iso(2000000), cwd: '/work/ctx' },
+        { type: 'message', id: 'd0000001', parentId: null, timestamp: iso(2001000), message: { role: 'developer', content: [{ type: 'text', text: 'Follow the house style.' }], timestamp: T + 2001000 } },
+        { type: 'message', id: 'd0000002', parentId: 'd0000001', timestamp: iso(2002000), message: { role: 'user', content: [{ type: 'text', text: 'Check the disk.' }], timestamp: T + 2002000 } },
+        { type: 'message', id: 'd0000003', parentId: 'd0000002', timestamp: iso(2003000), message: { role: 'bashExecution', command: 'df -h /', output: '/dev/sda1 100G 40G 60G 40% /', exitCode: 0, cancelled: false, truncated: false, timestamp: T + 2003000 } },
+        { type: 'message', id: 'd0000004', parentId: 'd0000003', timestamp: iso(2004000), message: { role: 'bashExecution', command: 'nosuchcmd', output: 'nosuchcmd: command not found', exitCode: 127, cancelled: false, truncated: false, timestamp: T + 2004000 } },
+        { type: 'message', id: 'd0000005', parentId: 'd0000004', timestamp: iso(2005000), message: { role: 'pythonExecution', code: 'print(1 + 1)', output: '2', exitCode: 0, cancelled: false, truncated: false, timestamp: T + 2005000 } },
+        { type: 'message', id: 'd0000006', parentId: 'd0000005', timestamp: iso(2006000), message: { role: 'fileMention', files: [{ path: 'src/main.ts', content: 'export const x = 1;', lineCount: 1, byteSize: 19 }], timestamp: T + 2006000 } },
+        { type: 'custom_message', id: 'd0000007', parentId: 'd0000006', timestamp: iso(2007000), customType: 'my-extension', content: 'Injected context', display: true, attribution: 'agent' },
+        { type: 'message', id: 'd0000008', parentId: 'd0000007', timestamp: iso(2008000), message: { role: 'assistant', content: [{ type: 'text', text: 'Disk looks fine.' }], api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5', usage: usage(300, 10, 0, 0.001), stopReason: 'stop', timestamp: T + 2008000 } },
+      ]));
+      return sessionsRoot(home);
+    },
+    check(conversations) {
+      const [conversation] = conversations as { messages: { role: string; content: string; parts?: Record<string, any>[]; toolCalls?: Record<string, any>[] }[] }[];
+      if (!conversation.messages.some(m => m.role === 'system' && m.content.includes('house style'))) throw new Error('developer role not mapped to system');
+      const bash = conversation.messages.filter(m => m.role === 'tool' && m.content.includes('df -h'));
+      if (!bash.length) throw new Error('bashExecution dropped');
+      const errored = conversation.messages.find(m => m.role === 'tool' && m.toolCalls?.some(c => c.status === 'error'));
+      if (!errored || !errored.parts?.some(p => p.type === 'tool_result' && p.isError === true)) throw new Error('bashExecution exitCode not mapped to error status');
+      if (!conversation.messages.some(m => m.role === 'tool' && m.content.includes('print(1 + 1)'))) throw new Error('pythonExecution dropped');
+      if (!conversation.messages.some(m => m.role === 'system' && m.content.includes('export const x = 1'))) throw new Error('fileMention dropped');
+      if (!conversation.messages.some(m => m.role === 'system' && m.content === 'Injected context')) throw new Error('custom_message dropped');
+      if (!conversation.messages.some(m => m.content.includes('Disk looks fine'))) throw new Error('final assistant message dropped');
+    },
+  },
 ];

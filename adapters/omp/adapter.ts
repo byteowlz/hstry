@@ -125,13 +125,28 @@ type SessionEntry =
   | ThinkingLevelChangeEntry 
   | SessionInfoEntry 
   | LabelEntry
+  | CustomMessageEntry
   | SessionEntryBase;
 
 // OMP message types
 interface OmpMessage {
-  role: 'user' | 'assistant' | 'toolResult' | 'custom';
+  role: 'user' | 'developer' | 'assistant' | 'toolResult' | 'bashExecution' | 'pythonExecution' | 'hookMessage' | 'fileMention' | 'custom';
   content?: OmpContentBlock[];
   timestamp?: number;
+  // Bash/Python execution fields
+  command?: string;
+  code?: string;
+  output?: string;
+  exitCode?: number;
+  cancelled?: boolean;
+  truncated?: boolean;
+  excludeFromContext?: boolean;
+  // Extension-injected message fields
+  customType?: string;
+  display?: boolean;
+  attribution?: string;
+  // fileMention fields
+  files?: Array<{ path?: string; content?: string; lineCount?: number; byteSize?: number; skippedReason?: string }>;
   // Assistant-specific fields
   api?: string;
   provider?: string;
@@ -142,6 +157,16 @@ interface OmpMessage {
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
+}
+
+/** Extension-provided message that participates in LLM context. */
+interface CustomMessageEntry extends SessionEntryBase {
+  type: 'custom_message';
+  customType?: string;
+  content?: string | OmpContentBlock[];
+  display?: boolean;
+  details?: unknown;
+  attribution?: string;
 }
 
 interface OmpContentBlock {
@@ -579,11 +604,72 @@ function extractMessages(entries: SessionEntry[], includeTools: boolean): Messag
       continue;
     }
 
+    // Extension-injected messages participate in LLM context.
+    if (entry.type === 'custom_message') {
+      const custom = entry as CustomMessageEntry;
+      const content = typeof custom.content === 'string' ? custom.content.trim() : extractContent(custom.content);
+      if (content) {
+        messages.push({
+          role: 'system',
+          content,
+          parts: textOnlyParts(content),
+          createdAt,
+          metadata: {
+            entryType: 'custom_message',
+            id: entry.id,
+            parentId: entry.parentId,
+            customType: custom.customType,
+            display: custom.display,
+            attribution: custom.attribution,
+          },
+        });
+      }
+      continue;
+    }
+
     // Regular messages
     if (entry.type === 'message') {
       const msgEntry = entry as MessageEntry;
       const msg = msgEntry.message;
       if (!msg || !msg.role) continue;
+
+      // Standalone !bash / $python executions are tool records, not assistant prose.
+      if (msg.role === 'bashExecution' || msg.role === 'pythonExecution') {
+        const command = (msg.role === 'bashExecution' ? msg.command : msg.code) ?? '';
+        const output = msg.output ?? '';
+        const name = msg.role === 'bashExecution' ? 'bash' : 'python';
+        const isError = typeof msg.exitCode === 'number' && msg.exitCode !== 0;
+        const content = [command, output].filter(Boolean).join('\n').trim();
+        messages.push({
+          role: 'tool',
+          content,
+          parts: [toolCallPart(msgEntry.id, name, { command }), toolResultPart(msgEntry.id, output, { name, isError })],
+          createdAt: msg.timestamp ?? createdAt,
+          toolCalls: [{ toolName: name, input: { command }, output, status: isError ? 'error' : 'success' }],
+          metadata: {
+            entryType: 'message', role: msg.role, id: msgEntry.id, parentId: msgEntry.parentId,
+            exitCode: msg.exitCode, cancelled: msg.cancelled, truncated: msg.truncated, excludeFromContext: msg.excludeFromContext,
+          },
+        });
+        continue;
+      }
+
+      // Inlined @file mention contents.
+      if (msg.role === 'fileMention') {
+        const files = Array.isArray(msg.files) ? msg.files.filter(file => file && typeof file.path === 'string') : [];
+        const content = files.map(file => `@${file.path}\n${file.content ?? ''}`).join('\n\n').trim();
+        if (!content) continue;
+        const parts: CanonPart[] = [textPart(content)];
+        for (const file of files) parts.push({ id: `x-file-${msgEntry.id}-${parts.length}`, type: 'file_ref', uri: file.path!, originText: file.content });
+        messages.push({
+          role: 'system',
+          content,
+          parts,
+          createdAt: msg.timestamp ?? createdAt,
+          metadata: { entryType: 'message', role: 'fileMention', id: msgEntry.id, parentId: msgEntry.parentId },
+        });
+        continue;
+      }
 
       const content = extractContent(msg.content);
       
@@ -666,8 +752,14 @@ function mapRole(role: string): Message['role'] {
     case 'assistant':
       return 'assistant';
     case 'toolresult':
+    case 'bashexecution':
+    case 'pythonexecution':
       return 'tool';
     case 'system':
+    case 'developer':
+    case 'filemention':
+    case 'custom':
+    case 'hookmessage':
       return 'system';
     default:
       return 'assistant';

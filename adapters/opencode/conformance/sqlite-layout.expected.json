@@ -53,7 +53,9 @@
     "tokensOut": 220,
     "costUsd": 0.001,
     "model": "claude-sonnet-4-5",
-    "provider": "anthropic"
+    "provider": "anthropic",
+    "parentExternalId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+    "forkType": "thread"
   },
   {
     "externalId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",

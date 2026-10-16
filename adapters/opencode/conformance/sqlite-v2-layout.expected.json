@@ -1,0 +1,239 @@
+[
+  {
+    "externalId": "ses_5f3a1c2d4ffeZyXwVuTsRqPoNm",
+    "title": "Subagent: check types",
+    "createdAt": 1791014405000,
+    "updatedAt": 1791014408000,
+    "workspace": "/work/demo",
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "tokensIn": 3300,
+    "tokensOut": 220,
+    "costUsd": 0.02,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Check the TypeScript types",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Check the TypeScript types"
+          }
+        ],
+        "createdAt": 1791014405000,
+        "metadata": {
+          "id": "msg_w01"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Look for type errors.\nTypes look fine.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "Look for type errors."
+          },
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Types look fine."
+          }
+        ],
+        "createdAt": 1791014406000,
+        "model": "claude-haiku-4-5",
+        "metadata": {
+          "id": "msg_w02",
+          "agent": "general",
+          "provider": "anthropic",
+          "finish": "stop"
+        }
+      }
+    ],
+    "metadata": {
+      "version": "2.0.29",
+      "slug": "quiet-river",
+      "parentId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+      "projectId": "9b7a3c5d1e2f4a6b8c0d1e2f3a4b5c6d7e8f9a0b",
+      "agent": "build",
+      "schema": "session_v2"
+    },
+    "parentExternalId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+    "forkType": "thread"
+  },
+  {
+    "externalId": "ses_5f3a1c2d3ffeAbCdEfGhIjKlMn",
+    "title": "Fix the build",
+    "createdAt": 1791014400000,
+    "updatedAt": 1791014412000,
+    "workspace": "/work/demo",
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "tokensIn": 3300,
+    "tokensOut": 220,
+    "costUsd": 0.02,
+    "messages": [
+      {
+        "role": "user",
+        "content": "The build is failing, can you fix it?",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "The build is failing, can you fix it?"
+          }
+        ],
+        "createdAt": 1791014401000,
+        "metadata": {
+          "id": "msg_v01"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Run the build to see the error.\nLet me run the build.",
+        "parts": [
+          {
+            "id": "p-5",
+            "type": "thinking",
+            "text": "Run the build to see the error."
+          },
+          {
+            "id": "p-6",
+            "type": "text",
+            "text": "Let me run the build."
+          },
+          {
+            "id": "p-7",
+            "type": "tool_call",
+            "toolCallId": "toolu_01",
+            "name": "bash",
+            "input": {
+              "command": "npm run build"
+            }
+          },
+          {
+            "id": "p-8",
+            "type": "tool_result",
+            "toolCallId": "toolu_01",
+            "output": "error TS2304: Cannot find name \"foo\""
+          },
+          {
+            "id": "p-9",
+            "type": "tool_call",
+            "toolCallId": "toolu_02",
+            "name": "bash",
+            "input": {
+              "command": "npm run buidl"
+            }
+          },
+          {
+            "id": "p-10",
+            "type": "tool_result",
+            "toolCallId": "toolu_02",
+            "output": "Missing script: \"buidl\"",
+            "isError": true
+          }
+        ],
+        "createdAt": 1791014403000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 1660,
+        "costUsd": 0.012,
+        "metadata": {
+          "id": "msg_v02",
+          "agent": "build",
+          "provider": "anthropic",
+          "finish": "tool-calls"
+        }
+      },
+      {
+        "role": "tool",
+        "content": "On branch main",
+        "parts": [
+          {
+            "id": "p-11",
+            "type": "tool_call",
+            "toolCallId": "sh_01",
+            "name": "shell",
+            "input": {
+              "command": "git status"
+            }
+          },
+          {
+            "id": "p-12",
+            "type": "tool_result",
+            "toolCallId": "sh_01",
+            "output": "On branch main",
+            "name": "shell"
+          }
+        ],
+        "createdAt": 1791014407000,
+        "metadata": {
+          "id": "msg_v03",
+          "status": "completed",
+          "exit": 0
+        }
+      },
+      {
+        "role": "system",
+        "content": "Environment reloaded.",
+        "parts": [
+          {
+            "id": "p-13",
+            "type": "text",
+            "text": "Environment reloaded."
+          }
+        ],
+        "createdAt": 1791014407200,
+        "metadata": {
+          "id": "msg_v04",
+          "type": "system"
+        }
+      },
+      {
+        "role": "system",
+        "content": "Earlier the user asked to fix the build.",
+        "parts": [
+          {
+            "id": "p-14",
+            "type": "text",
+            "text": "Earlier the user asked to fix the build."
+          }
+        ],
+        "createdAt": 1791014407400,
+        "metadata": {
+          "id": "msg_v05",
+          "type": "compaction"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Fixed the undefined name in src/index.ts.",
+        "parts": [
+          {
+            "id": "p-15",
+            "type": "text",
+            "text": "Fixed the undefined name in src/index.ts."
+          }
+        ],
+        "createdAt": 1791014409000,
+        "model": "claude-sonnet-4-5",
+        "tokens": 1860,
+        "costUsd": 0.008,
+        "metadata": {
+          "id": "msg_v07",
+          "agent": "build",
+          "provider": "anthropic",
+          "finish": "stop"
+        }
+      }
+    ],
+    "metadata": {
+      "version": "2.0.29",
+      "slug": "quiet-river",
+      "projectId": "9b7a3c5d1e2f4a6b8c0d1e2f3a4b5c6d7e8f9a0b",
+      "agent": "build",
+      "schema": "session_v2"
+    }
+  }
+]

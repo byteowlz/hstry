@@ -412,6 +412,44 @@ interface SqliteProjectRow {
   worktree: string;
 }
 
+/** OpenCode 2.x `session_v2` row. */
+interface SqliteV2SessionRow {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  slug: string | null;
+  directory: string | null;
+  title: string | null;
+  version: string;
+  summary_additions: number | null;
+  summary_deletions: number | null;
+  summary_files: number | null;
+  cost: number;
+  tokens_input: number;
+  tokens_output: number;
+  tokens_reasoning: number;
+  model: string | null;
+  agent: string | null;
+  time_created: number;
+  time_updated: number;
+}
+
+/** OpenCode 2.x `session_message` row; `data` is a JSON SessionMessage blob. */
+interface SqliteV2MessageRow {
+  id: string;
+  session_id: string;
+  type: string;
+  seq: number;
+  time_created: number;
+  time_updated: number;
+  data: string;
+}
+
+function tableExists(db: SqliteDb, name: string): boolean {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  return Boolean(row);
+}
+
 /**
  * Parse all conversations from the SQLite layout.
  */
@@ -435,6 +473,13 @@ async function parseSqliteStream(basePath: string, opts?: ParseOptions): Promise
 
   const db = openDb(dbPath);
   try {
+    // OpenCode 2.x replaced the v1 session/message/part tables with session_v2
+    // + session_message (typed, event-sourced rows). Prefer the new schema when
+    // present; a migrated database may still carry the v1 tables.
+    if (tableExists(db, 'session_v2') && tableExists(db, 'session_message')) {
+      return parseSqliteV2Stream(db, opts);
+    }
+
     // Build session query with optional time filter
     let sessionQuery = `
       SELECT s.id, s.project_id, s.parent_id, s.slug, s.directory, s.title,
@@ -659,6 +704,252 @@ function buildSqliteConversation(
   );
 }
 
+// ============================================================================
+// SQLite layout, OpenCode 2.x (session_v2 + session_message)
+// ============================================================================
+
+/**
+ * Parse the OpenCode 2.x schema, where each session_message row is one typed
+ * record (`user`, `assistant`, `synthetic`, `system`, `skill`, `shell`,
+ * `compaction`, `idle`, `agent-switched`, `model-switched`, `location-switched`).
+ */
+function parseSqliteV2Stream(db: SqliteDb, opts?: ParseOptions): ParseStreamResult {
+  const batchSize = opts?.batchSize ?? 25;
+  const cursor = opts?.cursor as { offset: number } | undefined;
+  const offset = cursor?.offset ?? 0;
+
+  let sessionQuery = `
+    SELECT s.id, s.project_id, s.parent_id, s.slug, s.directory, s.title,
+           s.version, s.summary_additions, s.summary_deletions, s.summary_files,
+           s.cost, s.tokens_input, s.tokens_output, s.tokens_reasoning,
+           s.model, s.agent, s.time_created, s.time_updated
+    FROM session_v2 s
+  `;
+  const params: unknown[] = [];
+  if (opts?.since) {
+    sessionQuery += ` WHERE s.time_created >= ? OR s.time_updated >= ?`;
+    params.push(opts.since, opts.since);
+  }
+  sessionQuery += ` ORDER BY s.time_created DESC LIMIT ? OFFSET ?`;
+  params.push(batchSize + 1, offset);
+
+  const sessionRows = db.prepare(sessionQuery).all(...params) as SqliteV2SessionRow[];
+  const hasMore = sessionRows.length > batchSize;
+  const rows = hasMore ? sessionRows.slice(0, batchSize) : sessionRows;
+  if (rows.length === 0) return { conversations: [], done: true };
+
+  const projectIds = [...new Set(rows.map(r => r.project_id).filter(Boolean))];
+  const projectMap = new Map<string, string>();
+  if (projectIds.length > 0) {
+    const placeholders = projectIds.map(() => '?').join(',');
+    const projects = db.prepare(`SELECT id, worktree FROM project WHERE id IN (${placeholders})`).all(...projectIds) as SqliteProjectRow[];
+    for (const p of projects) projectMap.set(p.id, p.worktree);
+  }
+
+  const sessionIds = rows.map(r => r.id);
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const messageRows = db.prepare(
+    `SELECT id, session_id, type, seq, time_created, time_updated, data
+     FROM session_message WHERE session_id IN (${placeholders})
+     ORDER BY session_id, seq`
+  ).all(...sessionIds) as SqliteV2MessageRow[];
+
+  const messagesBySession = new Map<string, SqliteV2MessageRow[]>();
+  for (const row of messageRows) {
+    const list = messagesBySession.get(row.session_id);
+    if (list) list.push(row);
+    else messagesBySession.set(row.session_id, [row]);
+  }
+
+  const conversations: Conversation[] = [];
+  for (const session of rows) {
+    try {
+      const conv = buildSqliteV2Conversation(session, messagesBySession.get(session.id) ?? [], projectMap.get(session.project_id), opts);
+      if (conv) conversations.push(conv);
+    } catch (err) {
+      console.error(`Error building conversation for session ${session.id}: ${err}`);
+    }
+  }
+
+  return { conversations, cursor: hasMore ? { offset: offset + batchSize } : undefined, done: !hasMore };
+}
+
+function buildSqliteV2Conversation(
+  session: SqliteV2SessionRow,
+  messageRows: SqliteV2MessageRow[],
+  worktree: string | undefined,
+  opts?: ParseOptions,
+): Conversation | null {
+  const includeTools = opts?.includeTools !== false;
+  const messages: Message[] = [];
+  const modelRef = parseModelRef(session.model);
+
+  for (const row of messageRows) {
+    let data: Record<string, any>;
+    try {
+      data = JSON.parse(row.data);
+    } catch {
+      continue;
+    }
+    const type = row.type || data.type;
+    const createdAt = data.time?.created ?? row.time_created;
+
+    if (type === 'user') {
+      const text = typeof data.text === 'string' ? data.text : '';
+      const parts: CanonPart[] = [];
+      if (text.trim()) parts.push(textPart(text));
+      for (const file of Array.isArray(data.files) ? data.files : []) {
+        const uri = typeof file === 'string' ? file : file?.uri ?? file?.path;
+        if (typeof uri === 'string') parts.push({ id: `x-file-${row.id}-${parts.length}`, type: 'file_ref', uri, ...(file?.name ? { label: file.name } : {}) });
+      }
+      if (!text.trim() && parts.length === 0) continue;
+      messages.push({ role: 'user', content: text, parts: parts.length ? parts : textOnlyParts(text), createdAt, metadata: { id: row.id } });
+      continue;
+    }
+
+    if (type === 'assistant') {
+      const parts: CanonPart[] = [];
+      const chunks: string[] = [];
+      for (const block of Array.isArray(data.content) ? data.content : []) {
+        if (!block || typeof block !== 'object') continue;
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+          parts.push(textPart(block.text));
+          chunks.push(block.text.trim());
+        } else if (block.type === 'reasoning' && typeof block.text === 'string' && block.text.trim()) {
+          parts.push(thinkingPart(block.text));
+          chunks.push(block.text.trim());
+        } else if (block.type === 'tool' && includeTools) {
+          parts.push(...v2ToolParts(block));
+        }
+      }
+      const content = chunks.join('\n').trim();
+      if (!content && !parts.length) continue;
+      const total = v2TokenTotal(data.tokens);
+      messages.push({
+        role: 'assistant',
+        content: content || projectPartsToContent(parts),
+        parts: parts.length ? parts : textOnlyParts(content),
+        createdAt,
+        model: data.model?.id ?? modelRef?.id,
+        tokens: total || undefined,
+        costUsd: typeof data.cost === 'number' ? data.cost : undefined,
+        metadata: { id: row.id, agent: data.agent, provider: data.model?.providerID ?? modelRef?.providerID, finish: data.finish },
+      });
+      continue;
+    }
+
+    // A shell record is a tool execution (command + output/exit).
+    if (type === 'shell') {
+      const callId = String(data.shellID ?? row.id);
+      const output = typeof data.output === 'string' ? data.output : '';
+      const failed = data.status === 'error' || (typeof data.exit === 'number' && data.exit !== 0);
+      messages.push({
+        role: 'tool',
+        content: output || String(data.command ?? ''),
+        parts: [toolCallPart(callId, 'shell', { command: data.command }), toolResultPart(callId, output, { name: 'shell', isError: failed })],
+        createdAt,
+        metadata: { id: row.id, status: data.status, exit: data.exit },
+      });
+      continue;
+    }
+
+    // synthetic/system/skill carry model-facing text; compaction carries a summary.
+    if (type === 'system' || type === 'synthetic' || type === 'skill' || (type === 'compaction' && data.status !== 'running')) {
+      const text = String(data.text ?? data.summary ?? data.description ?? '').trim();
+      if (!text) continue;
+      messages.push({ role: 'system', content: text, parts: textOnlyParts(text), createdAt, metadata: { id: row.id, type } });
+      continue;
+    }
+    // idle / agent-switched / model-switched / location-switched / running
+    // compaction are bookkeeping with no conversational content.
+  }
+
+  if (messages.length === 0) return null;
+  messages.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+
+  const conv: Conversation = {
+    externalId: session.id,
+    title: session.title || undefined,
+    createdAt: session.time_created,
+    updatedAt: session.time_updated,
+    workspace: session.directory || worktree,
+    model: modelRef?.id,
+    provider: modelRef?.providerID,
+    tokensIn: session.tokens_input || undefined,
+    tokensOut: (session.tokens_output || 0) + (session.tokens_reasoning || 0) || undefined,
+    costUsd: session.cost || undefined,
+    messages,
+    metadata: {
+      version: session.version,
+      slug: session.slug,
+      parentId: session.parent_id ?? undefined,
+      projectId: session.project_id,
+      agent: session.agent ?? undefined,
+      schema: 'session_v2',
+    },
+  };
+  if (session.parent_id) {
+    conv.parentExternalId = session.parent_id;
+    conv.forkType = 'thread';
+  }
+  return conv;
+}
+
+function v2ToolParts(block: Record<string, any>): CanonPart[] {
+  const callId = String(block.id ?? block.name ?? 'tool');
+  const name = String(block.name ?? 'tool');
+  const state = block.state ?? {};
+  const parts: CanonPart[] = [toolCallPart(callId, name, state.input)];
+  if (state.status === 'completed') {
+    parts.push(toolResultPart(callId, v2ContentText(state.content)));
+  } else if (state.status === 'error') {
+    const detail = v2ContentText(state.content) || v2ErrorText(state.error);
+    parts.push(toolResultPart(callId, detail, { isError: true }));
+  }
+  return parts;
+}
+
+function v2ContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map(item => (item?.type === 'text' ? item.text : item?.type === 'file' ? `[file] ${item.uri}` : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function v2ErrorText(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === 'string') return message;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return 'tool failed';
+    }
+  }
+  return 'tool failed';
+}
+
+function v2TokenTotal(tokens: unknown): number {
+  if (!tokens || typeof tokens !== 'object') return 0;
+  const t = tokens as Record<string, any>;
+  return (t.input ?? 0) + (t.output ?? 0) + (t.reasoning ?? 0) + (t.cache?.read ?? 0) + (t.cache?.write ?? 0);
+}
+
+function parseModelRef(model: string | null | undefined): { id: string; providerID: string } | undefined {
+  if (!model) return undefined;
+  try {
+    const parsed = JSON.parse(model);
+    if (parsed && typeof parsed.id === 'string') return { id: parsed.id, providerID: parsed.providerID ?? '' };
+  } catch {
+    // Some v2 builds stored a plain model id string.
+    return { id: model, providerID: '' };
+  }
+  return undefined;
+}
+
 /** Map opencode tool status to hstry ToolStatus. */
 function mapToolStatus(status?: string): 'pending' | 'success' | 'error' | undefined {
   switch (status) {
@@ -755,6 +1046,13 @@ function buildConversation(
   if (cost > 0) conv.costUsd = cost;
   if (model) conv.model = model;
   if (provider) conv.provider = provider;
+
+  // Child sessions (subagents/threads) carry a parentID; surface the actual
+  // session tree link instead of burying it in metadata only.
+  if (session.parentID) {
+    conv.parentExternalId = session.parentID;
+    conv.forkType = 'thread';
+  }
 
   return conv;
 }

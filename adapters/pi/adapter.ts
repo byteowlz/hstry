@@ -168,10 +168,15 @@ interface PiContentBlock {
   type: string;
   text?: string;
   thinking?: string;
-  // Tool call fields
+  // Tool call fields (native camelCase `toolCall`, plus imported `tool_use`)
   id?: string;
   name?: string;
   arguments?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  // Imported Anthropic-style tool result blocks
+  tool_use_id?: string;
+  is_error?: boolean;
+  content?: string | PiContentBlock[];
   // Image fields
   data?: string;
   mimeType?: string;
@@ -375,6 +380,16 @@ function buildContentParts(content?: PiContentBlock[] | string, includeTools?: b
       parts.push({id: '', type: 'x-pi-content', payload: block});
     } else if (block.type === 'toolCall' && block.name && includeTools) {
       parts.push({...toolCallPart(block.id, block.name, block.arguments), meta: {native: block}});
+    } else if (block.type === 'tool_use' && block.name && includeTools) {
+      // Sessions imported from Anthropic-style logs keep snake_case blocks.
+      const callId = block.id ?? '';
+      if (callId) parts.push({...toolCallPart(callId, block.name, block.input ?? block.arguments), meta: {native: block}});
+      else parts.push({id: '', type: 'x-pi-content', payload: block});
+    } else if (block.type === 'tool_result') {
+      const callId = block.tool_use_id ?? '';
+      const output = toolResultText(block.content);
+      if (callId) parts.push({...toolResultPart(callId, output, {isError: block.is_error === true}), meta: {native: block}});
+      else parts.push({id: '', type: 'x-pi-content', payload: block});
     } else if (block.type !== 'toolCall') {
       parts.push({id: '', type: 'x-pi-content', payload: block});
     }
@@ -578,6 +593,9 @@ function extractContent(content?: PiContentBlock[] | string): string {
       parts.push(block.text.trim());
     } else if (block.type === 'thinking' && block.thinking) {
       parts.push(block.thinking.trim());
+    } else if (block.type === 'tool_result') {
+      const output = toolResultText(block.content);
+      if (output) parts.push(output);
     }
   }
 
@@ -594,10 +612,26 @@ function extractToolCalls(content?: PiContentBlock[] | string): ToolCall[] | und
         toolName: block.name,
         input: block.arguments,
       });
+    } else if (block.type === 'tool_use' && block.name) {
+      calls.push({
+        toolName: block.name,
+        input: block.input ?? block.arguments,
+      });
     }
   }
 
   return calls.length > 0 ? calls : undefined;
+}
+
+/** Flatten a tool result block's `content` (string or text blocks). */
+function toolResultText(content?: string | PiContentBlock[]): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map(block => (typeof block === 'string' ? block : block?.text ?? ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 }
 
 function mapRole(role: string): Message['role'] {

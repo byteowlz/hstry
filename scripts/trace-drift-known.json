@@ -54,7 +54,10 @@
     "event_msg.context_compacted",
     "event_msg.thread_name_updated",
     "world_state",
-    "token_usage_record"
+    "token_usage_record",
+    "response_item.agent_message",
+    "inter_agent_communication_metadata",
+    "run"
   ],
   "pi": [
     "session",
@@ -70,7 +73,9 @@
     "content.text",
     "content.thinking",
     "content.toolCall",
-    "content.image"
+    "content.image",
+    "content.tool_use",
+    "content.tool_result"
   ],
   "hermes": [],
   "droid": []

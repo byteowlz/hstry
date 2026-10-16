@@ -103,6 +103,10 @@ interface ThreadRow {
 
 interface CodexResponseItem {
   type?: string;
+  id?: string;
+  /** response_item.agent_message: inter-agent message metadata. */
+  author?: string;
+  recipient?: string;
   role?: string;
   content?: Array<{ type?: string; text?: string; image_url?: string }>;
   name?: string;
@@ -327,6 +331,21 @@ async function parseRolloutFile(
             parts: [thinkingPart(summary)],
             createdAt: timestampMs,
             model,
+          });
+          break;
+        }
+
+        if (payload.type === 'agent_message') {
+          // Inter-agent message: text lives in the content array (input_text).
+          const content = extractContent(payload.content) || (typeof payload.message === 'string' ? payload.message : '');
+          if (!content) break;
+          messages.push({
+            role: 'assistant',
+            content,
+            parts: textOnlyParts(content),
+            createdAt: timestampMs,
+            model,
+            metadata: { source: 'response_item.agent_message', id: payload.id, author: payload.author, recipient: payload.recipient },
           });
           break;
         }

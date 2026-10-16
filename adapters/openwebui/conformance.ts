@@ -84,4 +84,45 @@ export const cases: ConformanceCase[] = [
       return dir;
     },
   },
+  {
+    name: 'branched-regeneration-with-tools',
+    detection: 'content',
+    async setup(home) {
+      const dir = await dataDir(home);
+      createDb(join(dir, 'webui.db'), [{
+        id: 'branch-0001', title: 'Regenerated with tools', created_at: t0, updated_at: t0 + 20,
+        chat: {
+          models: ['gpt-5'],
+          history: {
+            currentId: 'a2b',
+            messages: {
+              u1: { id: 'u1', parentId: null, childrenIds: ['a2a', 'a2b'], role: 'user', content: 'Run the tool', timestamp: t0 + 1 },
+              a2a: { id: 'a2a', parentId: 'u1', childrenIds: [], role: 'assistant', content: 'DISCARDED ANSWER', timestamp: t0 + 2, done: true },
+              a2b: {
+                id: 'a2b', parentId: 'u1', childrenIds: [], role: 'assistant', content: '', model: 'gpt-5', timestamp: t0 + 3, done: true,
+                output: [
+                  { type: 'reasoning', id: 'r1', status: 'completed', summary: [{ type: 'summary_text', text: 'I should call the tool.' }] },
+                  { type: 'function_call', id: 'fc1', call_id: 'call_1', name: 'run_shell', arguments: '{"command":"echo hi"}' },
+                  { type: 'function_call_output', call_id: 'call_1', status: 'completed', output: [{ type: 'output_text', text: 'hi' }] },
+                  { type: 'message', id: 'm1', status: 'completed', content: [{ type: 'output_text', text: 'The tool printed hi.' }] },
+                ],
+              },
+            },
+          },
+        },
+      }]);
+      return dir;
+    },
+    check(conversations) {
+      const [conversation] = conversations as { messages: { content: string; parts?: Record<string, any>[] }[] }[];
+      const all = conversation.messages.map(m => m.content).join('\n');
+      if (all.includes('DISCARDED ANSWER')) throw new Error('regenerated sibling branch was imported');
+      const parts = conversation.messages.flatMap(m => m.parts ?? []);
+      if (!parts.some(p => p.type === 'thinking' && p.text.includes('call the tool'))) throw new Error('reasoning output item dropped');
+      const call = parts.find(p => p.type === 'tool_call' && p.toolCallId === 'call_1');
+      if (!call || (call.input as { command?: string })?.command !== 'echo hi') throw new Error('function_call output item dropped or arguments unparsed');
+      if (!parts.some(p => p.type === 'tool_result' && p.toolCallId === 'call_1' && String(p.output).includes('hi'))) throw new Error('function_call_output not associated');
+      if (!conversation.messages.some(m => m.content.includes('tool printed hi'))) throw new Error('assistant message text missing');
+    },
+  },
 ];

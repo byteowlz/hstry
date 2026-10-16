@@ -1,0 +1,71 @@
+[
+  {
+    "externalId": "branch-0001",
+    "title": "Regenerated with tools",
+    "createdAt": 1790000000000,
+    "updatedAt": 1790000020000,
+    "model": "gpt-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Run the tool",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Run the tool"
+          }
+        ],
+        "createdAt": 1790000001000,
+        "metadata": {
+          "id": "u1",
+          "parentId": null
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "I should call the tool.\nhi\nThe tool printed hi.",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "thinking",
+            "text": "I should call the tool."
+          },
+          {
+            "id": "p-3",
+            "type": "tool_call",
+            "toolCallId": "call_1",
+            "name": "run_shell",
+            "input": {
+              "command": "echo hi"
+            }
+          },
+          {
+            "id": "p-4",
+            "type": "tool_result",
+            "toolCallId": "call_1",
+            "output": "hi"
+          },
+          {
+            "id": "p-5",
+            "type": "text",
+            "text": "The tool printed hi."
+          }
+        ],
+        "createdAt": 1790000003000,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "a2b",
+          "parentId": "u1",
+          "done": true
+        }
+      }
+    ],
+    "metadata": {
+      "userId": "user-1",
+      "shareId": null,
+      "archived": false,
+      "pinned": false
+    }
+  }
+]

@@ -27,6 +27,7 @@ use api::ApiCommand;
 use serde::{Serialize, de::DeserializeOwned};
 
 mod api;
+mod pick;
 mod pretty;
 mod read_cli;
 mod resume;
@@ -370,6 +371,60 @@ enum Command {
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Find a session and act on it (default: copy its transcript)
+    Pick {
+        /// Fuzzy query over title, first message, workspace and id
+        query: Option<String>,
+
+        /// Copy the transcript to the clipboard (default action)
+        #[arg(long)]
+        copy: bool,
+
+        /// Print the transcript to stdout
+        #[arg(long, conflicts_with = "copy")]
+        print: bool,
+
+        /// Print only the conversation id
+        #[arg(long)]
+        id_only: bool,
+
+        /// Print only the on-disk source path
+        #[arg(long)]
+        path: bool,
+
+        /// Open the session in an agent (e.g. pi, claude, codex)
+        #[arg(long, value_name = "AGENT")]
+        open: Option<String>,
+
+        /// Export the transcript in a format (markdown, json, ...)
+        #[arg(long, value_name = "FORMAT")]
+        export: Option<String>,
+
+        /// Skip the interactive picker and choose the best query match
+        #[arg(long)]
+        no_pick: bool,
+
+        /// Restrict to one source/adapter
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Restrict to workspaces matching this substring
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Only sessions at or after this date/time
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Only sessions at or before this date/time
+        #[arg(long)]
+        before: Option<String>,
+
+        /// Maximum number of candidate sessions to consider
+        #[arg(short, long, default_value = "2000")]
+        limit: i64,
     },
 
     /// Show a token-efficient peek bundle for a single conversation
@@ -1228,6 +1283,48 @@ async fn main() -> Result<()> {
             let db = Database::open(&config.database).await?;
             apply_storage_config(&db, &config);
             cmd_peek(&db, &id, chars, cli.json).await
+        }
+        Command::Pick {
+            query,
+            copy,
+            print,
+            id_only,
+            path,
+            open,
+            export,
+            no_pick,
+            source,
+            workspace,
+            after,
+            before,
+            limit,
+        } => {
+            let db = Database::open(&config.database).await?;
+            apply_storage_config(&db, &config);
+            let runner = Runtime::parse(&config.js_runtime)
+                .map(|runtime| AdapterRunner::new(runtime, config.adapter_paths.clone()));
+            cmd_pick(
+                &db,
+                runner.as_ref(),
+                &config,
+                PickArgs {
+                    query,
+                    copy,
+                    print,
+                    id_only,
+                    path,
+                    open,
+                    export,
+                    no_pick,
+                    source,
+                    workspace,
+                    after,
+                    before,
+                    limit,
+                },
+                cli.json,
+            )
+            .await
         }
         Command::Remove { id, yes, dry_run } => {
             let db = Database::open(&config.database).await?;
@@ -5198,6 +5295,220 @@ async fn run_fzf_picker(
         json_output,
     ))
     .await
+}
+
+struct PickArgs {
+    query: Option<String>,
+    copy: bool,
+    print: bool,
+    id_only: bool,
+    path: bool,
+    open: Option<String>,
+    export: Option<String>,
+    no_pick: bool,
+    source: Option<String>,
+    workspace: Option<String>,
+    after: Option<String>,
+    before: Option<String>,
+    limit: i64,
+}
+
+/// Resolve one session (interactively or by fuzzy query) and act on it.
+async fn cmd_pick(
+    db: &Database,
+    runner: Option<&AdapterRunner>,
+    config: &Config,
+    args: PickArgs,
+    json_output: bool,
+) -> Result<()> {
+    use hstry_core::db::ListConversationsOptions;
+
+    let after = args.after.as_deref().map(parse_date_filter).transpose()?;
+    let before = args.before.as_deref().map(parse_date_filter).transpose()?;
+    let workspace_like = args.workspace.as_ref().map(|value| format!("%{value}%"));
+
+    let summaries = db
+        .list_conversation_summaries(ListConversationsOptions {
+            source_id: args.source.clone(),
+            workspace: workspace_like,
+            after,
+            before,
+            limit: Some(args.limit),
+        })
+        .await?;
+
+    if summaries.is_empty() {
+        anyhow::bail!("No sessions found. Try adjusting --source/--workspace/--after/--before.");
+    }
+
+    let candidates: Vec<pick::Candidate> = summaries
+        .iter()
+        .map(|summary| {
+            let conv = &summary.conversation;
+            let title = conv
+                .title
+                .clone()
+                .or_else(|| summary.first_user_message.clone())
+                .unwrap_or_else(|| "(untitled)".to_string());
+            let date = conv.created_at.format("%Y-%m-%d %H:%M").to_string();
+            let workspace = conv.workspace.clone().unwrap_or_default();
+            let id_short = conv.id.to_string()[..8].to_string();
+            let label = format!(
+                "[{}] {}  {}  {}  ({})",
+                conv.source_id, date, workspace, title, id_short
+            );
+            let first = summary.first_user_message.clone().unwrap_or_default();
+            pick::Candidate::new(
+                conv.id,
+                label,
+                &[
+                    title.as_str(),
+                    workspace.as_str(),
+                    conv.source_id.as_str(),
+                    first.as_str(),
+                    &conv.id.to_string(),
+                ],
+            )
+        })
+        .collect();
+
+    let query = args.query.clone().unwrap_or_default();
+    let selected = if !args.no_pick && pick::interactive_available() {
+        match pick::pick_interactive(&candidates, &query)? {
+            Some(id) => id,
+            None => return Ok(()),
+        }
+    } else {
+        let ranked = pick::rank(&candidates, &query);
+        let index = ranked.first().copied().ok_or_else(|| {
+            anyhow::anyhow!("No session matches '{query}'. Run without --no-pick for the picker.")
+        })?;
+        candidates[index].id
+    };
+
+    let summary = summaries
+        .iter()
+        .find(|summary| summary.conversation.id == selected)
+        .expect("selection came from candidates");
+    let conv = &summary.conversation;
+
+    // `--copy` is the default action; it exists so scripts can be explicit.
+    let _ = args.copy;
+
+    if args.id_only {
+        if json_output {
+            println!(
+                "{}",
+                serde_json::json!({"id": conv.id, "source": conv.source_id})
+            );
+        } else {
+            println!("{}", conv.id);
+        }
+        return Ok(());
+    }
+
+    if args.path {
+        let sources = db.list_sources().await?;
+        let path = sources
+            .iter()
+            .find(|source| source.id == conv.source_id)
+            .and_then(|source| source.path.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("No on-disk path recorded for source '{}'", conv.source_id)
+            })?;
+        if json_output {
+            println!(
+                "{}",
+                serde_json::json!({"id": conv.id, "source": conv.source_id, "path": path})
+            );
+        } else {
+            println!("{path}");
+        }
+        return Ok(());
+    }
+
+    if let Some(format) = args.export {
+        let runner =
+            runner.ok_or_else(|| anyhow::anyhow!("No JavaScript runtime found for export."))?;
+        return cmd_export(
+            db,
+            runner,
+            &format,
+            &conv.id.to_string(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            false,
+            false,
+            json_output,
+        )
+        .await;
+    }
+
+    if let Some(agent) = args.open {
+        let runner =
+            runner.ok_or_else(|| anyhow::anyhow!("No JavaScript runtime found for open."))?;
+        return cmd_resume(
+            db,
+            runner,
+            config,
+            Some(conv.id.to_string()),
+            None,
+            Some(agent),
+            None,
+            None,
+            None,
+            None,
+            args.limit,
+            false,
+            false,
+            false,
+            json_output,
+        )
+        .await;
+    }
+
+    // Copy (default) or print the transcript.
+    let messages = db.get_messages(conv.id).await?;
+    let transcript = pick::format_transcript(
+        conv.title
+            .as_deref()
+            .or(summary.first_user_message.as_deref()),
+        conv.id,
+        &conv.source_id,
+        conv.workspace.as_deref(),
+        conv.created_at,
+        &messages,
+    );
+
+    if args.print {
+        println!("{transcript}");
+        return Ok(());
+    }
+
+    match pick::copy_to_clipboard(&transcript) {
+        Ok(()) => {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::json!({"id": conv.id, "copied": true, "chars": transcript.chars().count()})
+                );
+            } else {
+                eprintln!(
+                    "Copied {} of '{}' to the clipboard.",
+                    conv.id,
+                    conv.title.as_deref().unwrap_or("(untitled)")
+                );
+            }
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("Clipboard unavailable ({error}); printing transcript instead.");
+            println!("{transcript}");
+            Ok(())
+        }
+    }
 }
 
 async fn cmd_resume(

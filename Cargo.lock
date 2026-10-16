@@ -1414,10 +1414,12 @@ name = "hstry-cli"
 version = "0.5.28"
 dependencies = [
  "anyhow",
+ "arboard",
  "chrono",
  "clap",
  "clap_complete",
  "console 0.16.3",
+ "crossterm",
  "dateparser",
  "dirs",
  "futures",

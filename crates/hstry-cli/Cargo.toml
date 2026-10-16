@@ -40,6 +40,8 @@ indicatif = "0.17"
 textwrap = "0.16"
 shlex = "1.3"
 tempfile.workspace = true
+crossterm.workspace = true
+arboard.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

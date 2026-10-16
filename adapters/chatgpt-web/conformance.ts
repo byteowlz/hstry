@@ -69,13 +69,45 @@ const second = {
   id: 'conv-0002',
 };
 
+const branched = {
+  title: 'Regenerated answer',
+  create_time: base + 2000.5,
+  update_time: base + 2020.25,
+  mapping: {
+    'client-created-root': node('client-created-root', null, ['bu-1'], null),
+    'bu-1': node('bu-1', 'client-created-root', ['ba-old', 'ba-new'],
+      message('bu-1', 'user', { content_type: 'text', parts: ['Pick a colour'] }, base + 2001)),
+    'ba-old': node('ba-old', 'bu-1', [],
+      message('ba-old', 'assistant', { content_type: 'text', parts: ['DISCARDED ANSWER'] }, base + 2002, { model_slug: 'gpt-5' })),
+    'ba-new': node('ba-new', 'bu-1', [],
+      message('ba-new', 'assistant', { content_type: 'text', parts: ['Blue is a fine choice.'] }, base + 2003, { model_slug: 'gpt-5' })),
+  },
+  current_node: 'ba-new',
+  conversation_id: 'conv-0003',
+  default_model_slug: 'gpt-5',
+  id: 'conv-0003',
+};
+
 export const cases: ConformanceCase[] = [{
   name: 'conversations-json-export',
   detection: 'content',
   async setup(home) {
     const dir = join(home, 'Downloads', 'chatgpt-export');
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'conversations.json'), JSON.stringify([conversation, second]));
+    await writeFile(join(dir, 'conversations.json'), JSON.stringify([conversation, second, branched]));
     return join(dir, 'conversations.json');
+  },
+  check(conversations) {
+    const convs = conversations as { externalId: string; messages: { role: string; content: string; parts?: Record<string, any>[] }[] }[];
+    const first = convs.find(c => c.externalId === 'conv-0001')!;
+    const parts = first.messages.flatMap(m => m.parts ?? []);
+    if (!parts.some(p => p.type === 'thinking' && p.text.includes('read the CSV'))) throw new Error('thoughts content type dropped');
+    if (!parts.some(p => p.type === 'thinking' && p.text.includes('Thought for'))) throw new Error('reasoning_recap dropped');
+    const call = parts.find(p => p.type === 'tool_call');
+    if (!call || !String((call.input as { code?: string })?.code).includes('read_csv')) throw new Error('code block not mapped to a tool_call');
+    if (!parts.some(p => p.type === 'tool_result' && p.toolCallId === call.toolCallId && String(p.output).includes('42'))) throw new Error('execution_output not associated with the code call');
+    const regen = convs.find(c => c.externalId === 'conv-0003')!;
+    if (regen.messages.some(m => m.content.includes('DISCARDED ANSWER'))) throw new Error('current_node branch selection failed');
+    if (!regen.messages.some(m => m.content.includes('Blue is a fine choice'))) throw new Error('active branch message missing');
   },
 }];

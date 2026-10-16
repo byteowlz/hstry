@@ -10,11 +10,19 @@ import { homedir } from 'os';
 import type {
   Adapter,
   AdapterInfo,
+  CanonPart,
   Conversation,
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter, textOnlyParts } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  textPart,
+  thinkingPart,
+  toolCallPart,
+  toolResultPart,
+} from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -35,13 +43,20 @@ interface ConversationMessage {
   id?: string;
   author?: {
     role?: string;
+    name?: string | null;
   };
   create_time?: number;
   update_time?: number;
+  recipient?: string;
   content?: {
     content_type?: string;
     parts?: Array<string | { text?: string } | null>;
     text?: string;
+    /** reasoning_recap keeps its text in `content`. */
+    content?: string;
+    /** thoughts content type. */
+    thoughts?: Array<{ summary?: string; content?: string }>;
+    language?: string;
   } | null;
   metadata?: Record<string, unknown> | null;
 }
@@ -162,7 +177,7 @@ function sortConversations(conversations: Conversation[]): Conversation[] {
 }
 
 function parseConversation(entry: RawConversation, opts?: ParseOptions): Conversation | null {
-  const messages = extractMessages(entry.mapping);
+  const messages = extractMessages(entry.mapping, entry.current_node);
 
   if (messages.length === 0) {
     return null;
@@ -202,28 +217,32 @@ function parseConversation(entry: RawConversation, opts?: ParseOptions): Convers
   return conversation;
 }
 
-function extractMessages(mapping?: ConversationMap): Message[] {
+function extractMessages(mapping?: ConversationMap, currentNode?: string): Message[] {
   if (!mapping) return [];
 
   const messages: Message[] = [];
+  const chain = activeChain(mapping, currentNode);
+  const entries = chain ?? sortNodesByTime(Object.values(mapping));
 
-  for (const node of Object.values(mapping)) {
+  // A `code` message and the `execution_output` that follows it are separate
+  // nodes with no explicit id link; remember the last code call so the output
+  // can be associated with it.
+  let lastToolCallId: string | undefined;
+
+  for (const node of entries) {
     const msg = node.message;
-    if (!msg || !msg.author?.role) {
-      continue;
-    }
+    if (!msg || !msg.author?.role) continue;
 
-    const content = extractContent(msg.content);
-    if (!content) {
-      continue;
-    }
+    const built = buildMessageContent(msg, lastToolCallId);
+    if (built.toolCallId) lastToolCallId = built.toolCallId;
+    if (!built.content && !built.parts) continue;
 
     const createdAt = msg.create_time ? Math.floor(msg.create_time * 1000) : undefined;
 
     messages.push({
       role: mapRole(msg.author.role),
-      content,
-      parts: textOnlyParts(content),
+      content: built.content,
+      parts: built.parts ?? textOnlyParts(built.content),
       createdAt,
       model: extractModel(msg.metadata),
       metadata: {
@@ -235,14 +254,76 @@ function extractMessages(mapping?: ConversationMap): Message[] {
     });
   }
 
-  messages.sort((a, b) => {
-    const aTime = a.createdAt ?? 0;
-    const bTime = b.createdAt ?? 0;
-    if (aTime !== bTime) return aTime - bTime;
-    return a.content.localeCompare(b.content);
-  });
-
   return messages;
+}
+
+/**
+ * Walk current_node -> parents back to the root. ChatGPT keeps every
+ * regenerated/edited variant in `mapping`; only the chain ending at
+ * `current_node` is the transcript the user sees.
+ */
+function activeChain(mapping: ConversationMap, currentNode?: string): ConversationNode[] | null {
+  if (!currentNode || !mapping[currentNode]) return null;
+  const chain: ConversationNode[] = [];
+  const seen = new Set<string>();
+  let id: string | undefined = currentNode;
+  while (id && mapping[id] && !seen.has(id)) {
+    seen.add(id);
+    chain.push(mapping[id]);
+    id = mapping[id].parent ?? undefined;
+  }
+  return chain.reverse();
+}
+
+function sortNodesByTime(nodes: ConversationNode[]): ConversationNode[] {
+  return [...nodes].sort((a, b) => (a.message?.create_time ?? 0) - (b.message?.create_time ?? 0));
+}
+
+function buildMessageContent(
+  msg: ConversationMessage,
+  lastToolCallId: string | undefined
+): { content: string; parts?: CanonPart[]; toolCallId?: string } {
+  const content = msg.content;
+  const type = content?.content_type;
+  const parts: CanonPart[] = [];
+  const chunks: string[] = [];
+
+  if (type === 'thoughts' && Array.isArray(content?.thoughts)) {
+    const text = content.thoughts
+      .map(thought => [thought.summary, thought.content].filter(Boolean).join(': '))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (text) {
+      parts.push(thinkingPart(text));
+      chunks.push(text);
+    }
+  } else if (type === 'reasoning_recap') {
+    const text = (typeof content.content === 'string' ? content.content : content.text ?? '').trim();
+    if (text) {
+      parts.push(thinkingPart(text));
+      chunks.push(text);
+    }
+  } else if (type === 'code') {
+    const code = (content.text ?? '').trim();
+    const name = msg.recipient && msg.recipient !== 'all' ? msg.recipient : 'python';
+    const callId = msg.id ?? 'code';
+    parts.push(toolCallPart(callId, name, { code, language: content.language }));
+    if (code) chunks.push(code);
+    return { content: chunks.join('\n').trim(), parts, toolCallId: callId };
+  } else if (type === 'execution_output') {
+    const output = (content.text ?? '').trim();
+    parts.push(toolResultPart(lastToolCallId ?? 'unknown', output, { name: 'python' }));
+    if (output) chunks.push(output);
+  } else {
+    const text = extractContent(content);
+    if (text) {
+      parts.push(textPart(text));
+      chunks.push(text);
+    }
+  }
+
+  return { content: chunks.join('\n').trim(), parts: parts.length ? parts : undefined };
 }
 
 function extractContent(content: ConversationMessage['content']): string {

@@ -1,5 +1,54 @@
 [
   {
+    "externalId": "conv-0003",
+    "title": "Regenerated answer",
+    "createdAt": 1738002000500,
+    "updatedAt": 1738002020250,
+    "model": "gpt-5",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Pick a colour",
+        "parts": [
+          {
+            "id": "p-9",
+            "type": "text",
+            "text": "Pick a colour"
+          }
+        ],
+        "createdAt": 1738002001000,
+        "metadata": {
+          "id": "bu-1",
+          "nodeId": "bu-1",
+          "parentId": "client-created-root",
+          "contentType": "text"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Blue is a fine choice.",
+        "parts": [
+          {
+            "id": "p-10",
+            "type": "text",
+            "text": "Blue is a fine choice."
+          }
+        ],
+        "createdAt": 1738002003000,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "ba-new",
+          "nodeId": "ba-new",
+          "parentId": "bu-1",
+          "contentType": "text"
+        }
+      }
+    ],
+    "metadata": {
+      "currentNode": "ba-new"
+    }
+  },
+  {
     "externalId": "conv-0002",
     "title": "Haiku",
     "createdAt": 1738001000000,
@@ -11,7 +60,7 @@
         "content": "Write a haiku about rain",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-7",
             "type": "text",
             "text": "Write a haiku about rain"
           }
@@ -29,7 +78,7 @@
         "content": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth",
         "parts": [
           {
-            "id": "p-6",
+            "id": "p-8",
             "type": "text",
             "text": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth"
           }
@@ -75,12 +124,55 @@
       },
       {
         "role": "assistant",
-        "content": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())",
+        "content": "Planning: Use python to read the CSV.",
         "parts": [
           {
             "id": "p-2",
-            "type": "text",
-            "text": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())"
+            "type": "thinking",
+            "text": "Planning: Use python to read the CSV."
+          }
+        ],
+        "createdAt": 1738000002500,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "think-1",
+          "nodeId": "think-1",
+          "parentId": "usr-1",
+          "contentType": "thoughts"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Thought for 3s",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "thinking",
+            "text": "Thought for 3s"
+          }
+        ],
+        "createdAt": 1738000005000,
+        "model": "gpt-5",
+        "metadata": {
+          "id": "recap-1",
+          "nodeId": "recap-1",
+          "parentId": "think-1",
+          "contentType": "reasoning_recap"
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "tool_call",
+            "toolCallId": "code-1",
+            "name": "python",
+            "input": {
+              "code": "import pandas as pd\nprint(pd.read_csv('/mnt/data/a.csv')['b'].sum())",
+              "language": "unknown"
+            }
           }
         ],
         "createdAt": 1738000006000,
@@ -97,9 +189,11 @@
         "content": "42",
         "parts": [
           {
-            "id": "p-3",
-            "type": "text",
-            "text": "42"
+            "id": "p-5",
+            "type": "tool_result",
+            "toolCallId": "code-1",
+            "output": "42",
+            "name": "python"
           }
         ],
         "createdAt": 1738000008000,
@@ -116,7 +210,7 @@
         "content": "The sum of column **b** is 42.",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-6",
             "type": "text",
             "text": "The sum of column **b** is 42."
           }

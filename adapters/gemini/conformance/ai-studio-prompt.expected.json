@@ -1,0 +1,69 @@
+[
+  {
+    "externalId": "ai-studio-penguin",
+    "title": "What does a penguin think?",
+    "createdAt": 1777798800000,
+    "updatedAt": 1777798800000,
+    "model": "gemini-2.5-pro",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful penguin.",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "You are a helpful penguin."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": "What does a penguin think?",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "What does a penguin think?"
+          }
+        ],
+        "metadata": {
+          "tokenCount": 6
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Considering the ice, the penguin ponders fish.",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "thinking",
+            "text": "Considering the ice, the penguin ponders fish."
+          }
+        ],
+        "metadata": {
+          "isThought": true,
+          "tokenCount": 9
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Penguins mostly think about fish and the cold.",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Penguins mostly think about fish and the cold."
+          }
+        ],
+        "metadata": {
+          "tokenCount": 10,
+          "finishReason": "STOP"
+        }
+      }
+    ],
+    "metadata": {
+      "source": "ai-studio"
+    }
+  }
+]

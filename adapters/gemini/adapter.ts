@@ -5,6 +5,7 @@
  */
 
 import { readdir, readFile, stat } from 'fs/promises';
+import { statSync } from 'fs';
 import { basename, extname, join } from 'path';
 import { homedir } from 'os';
 import type {
@@ -14,7 +15,12 @@ import type {
   Message,
   ParseOptions,
 } from '../types/index.ts';
-import { runAdapter, textOnlyParts } from '../types/index.ts';
+import {
+  runAdapter,
+  textOnlyParts,
+  textPart,
+  thinkingPart,
+} from '../types/index.ts';
 
 const DEFAULT_SEARCH_PATHS = [
   join(homedir(), 'Downloads'),
@@ -56,7 +62,7 @@ const adapter: Adapter = {
         continue;
       }
 
-      const convs = parseGeminiExport(parsed, opts);
+      const convs = parseGeminiExport(parsed, opts, filePath);
       for (const conv of convs) {
         conversations.push(conv);
         if (opts?.limit && conversations.length >= opts.limit) {
@@ -103,8 +109,16 @@ function sortConversations(conversations: Conversation[]): Conversation[] {
   return conversations;
 }
 
-function parseGeminiExport(data: unknown, opts?: ParseOptions): Conversation[] {
+function parseGeminiExport(data: unknown, opts?: ParseOptions, filePath?: string): Conversation[] {
   const conversations: Conversation[] = [];
+
+  // Google AI Studio prompt file.
+  const aiStudio = parseAiStudio(data, filePath);
+  if (aiStudio) return [aiStudio];
+
+  // Google Takeout "My Activity" export for Gemini Apps.
+  const myActivity = parseMyActivity(data);
+  if (myActivity.length) return myActivity;
 
   const convArray = normalizeConversationArray(data);
   if (!convArray) return conversations;
@@ -115,6 +129,156 @@ function parseGeminiExport(data: unknown, opts?: ParseOptions): Conversation[] {
   }
 
   return conversations;
+}
+
+// ============================================================================
+// Google AI Studio prompt files
+// ============================================================================
+
+interface AiStudioChunk {
+  text?: string;
+  role?: string;
+  isThought?: boolean;
+  tokenCount?: number;
+  finishReason?: string;
+}
+
+interface AiStudioExport {
+  runSettings?: { model?: string };
+  systemInstruction?: { parts?: { text?: string }[]; text?: string };
+  chunkedPrompt?: { chunks?: AiStudioChunk[] };
+}
+
+function isAiStudio(data: unknown): data is AiStudioExport {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const prompt = (data as AiStudioExport).chunkedPrompt;
+  return Boolean(prompt && Array.isArray(prompt.chunks));
+}
+
+/**
+ * AI Studio writes `{runSettings, systemInstruction, chunkedPrompt:{chunks:[...]}}`
+ * where each chunk is `{text, role:'user'|'model', isThought?, tokenCount?}`.
+ * There are no timestamps; the file mtime is the best available origin time.
+ */
+function parseAiStudio(data: unknown, filePath?: string): Conversation | null {
+  if (!isAiStudio(data)) return null;
+  const messages: Message[] = [];
+
+  const systemText = (data.systemInstruction?.parts ?? [])
+    .map(part => part?.text ?? '')
+    .join('\n')
+    .trim() || (typeof data.systemInstruction?.text === 'string' ? data.systemInstruction.text.trim() : '');
+  if (systemText) messages.push({ role: 'system', content: systemText, parts: textOnlyParts(systemText) });
+
+  for (const chunk of data.chunkedPrompt?.chunks ?? []) {
+    const text = (chunk.text ?? '').trim();
+    if (!text) continue;
+    const role = mapRole(chunk.role ?? 'user');
+    const parts = chunk.isThought === true ? [thinkingPart(text)] : [textPart(text)];
+    messages.push({
+      role,
+      content: text,
+      parts,
+      metadata: {
+        ...(chunk.isThought ? { isThought: true } : {}),
+        ...(chunk.tokenCount !== undefined ? { tokenCount: chunk.tokenCount } : {}),
+        ...(chunk.finishReason ? { finishReason: chunk.finishReason } : {}),
+      },
+    });
+  }
+
+  if (messages.length === 0) return null;
+  const model = typeof data.runSettings?.model === 'string' ? data.runSettings.model.replace(/^models\//, '') : undefined;
+  const title = messages.find(m => m.role === 'user')?.content.slice(0, 100) || undefined;
+  const mtime = filePath ? fileMtimeMs(filePath) : undefined;
+  return {
+    externalId: filePath ? basename(filePath, extname(filePath)) : undefined,
+    title,
+    createdAt: mtime ?? Date.now(),
+    updatedAt: mtime,
+    model,
+    messages,
+    metadata: { source: 'ai-studio' },
+  };
+}
+
+// ============================================================================
+// Google Takeout MyActivity.json (Gemini Apps activity)
+// ============================================================================
+
+interface MyActivityEntry {
+  header?: string;
+  title?: string;
+  time?: string;
+  subtitles?: { name?: string; value?: string }[];
+  safeHtmlItem?: { html?: string }[];
+}
+
+function isMyActivity(data: unknown): data is MyActivityEntry[] {
+  if (!Array.isArray(data) || data.length === 0) return false;
+  return data.some(entry => entry && typeof entry === 'object' && typeof (entry as MyActivityEntry).header === 'string' && (entry as MyActivityEntry).header!.includes('Gemini') && (Array.isArray((entry as MyActivityEntry).subtitles) || Array.isArray((entry as MyActivityEntry).safeHtmlItem)));
+}
+
+/**
+ * Each My Activity record is one prompt (subtitles) and the rendered response
+ * (safeHtmlItem html). Google splits this per activity, so thread boundaries
+ * are not recoverable; one record maps to one single-turn conversation.
+ */
+function parseMyActivity(data: unknown): Conversation[] {
+  if (!isMyActivity(data)) return [];
+  const conversations: Conversation[] = [];
+  data.forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object') return;
+    if (typeof entry.header !== 'string' || !entry.header.includes('Gemini')) return;
+
+    const createdAt = parseTimestamp(entry.time) ?? Date.now();
+    const messages: Message[] = [];
+
+    const prompt = (entry.subtitles ?? []).map(s => s?.value ?? '').filter(Boolean).join('\n').trim();
+    if (prompt) {
+      messages.push({ role: 'user', content: prompt, parts: textOnlyParts(prompt), createdAt });
+    }
+    const response = stripHtml((entry.safeHtmlItem ?? []).map(item => item?.html ?? '').join('\n'));
+    if (response) {
+      messages.push({ role: 'assistant', content: response, parts: textOnlyParts(response), createdAt: createdAt + 1000 });
+    }
+    if (messages.length === 0) return;
+
+    conversations.push({
+      externalId: `myactivity-${index}-${Date.parse(entry.time ?? '') || index}`,
+      title: prompt.slice(0, 100) || entry.title?.slice(0, 100) || undefined,
+      createdAt,
+      updatedAt: messages.at(-1)?.createdAt,
+      messages,
+      metadata: { source: 'my-activity', action: entry.title },
+    });
+  });
+  return conversations;
+}
+
+function stripHtml(html: string): string {
+  if (!html) return '';
+  return html
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/\s*(p|div|li)\s*>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    return Math.floor(statSync(path).mtimeMs);
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeConversationArray(data: unknown): Record<string, unknown>[] | null {
@@ -385,7 +549,7 @@ async function findExportFiles(
   if (!stats) return files;
 
   if (stats.isFile()) {
-    if (looksLikeExportFile(path)) files.push(path);
+    if (extname(path) === '.json') files.push(path);
     return files;
   }
 
@@ -438,16 +602,19 @@ function looksLikeExportFile(nameOrPath: string): boolean {
   return (
     lower.includes('gemini') ||
     lower.includes('ai-studio') ||
+    lower.includes('aistudio') ||
+    lower.includes('myactivity') ||
     lower.endsWith('conversations.json')
   );
 }
 
 async function sniffFile(path: string): Promise<number | null> {
-  if (!looksLikeExportFile(path)) return null;
   const raw = await readFile(path, 'utf-8').catch(() => null);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
+    if (isAiStudio(parsed)) return 0.95;
+    if (isMyActivity(parsed)) return 0.95;
     const convArray = normalizeConversationArray(parsed);
     if (!convArray || convArray.length === 0) return null;
     const sample = convArray[0];

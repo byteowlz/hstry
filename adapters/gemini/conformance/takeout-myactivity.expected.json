@@ -1,0 +1,74 @@
+[
+  {
+    "externalId": "myactivity-1-1777889100000",
+    "title": "Bye now",
+    "createdAt": 1777889100000,
+    "updatedAt": 1777889101000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Bye now",
+        "parts": [
+          {
+            "id": "p-3",
+            "type": "text",
+            "text": "Bye now"
+          }
+        ],
+        "createdAt": 1777889100000
+      },
+      {
+        "role": "assistant",
+        "content": "Goodbye & good luck\nSee you",
+        "parts": [
+          {
+            "id": "p-4",
+            "type": "text",
+            "text": "Goodbye & good luck\nSee you"
+          }
+        ],
+        "createdAt": 1777889101000
+      }
+    ],
+    "metadata": {
+      "source": "my-activity",
+      "action": "Prompted with: Bye"
+    }
+  },
+  {
+    "externalId": "myactivity-0-1777888800000",
+    "title": "Hello there",
+    "createdAt": 1777888800000,
+    "updatedAt": 1777888801000,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello there",
+        "parts": [
+          {
+            "id": "p-1",
+            "type": "text",
+            "text": "Hello there"
+          }
+        ],
+        "createdAt": 1777888800000
+      },
+      {
+        "role": "assistant",
+        "content": "Hi! How can I help?",
+        "parts": [
+          {
+            "id": "p-2",
+            "type": "text",
+            "text": "Hi! How can I help?"
+          }
+        ],
+        "createdAt": 1777888801000
+      }
+    ],
+    "metadata": {
+      "source": "my-activity",
+      "action": "Prompted with: Hello"
+    }
+  }
+]

@@ -40,7 +40,17 @@
           }
         ],
         "createdAt": 1776488005274,
-        "model": "anthropic/claude-sonnet-4.5"
+        "model": "anthropic/claude-sonnet-4.5",
+        "toolCalls": [
+          {
+            "toolName": "terminal",
+            "input": {
+              "command": "df -h /"
+            },
+            "status": "success",
+            "output": "{\"output\":\"/dev/sda1 100G 40G 60G 40% /\",\"exit_code\":0}"
+          }
+        ]
       },
       {
         "role": "tool",
@@ -77,7 +87,17 @@
           }
         ],
         "createdAt": 1776488005274,
-        "model": "anthropic/claude-sonnet-4.5"
+        "model": "anthropic/claude-sonnet-4.5",
+        "toolCalls": [
+          {
+            "toolName": "terminal",
+            "input": {
+              "command": "nosuchcmd"
+            },
+            "status": "success",
+            "output": "{\"output\":\"nosuchcmd: command not found\",\"exit_code\":127}"
+          }
+        ]
       },
       {
         "role": "tool",

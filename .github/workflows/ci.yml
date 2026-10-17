@@ -73,5 +73,7 @@ jobs:
           node-version: '26.8.1'
       - run: bun install --frozen-lockfile && bun run typecheck && bun test && bun run test:sqlite
         working-directory: adapters/pi-durable
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo build -p hstry-cli
       - run: bun adapters/pi-durable/cli-proof.ts

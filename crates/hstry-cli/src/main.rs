@@ -1043,8 +1043,21 @@ fn default_log_filter(verbose: u8) -> &'static str {
     }
 }
 
+fn main() -> Result<()> {
+    // The command dispatch future is large enough to overflow Windows' default
+    // 1 MiB main-thread stack. Run the runtime on a thread with a generous
+    // stack so `hstry` behaves the same on every platform.
+    std::thread::Builder::new()
+        .name("hstry".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .map_err(|error| anyhow::anyhow!("failed to spawn CLI thread: {error}"))?
+        .join()
+        .map_err(|_| anyhow::anyhow!("CLI thread panicked"))?
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.no_color {

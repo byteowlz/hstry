@@ -60,7 +60,7 @@
         "content": "Explain Rust lifetimes in one paragraph",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "Explain Rust lifetimes in one paragraph"
           }
@@ -76,7 +76,7 @@
         "content": "Lifetimes tell the compiler how long references stay valid.",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "text",
             "text": "Lifetimes tell the compiler how long references stay valid."
           }

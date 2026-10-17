@@ -55,7 +55,7 @@
         "content": "What can you do?",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "What can you do?"
           }
@@ -71,7 +71,7 @@
         "content": "I can search and summarize.",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "text",
             "text": "I can search and summarize."
           }

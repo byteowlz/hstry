@@ -55,7 +55,7 @@
         "createdAt": 1790000010000,
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-4",
             "type": "tool_result",
             "toolCallId": "call_1",
             "output": "eslint: command not found"
@@ -68,7 +68,7 @@
         "createdAt": 1790000015000,
         "parts": [
           {
-            "id": "p-6",
+            "id": "p-5",
             "type": "tool_call",
             "toolCallId": "call_2",
             "name": "exec",
@@ -77,7 +77,7 @@
             }
           },
           {
-            "id": "p-7",
+            "id": "p-6",
             "type": "text",
             "text": "eslint is not installed; installing it."
           }
@@ -98,7 +98,7 @@
         "createdAt": 1790000030000,
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-7",
             "type": "text",
             "text": "Done."
           }

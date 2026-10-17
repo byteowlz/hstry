@@ -11,7 +11,7 @@
         "content": "The build is failing, can you fix it?",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-1",
             "type": "text",
             "text": "The build is failing, can you fix it?"
           }
@@ -105,7 +105,7 @@
         "content": "Fixed the undefined name in src/index.ts.",
         "parts": [
           {
-            "id": "p-1",
+            "id": "p-8",
             "type": "text",
             "text": "Fixed the undefined name in src/index.ts."
           },

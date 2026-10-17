@@ -47,7 +47,7 @@
         "createdAt": 1788256801000,
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "What is in src/?"
           }
@@ -59,17 +59,17 @@
         "createdAt": 1788256805000,
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "thinking",
             "text": "List the directory."
           },
           {
-            "id": "p-5",
+            "id": "p-3",
             "type": "text",
             "text": "Listing src/."
           },
           {
-            "id": "p-6",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "call_a",
             "name": "list_files",
@@ -78,7 +78,7 @@
             }
           },
           {
-            "id": "p-7",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "call_a",
             "output": [
@@ -87,7 +87,7 @@
             ]
           },
           {
-            "id": "p-8",
+            "id": "p-6",
             "type": "tool_call",
             "toolCallId": "call_b",
             "name": "read_file",
@@ -96,7 +96,7 @@
             }
           },
           {
-            "id": "p-9",
+            "id": "p-7",
             "type": "tool_result",
             "toolCallId": "call_b",
             "output": {
@@ -111,7 +111,7 @@
         "createdAt": 1788256820000,
         "parts": [
           {
-            "id": "p-10",
+            "id": "p-8",
             "type": "text",
             "text": "src/ has main.ts and util.ts."
           }

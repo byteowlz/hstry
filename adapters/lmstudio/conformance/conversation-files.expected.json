@@ -45,7 +45,7 @@
         "content": "What is the capital of France?",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "What is the capital of France?"
           }
@@ -56,12 +56,12 @@
         "content": "Paris.",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-2",
             "type": "thinking",
             "text": "The user asks a simple question."
           },
           {
-            "id": "p-6",
+            "id": "p-3",
             "type": "text",
             "text": "Paris."
           }
@@ -73,7 +73,7 @@
         "content": "Paris, on the Seine.",
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-4",
             "type": "text",
             "text": "Paris, on the Seine."
           }

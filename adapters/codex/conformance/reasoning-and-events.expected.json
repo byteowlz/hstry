@@ -25,7 +25,7 @@
         "content": "The user wants a repository check. Start with git status before anything else.",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-2",
             "type": "thinking",
             "text": "The user wants a repository check. Start with git status before anything else."
           }
@@ -38,7 +38,7 @@
         "content": "I will inspect the working tree first.",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-3",
             "type": "text",
             "text": "I will inspect the working tree first."
           }
@@ -51,7 +51,7 @@
         "content": "",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "call_1",
             "name": "web_search",
@@ -68,7 +68,7 @@
         "content": "Databento supports ohlcv-1m.",
         "parts": [
           {
-            "id": "p-6",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "call_1",
             "output": "Databento supports ohlcv-1m.",
@@ -92,7 +92,7 @@
         "content": "{\"type\":\"search\",\"query\":\"databento ohlcv-1m\"}",
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-6",
             "type": "tool_call",
             "toolCallId": "web_search-1790104658000",
             "name": "web_search",
@@ -102,7 +102,7 @@
             }
           },
           {
-            "id": "p-8",
+            "id": "p-7",
             "type": "tool_result",
             "toolCallId": "web_search-1790104658000",
             "output": "{\"type\":\"search\",\"query\":\"databento ohlcv-1m\"}",
@@ -126,7 +126,7 @@
         "content": "Postgres enforces the constraint, no application code needed.",
         "parts": [
           {
-            "id": "p-9",
+            "id": "p-8",
             "type": "thinking",
             "text": "Postgres enforces the constraint, no application code needed."
           }
@@ -139,7 +139,7 @@
         "content": "The constraint is already enforced at the database layer.",
         "parts": [
           {
-            "id": "p-10",
+            "id": "p-9",
             "type": "text",
             "text": "The constraint is already enforced at the database layer."
           }

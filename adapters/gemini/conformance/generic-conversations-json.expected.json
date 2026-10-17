@@ -11,7 +11,7 @@
         "content": "Write a haiku",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-1",
             "type": "text",
             "text": "Write a haiku"
           }
@@ -23,7 +23,7 @@
         "content": "Quiet morning rain",
         "parts": [
           {
-            "id": "p-6",
+            "id": "p-2",
             "type": "text",
             "text": "Quiet morning rain"
           }

@@ -12,7 +12,7 @@
         "content": "Summarize notes.md",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-1",
             "type": "text",
             "text": "Summarize notes.md"
           }
@@ -24,7 +24,7 @@
         "content": "The notes cover the Q3 plan.",
         "parts": [
           {
-            "id": "p-9",
+            "id": "p-2",
             "type": "text",
             "text": "The notes cover the Q3 plan."
           }

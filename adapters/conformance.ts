@@ -67,7 +67,34 @@ function call(adapter: string, home: string, method: string, path: string): unkn
 
 /** Replace the temporary HOME so snapshots are machine-independent. */
 function normalize(value: unknown, home: string): unknown {
-  return JSON.parse(JSON.stringify(value).split(home).join('$HOME'));
+  const cloned = JSON.parse(JSON.stringify(value).split(home).join('$HOME'));
+  // `partId()` is a process-global counter, so ids depend on the order the
+  // adapter happened to walk its source files. Part ids are render keys, not
+  // stable identity; renumber them per conversation so snapshots are
+  // filesystem-independent while still checking structure and order.
+  if (Array.isArray(cloned)) {
+    for (const conversation of cloned) renumberPartIds(conversation);
+  }
+  return cloned;
+}
+
+function renumberPartIds(conversation: unknown): void {
+  let next = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'id' && typeof value === 'string' && /^p-\d+$/.test(value)) {
+        (node as Record<string, unknown>)[key] = `p-${++next}`;
+      } else {
+        walk(value);
+      }
+    }
+  };
+  walk(conversation);
 }
 
 function validate(conversations: unknown): asserts conversations is Record<string, any>[] {

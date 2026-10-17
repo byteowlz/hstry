@@ -11,7 +11,7 @@
         "content": "Pick a colour",
         "parts": [
           {
-            "id": "p-9",
+            "id": "p-1",
             "type": "text",
             "text": "Pick a colour"
           }
@@ -29,7 +29,7 @@
         "content": "Blue is a fine choice.",
         "parts": [
           {
-            "id": "p-10",
+            "id": "p-2",
             "type": "text",
             "text": "Blue is a fine choice."
           }
@@ -60,7 +60,7 @@
         "content": "Write a haiku about rain",
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-1",
             "type": "text",
             "text": "Write a haiku about rain"
           }
@@ -78,7 +78,7 @@
         "content": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-2",
             "type": "text",
             "text": "Soft rain on the roof\nthe garden drinks in silence\nmorning smells of earth"
           }

@@ -15,7 +15,7 @@
         "content": "Check the disk again.",
         "parts": [
           {
-            "id": "p-10",
+            "id": "p-1",
             "type": "text",
             "text": "Check the disk again."
           }
@@ -28,12 +28,12 @@
         "content": "Still 60G free.",
         "parts": [
           {
-            "id": "p-11",
+            "id": "p-2",
             "type": "thinking",
             "text": "Nothing changed."
           },
           {
-            "id": "p-12",
+            "id": "p-3",
             "type": "text",
             "text": "Still 60G free."
           }

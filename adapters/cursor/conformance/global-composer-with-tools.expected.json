@@ -12,7 +12,7 @@
         "content": "Say hi",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "Say hi"
           }
@@ -24,7 +24,7 @@
         "content": "Hi!",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "text",
             "text": "Hi!"
           }

@@ -59,7 +59,7 @@
         "content": "a.txt",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-4",
             "type": "tool_result",
             "toolCallId": "c1",
             "output": "a.txt"
@@ -71,7 +71,7 @@
         "content": "One file: a.txt",
         "parts": [
           {
-            "id": "p-6",
+            "id": "p-5",
             "type": "text",
             "text": "One file: a.txt"
           }

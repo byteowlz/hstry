@@ -47,7 +47,7 @@
         "content": "List the files here",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "List the files here"
           }
@@ -59,17 +59,17 @@
         "content": "Let me check.",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-2",
             "type": "thinking",
             "text": "I should run ls."
           },
           {
-            "id": "p-4",
+            "id": "p-3",
             "type": "text",
             "text": "Let me check."
           },
           {
-            "id": "p-6",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "call_1",
             "name": "developer__shell",
@@ -95,7 +95,7 @@
         "content": "a.txt\nb.txt",
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "call_1",
             "output": "a.txt\nb.txt",
@@ -109,7 +109,7 @@
         "content": "",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-6",
             "type": "tool_call",
             "toolCallId": "call_2",
             "name": "developer__shell",
@@ -135,7 +135,7 @@
         "content": "cat: nope: No such file or directory",
         "parts": [
           {
-            "id": "p-9",
+            "id": "p-7",
             "type": "tool_result",
             "toolCallId": "call_2",
             "output": "cat: nope: No such file or directory",
@@ -150,7 +150,7 @@
         "content": "There are two files: a.txt and b.txt.",
         "parts": [
           {
-            "id": "p-10",
+            "id": "p-8",
             "type": "text",
             "text": "There are two files: a.txt and b.txt."
           }

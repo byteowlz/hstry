@@ -79,7 +79,7 @@
         "content": "The build is failing, can you fix it?",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-1",
             "type": "text",
             "text": "The build is failing, can you fix it?"
           }
@@ -94,17 +94,17 @@
         "content": "Run the build to see the error.\nLet me run the build.",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-2",
             "type": "thinking",
             "text": "Run the build to see the error."
           },
           {
-            "id": "p-6",
+            "id": "p-3",
             "type": "text",
             "text": "Let me run the build."
           },
           {
-            "id": "p-7",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "toolu_01",
             "name": "bash",
@@ -113,13 +113,13 @@
             }
           },
           {
-            "id": "p-8",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "toolu_01",
             "output": "error TS2304: Cannot find name \"foo\""
           },
           {
-            "id": "p-9",
+            "id": "p-6",
             "type": "tool_call",
             "toolCallId": "toolu_02",
             "name": "bash",
@@ -128,7 +128,7 @@
             }
           },
           {
-            "id": "p-10",
+            "id": "p-7",
             "type": "tool_result",
             "toolCallId": "toolu_02",
             "output": "Missing script: \"buidl\"",
@@ -151,7 +151,7 @@
         "content": "On branch main",
         "parts": [
           {
-            "id": "p-11",
+            "id": "p-8",
             "type": "tool_call",
             "toolCallId": "sh_01",
             "name": "shell",
@@ -160,7 +160,7 @@
             }
           },
           {
-            "id": "p-12",
+            "id": "p-9",
             "type": "tool_result",
             "toolCallId": "sh_01",
             "output": "On branch main",
@@ -179,7 +179,7 @@
         "content": "Environment reloaded.",
         "parts": [
           {
-            "id": "p-13",
+            "id": "p-10",
             "type": "text",
             "text": "Environment reloaded."
           }
@@ -195,7 +195,7 @@
         "content": "Earlier the user asked to fix the build.",
         "parts": [
           {
-            "id": "p-14",
+            "id": "p-11",
             "type": "text",
             "text": "Earlier the user asked to fix the build."
           }
@@ -211,7 +211,7 @@
         "content": "Fixed the undefined name in src/index.ts.",
         "parts": [
           {
-            "id": "p-15",
+            "id": "p-12",
             "type": "text",
             "text": "Fixed the undefined name in src/index.ts."
           }

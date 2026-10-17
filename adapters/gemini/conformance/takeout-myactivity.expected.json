@@ -10,7 +10,7 @@
         "content": "Bye now",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "Bye now"
           }
@@ -22,7 +22,7 @@
         "content": "Goodbye & good luck\nSee you",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "text",
             "text": "Goodbye & good luck\nSee you"
           }

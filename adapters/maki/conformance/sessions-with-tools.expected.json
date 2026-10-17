@@ -52,7 +52,7 @@
         "content": "Show me the config file",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "Show me the config file"
           }
@@ -63,17 +63,17 @@
         "content": "Let me read it.",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "thinking",
             "text": "Need to read config.toml"
           },
           {
-            "id": "p-5",
+            "id": "p-3",
             "type": "text",
             "text": "Let me read it."
           },
           {
-            "id": "p-6",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "tu_1",
             "name": "read",
@@ -97,7 +97,7 @@
         "content": "",
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "tu_1",
             "output": "No such file: config.toml",
@@ -110,7 +110,7 @@
         "content": "{\"Plain\":{\"text\":\"No such file: config.toml\"}}",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-6",
             "type": "tool_result",
             "toolCallId": "tu_1",
             "output": "{\"Plain\":{\"text\":\"No such file: config.toml\"}}"
@@ -122,7 +122,7 @@
         "content": "The file does not exist in this directory.",
         "parts": [
           {
-            "id": "p-9",
+            "id": "p-7",
             "type": "text",
             "text": "The file does not exist in this directory."
           }

@@ -11,7 +11,7 @@
         "content": "Read package.json and the missing file",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-1",
             "type": "text",
             "text": "Read package.json and the missing file"
           }
@@ -104,7 +104,7 @@
         "content": "package.json is named proj; missing.txt does not exist.",
         "parts": [
           {
-            "id": "p-1",
+            "id": "p-8",
             "type": "text",
             "text": "package.json is named proj; missing.txt does not exist."
           }

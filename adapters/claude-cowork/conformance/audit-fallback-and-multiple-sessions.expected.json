@@ -34,7 +34,7 @@
         "content": "Rename the files in my folder",
         "parts": [
           {
-            "id": "p-2",
+            "id": "p-1",
             "type": "text",
             "text": "Rename the files in my folder"
           }
@@ -46,7 +46,7 @@
         "content": "Done: 12 files renamed.",
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-2",
             "type": "text",
             "text": "Done: 12 files renamed."
           }

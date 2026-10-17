@@ -11,7 +11,7 @@
         "content": "Ping",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-1",
             "type": "text",
             "text": "Ping"
           }
@@ -30,7 +30,7 @@
         "content": "Pong",
         "parts": [
           {
-            "id": "p-5",
+            "id": "p-2",
             "type": "text",
             "text": "Pong"
           }

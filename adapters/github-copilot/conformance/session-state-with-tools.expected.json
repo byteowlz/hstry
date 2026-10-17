@@ -13,7 +13,7 @@
         "createdAt": 1775116801000,
         "parts": [
           {
-            "id": "p-3",
+            "id": "p-1",
             "type": "text",
             "text": "Run the tests"
           }
@@ -26,17 +26,17 @@
         "model": "gpt-5.1",
         "parts": [
           {
-            "id": "p-4",
+            "id": "p-2",
             "type": "thinking",
             "text": "Use the shell tool."
           },
           {
-            "id": "p-5",
+            "id": "p-3",
             "type": "text",
             "text": "Running the test suite."
           },
           {
-            "id": "p-6",
+            "id": "p-4",
             "type": "tool_call",
             "toolCallId": "call_1",
             "name": "bash",
@@ -61,7 +61,7 @@
         "createdAt": 1775116805000,
         "parts": [
           {
-            "id": "p-7",
+            "id": "p-5",
             "type": "tool_result",
             "toolCallId": "call_1",
             "output": "exit code 1: 2 tests failed",
@@ -76,7 +76,7 @@
         "model": "gpt-5.1",
         "parts": [
           {
-            "id": "p-8",
+            "id": "p-6",
             "type": "text",
             "text": "Two tests failed."
           }

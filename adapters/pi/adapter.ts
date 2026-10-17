@@ -375,11 +375,13 @@ function buildContentParts(content?: PiContentBlock[] | string, includeTools?: b
       parts.push({...textPart(block.text), meta: {native: block}});
     } else if (block.type === 'thinking' && block.thinking) {
       parts.push({...thinkingPart(block.thinking), meta: {native: block}});
-    } else if (block.type === 'toolCall' && block.name && includeTools && !block.id) {
-      // Never fabricate an association; keep the call as opaque content.
-      parts.push({id: '', type: 'x-pi-content', payload: block});
     } else if (block.type === 'toolCall' && block.name && includeTools) {
-      parts.push({...toolCallPart(block.id, block.name, block.arguments), meta: {native: block}});
+      if (block.id) {
+        parts.push({...toolCallPart(block.id, block.name, block.arguments), meta: {native: block}});
+      } else {
+        // Never fabricate an association; keep the call as opaque content.
+        parts.push({id: '', type: 'x-pi-content', payload: block});
+      }
     } else if (block.type === 'tool_use' && block.name && includeTools) {
       // Sessions imported from Anthropic-style logs keep snake_case blocks.
       const callId = block.id ?? '';

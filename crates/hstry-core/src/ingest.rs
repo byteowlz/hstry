@@ -298,6 +298,14 @@ mod tests {
     use crate::models::Source;
     use crate::parsed::{ParsedConversation, ParsedMessage};
 
+    /// Windows can keep the SQLite main/WAL/SHM handles locked briefly after
+    /// `close`, so unlinking the temp database is best-effort there.
+    fn remove_db_files(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
     fn parsed_conversation() -> ParsedConversation {
         ParsedConversation {
             external_id: Some("progress-fixture".to_string()),
@@ -432,7 +440,7 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(db.get_messages(id).await?)?, expected);
         db.close().await;
-        std::fs::remove_file(path)?;
+        remove_db_files(&path);
         Ok(())
     }
 
@@ -481,7 +489,7 @@ mod tests {
         let db = Arc::try_unwrap(db)
             .unwrap_or_else(|_| panic!("all ingestion tasks should release the database"));
         db.close().await;
-        std::fs::remove_file(path)?;
+        remove_db_files(&path);
         Ok(())
     }
 

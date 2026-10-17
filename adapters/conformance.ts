@@ -84,6 +84,24 @@ function validate(conversations: unknown): asserts conversations is Record<strin
   }
 }
 
+/** First differing line with a little context, for actionable CI failures. */
+function firstDifference(expected: string, actual: string): string {
+  const e = expected.split('\n');
+  const a = actual.split('\n');
+  const max = Math.max(e.length, a.length);
+  for (let i = 0; i < max; i++) {
+    if (e[i] === a[i]) continue;
+    const start = Math.max(0, i - 2);
+    const block = (lines: string[]) =>
+      lines
+        .slice(start, i + 3)
+        .map((line, offset) => `${String(start + offset + 1).padStart(4)} ${line === undefined ? '<missing>' : line}`)
+        .join('\n');
+    return `\nfirst difference at line ${i + 1}:\n--- expected\n${block(e)}\n+++ actual\n${block(a)}`;
+  }
+  return '';
+}
+
 async function runAdapter(adapter: string, update: boolean): Promise<string[]> {
   const module = join(adaptersDir, adapter, 'conformance.ts');
   if (!existsSync(module)) return [`${adapter}: missing conformance.ts (every adapter needs fixtures)`];
@@ -116,8 +134,11 @@ async function runAdapter(adapter: string, update: boolean): Promise<string[]> {
         await writeFile(expectedPath, actual);
       } else if (!existsSync(expectedPath)) {
         throw new Error(`missing expected snapshot ${expectedPath}; review output and run with --update`);
-      } else if ((await readFile(expectedPath, 'utf8')) !== actual) {
-        throw new Error(`parse output differs from ${expectedPath}; inspect, then --update if intended`);
+      } else {
+        const expected = await readFile(expectedPath, 'utf8');
+        if (expected !== actual) {
+          throw new Error(`parse output differs from ${expectedPath}; inspect, then --update if intended${firstDifference(expected, actual)}`);
+        }
       }
       console.log(`ok   ${label}`);
     } catch (error) {

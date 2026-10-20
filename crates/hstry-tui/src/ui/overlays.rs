@@ -10,7 +10,7 @@ use ratatui::{
 use ratatui_image::StatefulImage;
 
 use crate::actions::{ACTIONS, PaletteState, prefix_options};
-use crate::state::{App, Overlay};
+use crate::state::{App, ExportFormat, Overlay};
 use crate::theme::Token;
 use crate::ui::{THEME, panel};
 
@@ -36,6 +36,7 @@ pub fn draw_overlay(f: &mut Frame, app: &mut App) {
         Overlay::AgentPicker { agents, cursor, .. } => {
             draw_agent_picker(f, agents, *cursor, &app.config.resume.default_agent);
         }
+        Overlay::ExportPicker { cursor, .. } => draw_export_picker(f, *cursor),
         Overlay::ImageViewer(viewer) => {
             let count = app.chat_images.len();
             let label = app
@@ -174,7 +175,7 @@ fn draw_agent_picker(f: &mut Frame, agents: &[String], cursor: usize, default_ag
         height,
     };
     f.render_widget(Clear, area);
-    let block = panel("resume with", true);
+    let block = panel("open in", true);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -190,6 +191,37 @@ fn draw_agent_picker(f: &mut Frame, agents: &[String], cursor: usize, default_ag
                 Span::styled(a.clone(), THEME.fg(Token::Primary)),
                 Span::styled(default_marker, THEME.fg(Token::Muted)),
             ]))
+        })
+        .collect();
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(THEME.color(Token::Bar))
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default().with_selected(Some(cursor));
+    f.render_stateful_widget(list, inner, &mut state);
+}
+
+fn draw_export_picker(f: &mut Frame, cursor: usize) {
+    let width = 48u16.min(f.area().width);
+    let height = (ExportFormat::ALL.len() as u16 + 4).min(f.area().height);
+    let area = Rect {
+        x: (f.area().width.saturating_sub(width)) / 2,
+        y: (f.area().height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, area);
+    let block = panel("export to current directory", true);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let items: Vec<ListItem> = ExportFormat::ALL
+        .iter()
+        .map(|fmt| {
+            ListItem::new(Line::from(Span::styled(
+                fmt.label(),
+                THEME.fg(Token::Primary),
+            )))
         })
         .collect();
     let list = List::new(items).highlight_style(
@@ -242,19 +274,45 @@ fn draw_help(f: &mut Frame, scroll: usize) {
     let section = |t: &str| Line::from(Span::styled(t.to_string(), THEME.fg_bold(Token::Accent)));
     let key = |k: &str, d: &str| {
         Line::from(vec![
-            Span::styled(format!("  {k:<12}"), THEME.fg_bold(Token::Primary)),
+            Span::styled(format!("  {k:<14}"), THEME.fg_bold(Token::Primary)),
             Span::styled(d.to_string(), THEME.fg(Token::Muted)),
         ])
     };
 
     let help: Vec<Line> = vec![
+        section("find"),
+        key(
+            "/",
+            "find sessions as you type (title, repo, agent, first prompt)",
+        ),
+        key(
+            "Tab",
+            "while typing: switch to full-text search inside messages",
+        ),
+        key("↑↓ Enter", "while typing: pick a result · Enter: done"),
+        key("Esc / x", "clear the query"),
+        Line::from(""),
+        section("act on the selected session"),
+        key("Enter / l", "read the transcript"),
+        key("o", "open in an agent (pi, claude, codex, …)"),
+        key("O Ctrl-R", "open in the default agent"),
+        key("y", "copy the transcript as markdown"),
+        key("Y", "copy the session id"),
+        key("p", "copy the session file path"),
+        key("e", "export to a file (markdown or JSON)"),
+        key("t", "expand / collapse thinking and tool output"),
+        key("i", "view images (kitty/sixel graphics)"),
+        key("d", "delete marked or selected (on an agent group: source)"),
+        Line::from(""),
         section("navigate"),
-        key("j/k ↑/↓", "move"),
+        key("j/k ↑/↓", "move · scroll the transcript"),
         key("gg / G", "top / bottom"),
         key("Ctrl-d/u", "half page"),
-        key("h/l ←/→", "collapse group · focus chat / sidebar"),
-        key("Enter", "open session / toggle group"),
-        key("Tab", "hide or show the sidebar"),
+        key("Tab / h", "switch pane · back to the list"),
+        key(
+            "Space",
+            "mark (on a group: mark all) · Ctrl-A all · V clear",
+        ),
         Line::from(""),
         section("organize"),
         key(
@@ -263,22 +321,10 @@ fn draw_help(f: &mut Frame, scroll: usize) {
         ),
         key("z c / z o", "collapse / expand all groups"),
         key("s d/D/t", "sort newest / oldest / title"),
-        key("f", "filter list (F clears)"),
         Line::from(""),
-        section("search"),
-        key("/", "full-text search (Tab cycles local/all/remote)"),
-        key("x", "clear search results"),
-        Line::from(""),
-        section("act"),
+        section("everything else"),
         key(": Ctrl-P", "command palette"),
-        key("Ctrl-R", "resume in default agent"),
-        key("R", "resume with agent picker"),
-        key("i", "view images (kitty/sixel graphics)"),
-        key("y", "copy session to clipboard as markdown"),
-        key("Space", "mark session (on a group: mark all)"),
-        key("Ctrl-A / V", "mark all / clear marks"),
-        key("d", "delete marked or current (on agent group: source)"),
-        key("r", "refresh"),
+        key("r", "reload from the database"),
         key("q", "quit"),
     ];
 

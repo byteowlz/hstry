@@ -1,108 +1,315 @@
-//! The chat reader: message cards over the markdown renderer.
+//! The transcript: speaker blocks built from canonical message parts.
+//!
+//! Prose is rendered as markdown under a speaker header. Thinking, tool calls
+//! and tool results are rendered as what they are (dim reasoning, a one-line
+//! call, indented output) instead of being flattened into prose, and tool
+//! output is attached to the turn that requested it rather than to "you".
 
 use chrono::{DateTime, Local};
 use ratatui::{
     Frame,
-    layout::Rect,
-    style::{Color, Style},
+    layout::{Margin, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
 };
+use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use hstry_core::models::{Message, MessageRole};
 
 use crate::images::{ImageEntry, extract_images};
-use crate::markdown::{render_markdown, truncate_str};
-use crate::state::{App, Focus};
-use crate::theme::Token;
+use crate::markdown::{highlight_lines, render_markdown, truncate_str};
+use crate::state::{App, Focus, relative_time, shorten_workspace};
+use crate::theme::{Token, adapter_color};
 use crate::ui::{THEME, panel};
 
-/// Width of the role gutter drawn left of every content line.
+/// Width of the speaker gutter drawn left of prose lines.
 const GUTTER: usize = 2;
+/// Collapsed previews: lines of thinking / tool output shown before "… more".
+const THINKING_PREVIEW: usize = 2;
+const OUTPUT_PREVIEW: usize = 6;
 
-const fn role_color(role: &MessageRole) -> Color {
-    match role {
-        MessageRole::User => Color::Green,
-        MessageRole::Assistant => Color::Blue,
-        MessageRole::System => Color::Yellow,
-        MessageRole::Tool => Color::Magenta,
-        MessageRole::Other => Color::Gray,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Speaker {
+    User,
+    Assistant,
+}
+
+const fn speaker_color(speaker: Speaker) -> Color {
+    match speaker {
+        Speaker::User => Color::Green,
+        Speaker::Assistant => Color::Blue,
     }
 }
 
-const fn role_name(role: &MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "you",
-        MessageRole::Assistant => "assistant",
-        MessageRole::System => "system",
-        MessageRole::Tool => "tool",
-        MessageRole::Other => "other",
+const fn speaker_name(speaker: Speaker) -> &'static str {
+    match speaker {
+        Speaker::User => "you",
+        Speaker::Assistant => "assistant",
     }
+}
+
+/// One renderable piece of a message.
+enum Piece {
+    Text(String),
+    Thinking(String),
+    ToolCall { name: String, hint: String },
+    ToolResult { output: String, is_error: bool },
+}
+
+fn pieces(msg: &Message) -> Vec<Piece> {
+    let parts = msg.parts_json.as_array().filter(|p| !p.is_empty());
+    let Some(parts) = parts else {
+        let text = msg.content.trim();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        return vec![if msg.role == MessageRole::Tool {
+            Piece::ToolResult {
+                output: text.to_string(),
+                is_error: false,
+            }
+        } else {
+            Piece::Text(text.to_string())
+        }];
+    };
+
+    let mut out = Vec::new();
+    for part in parts {
+        match part.get("type").and_then(Value::as_str).unwrap_or("") {
+            "text" => {
+                if let Some(t) = part.get("text").and_then(Value::as_str).map(str::trim)
+                    && !t.is_empty()
+                {
+                    // A text part on a tool message is tool output, not prose.
+                    out.push(if msg.role == MessageRole::Tool {
+                        Piece::ToolResult {
+                            output: t.to_string(),
+                            is_error: false,
+                        }
+                    } else {
+                        Piece::Text(t.to_string())
+                    });
+                }
+            }
+            "thinking" => {
+                if let Some(t) = part.get("text").and_then(Value::as_str).map(str::trim)
+                    && !t.is_empty()
+                {
+                    out.push(Piece::Thinking(t.to_string()));
+                }
+            }
+            "tool_call" => {
+                let name = part
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string();
+                out.push(Piece::ToolCall {
+                    hint: tool_hint(part.get("input")),
+                    name,
+                });
+            }
+            "tool_result" => {
+                out.push(Piece::ToolResult {
+                    output: value_text(part.get("output")),
+                    is_error: part
+                        .get("isError")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() && !msg.content.trim().is_empty() {
+        out.push(Piece::Text(msg.content.trim().to_string()));
+    }
+    out
+}
+
+/// The most recognizable argument of a tool call, on one line.
+fn tool_hint(input: Option<&Value>) -> String {
+    let Some(input) = input else {
+        return String::new();
+    };
+    if let Some(obj) = input.as_object() {
+        for key in [
+            "command",
+            "cmd",
+            "file_path",
+            "path",
+            "filePath",
+            "pattern",
+            "query",
+            "url",
+            "code",
+            "prompt",
+            "description",
+        ] {
+            match obj.get(key) {
+                Some(Value::String(s)) if !s.trim().is_empty() => return one_line(s),
+                Some(Value::Array(items)) if !items.is_empty() => {
+                    let joined: Vec<String> = items
+                        .iter()
+                        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned))
+                        .collect();
+                    return one_line(&joined.join(" "));
+                }
+                _ => {}
+            }
+        }
+    }
+    match input {
+        Value::String(s) => one_line(s),
+        Value::Null => String::new(),
+        other => one_line(&other.to_string()),
+    }
+}
+
+fn value_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Null) | None => String::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.get("text")
+                    .and_then(Value::as_str)
+                    .map_or_else(|| item.to_string(), str::to_owned)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => other.to_string(),
+    }
+}
+
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Build the full transcript as styled lines plus any images found in parts.
 ///
-/// `width` is the content width available for wrapping. `0` disables wrapping.
+/// `width` is the content width available for wrapping (`0` disables
+/// wrapping). `expand` shows thinking and tool output in full.
 pub fn build_chat_lines(
     messages: &[Message],
     highlight: Option<&str>,
     width: usize,
+    expand: bool,
 ) -> (Vec<Line<'static>>, Vec<ImageEntry>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut images: Vec<ImageEntry> = Vec::new();
     let mut last_model: Option<&str> = None;
-    let mut prev_was_system = false;
+    let mut current: Option<Speaker> = None;
+    let mut prev_system = false;
     let body_width = width.saturating_sub(GUTTER);
 
     for msg in messages {
-        let color = role_color(&msg.role);
-
-        // System notices are one-liners: no header, no card, grouped together.
         if msg.role == MessageRole::System {
-            if !lines.is_empty() && !prev_was_system {
+            if !lines.is_empty() && !prev_system {
                 lines.push(Line::from(""));
             }
-            let text = msg.content.trim().replace('\n', " ");
-            let notice = Line::from(vec![
-                Span::styled("· ", Style::default().fg(color)),
-                Span::styled(text, THEME.fg(Token::Muted)),
-            ]);
-            lines.extend(wrap_line(notice, width, GUTTER));
-            prev_was_system = true;
+            let text = one_line(&msg.content);
+            if !text.is_empty() {
+                let notice = Line::from(vec![
+                    Span::styled("· ", THEME.fg(Token::Warn)),
+                    Span::styled(text, THEME.fg(Token::Muted)),
+                ]);
+                lines.extend(wrap_line(notice, width, GUTTER));
+            }
+            prev_system = true;
+            current = None;
             continue;
         }
-        prev_was_system = false;
+        prev_system = false;
 
-        if !lines.is_empty() {
+        let pieces = pieces(msg);
+        if pieces.is_empty() {
+            continue;
+        }
+        let only_tool_output = pieces.iter().all(|p| matches!(p, Piece::ToolResult { .. }));
+        // Tool output belongs to the turn that asked for it.
+        let speaker = if only_tool_output && current.is_some() {
+            current.unwrap_or(Speaker::Assistant)
+        } else if msg.role == MessageRole::User {
+            Speaker::User
+        } else {
+            Speaker::Assistant
+        };
+
+        if current != Some(speaker) {
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            let color = speaker_color(speaker);
+            let mut header = vec![
+                Span::styled("● ", Style::default().fg(color)),
+                Span::styled(speaker_name(speaker), Style::default().fg(color).bold()),
+            ];
+            if let Some(ts) = msg.created_at {
+                let local: DateTime<Local> = ts.into();
+                header.push(Span::styled(
+                    format!("  {}", local.format("%H:%M")),
+                    THEME.fg(Token::Muted),
+                ));
+            }
+            if speaker == Speaker::Assistant
+                && let Some(model) = msg.model.as_deref()
+                && last_model != Some(model)
+            {
+                header.push(Span::styled(format!("  {model}"), THEME.fg(Token::Muted)));
+                last_model = Some(model);
+            }
+            lines.push(Line::from(header));
+            current = Some(speaker);
+        } else if pieces.iter().any(|p| matches!(p, Piece::Text(_))) {
+            // A new prose message from the same speaker gets breathing room.
             lines.push(Line::from(""));
         }
 
-        let mut header = vec![Span::styled(
-            role_name(&msg.role),
-            Style::default().fg(color).bold(),
-        )];
-        if let Some(ts) = msg.created_at {
-            let local: DateTime<Local> = ts.into();
-            header.push(Span::styled(
-                format!("  {}", local.format("%H:%M")),
-                THEME.fg(Token::Muted),
-            ));
-        }
-        if let Some(model) = msg.model.as_deref()
-            && last_model != Some(model)
-        {
-            header.push(Span::styled(format!("  {model}"), THEME.fg(Token::Muted)));
-            last_model = Some(model);
-        }
-        lines.push(Line::from(header));
-
-        let gutter = Span::styled("▏ ", Style::default().fg(color));
-        for line in render_markdown(&msg.content, &msg.role, highlight) {
-            for wrapped in wrap_line(line, body_width, 0) {
-                let mut spans = vec![gutter.clone()];
-                spans.extend(wrapped.spans);
-                lines.push(Line { spans, ..wrapped });
+        let gutter = Span::styled("▏ ", Style::default().fg(speaker_color(speaker)));
+        for piece in pieces {
+            match piece {
+                Piece::Text(text) => {
+                    let role = if speaker == Speaker::User {
+                        MessageRole::User
+                    } else {
+                        MessageRole::Assistant
+                    };
+                    for line in render_markdown(&text, &role, highlight) {
+                        for wrapped in wrap_line(line, body_width, 0) {
+                            let mut spans = vec![gutter.clone()];
+                            spans.extend(wrapped.spans);
+                            lines.push(Line { spans, ..wrapped });
+                        }
+                    }
+                }
+                Piece::Thinking(text) => {
+                    push_thinking(&mut lines, &text, width, expand, highlight);
+                }
+                Piece::ToolCall { name, hint } => {
+                    let mut spans = vec![
+                        Span::styled("  ⚙ ", THEME.fg(Token::Accent)),
+                        Span::styled(name, THEME.fg_bold(Token::Primary)),
+                    ];
+                    if !hint.is_empty() {
+                        let room = width.saturating_sub(spans_width(&spans) + 2).max(12);
+                        spans.push(Span::styled(
+                            format!("  {}", truncate_str(&hint, room)),
+                            THEME.fg(Token::Muted),
+                        ));
+                    }
+                    let line = Line::from(spans);
+                    lines.extend(highlight.map_or_else(
+                        || vec![line.clone()],
+                        |q| highlight_lines(vec![line.clone()], q),
+                    ));
+                }
+                Piece::ToolResult { output, is_error } => {
+                    push_tool_output(&mut lines, &output, is_error, width, expand, highlight);
+                }
             }
         }
 
@@ -111,7 +318,7 @@ pub fn build_chat_lines(
             lines.push(Line::from(vec![
                 gutter.clone(),
                 Span::styled(
-                    format!("image {}: {}  (press i)", images.len(), entry.label),
+                    format!("▣ image {}: {}  (i to view)", images.len(), entry.label),
                     Style::default().fg(Color::Cyan),
                 ),
             ]));
@@ -119,6 +326,118 @@ pub fn build_chat_lines(
     }
 
     (lines, images)
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| s.content.width()).sum()
+}
+
+fn push_thinking(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    width: usize,
+    expand: bool,
+    highlight: Option<&str>,
+) {
+    let style = THEME
+        .fg(Token::Muted)
+        .add_modifier(Modifier::ITALIC | Modifier::DIM);
+    let prefix = "  ∴ ";
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for (i, raw) in text.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        let lead = if i == 0 { prefix } else { "    " };
+        let line = Line::from(vec![
+            Span::styled(lead, THEME.fg(Token::Muted)),
+            Span::styled(raw.trim().to_string(), style),
+        ]);
+        out.extend(wrap_line(line, width, 4));
+    }
+    let total = out.len();
+    if !expand && total > THINKING_PREVIEW {
+        out.truncate(THINKING_PREVIEW);
+        out.push(Line::from(Span::styled(
+            format!(
+                "    … {} more lines of thinking  (t)",
+                total - THINKING_PREVIEW
+            ),
+            THEME.fg(Token::Muted),
+        )));
+    }
+    lines.extend(match highlight {
+        Some(q) => highlight_lines(out, q),
+        None => out,
+    });
+}
+
+fn push_tool_output(
+    lines: &mut Vec<Line<'static>>,
+    output: &str,
+    is_error: bool,
+    width: usize,
+    expand: bool,
+    highlight: Option<&str>,
+) {
+    let text = output.trim_end();
+    let (mark, mark_style, body_style) = if is_error {
+        (
+            "  ✗ ",
+            THEME.fg_bold(Token::Danger),
+            THEME.fg(Token::Danger),
+        )
+    } else {
+        ("  └ ", THEME.fg(Token::Muted), THEME.fg(Token::Muted))
+    };
+    if text.trim().is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(mark, mark_style),
+            Span::styled(
+                if is_error {
+                    "error (no output)"
+                } else {
+                    "(no output)"
+                },
+                body_style,
+            ),
+        ]));
+        return;
+    }
+    let source: Vec<&str> = text.lines().collect();
+    let total = source.len();
+    let shown = if expand {
+        total
+    } else {
+        total.min(OUTPUT_PREVIEW)
+    };
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for (i, raw) in source.iter().take(shown).enumerate() {
+        let lead = if i == 0 { mark } else { "    " };
+        let room = width.saturating_sub(4).max(8);
+        // Tool output is not prose: keep each line, cut instead of reflowing.
+        let body = if expand {
+            (*raw).to_string()
+        } else {
+            truncate_str(raw, room)
+        };
+        let line = Line::from(vec![
+            Span::styled(lead, if i == 0 { mark_style } else { body_style }),
+            Span::styled(body.replace('\t', "    "), body_style),
+        ]);
+        if expand {
+            out.extend(wrap_line(line, width, 4));
+        } else {
+            out.push(line);
+        }
+    }
+    if shown < total {
+        out.push(Line::from(Span::styled(
+            format!("    … {} more lines  (t)", total - shown),
+            THEME.fg(Token::Muted),
+        )));
+    }
+    lines.extend(match highlight {
+        Some(q) => highlight_lines(out, q),
+        None => out,
+    });
 }
 
 /// Word-wrap a styled line to `width` columns, preserving span styles.
@@ -229,71 +548,197 @@ pub fn wrap_line(line: Line<'static>, width: usize, indent: usize) -> Vec<Line<'
 }
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
-    let active = app.focus == Focus::Chat;
+    let active = app.focus == Focus::Transcript;
 
-    let title = app.cursor_conversation().map_or_else(
-        || "chat".to_string(),
-        |c| {
-            truncate_str(
-                c.title.as_deref().unwrap_or("(untitled)"),
-                area.width.saturating_sub(6) as usize,
-            )
-        },
+    let title = app.cursor_session().map_or_else(
+        || "transcript".to_string(),
+        |s| truncate_str(s.title(), area.width.saturating_sub(6) as usize),
     );
-
     let mut block = panel(&title, active);
-    if let Some(conv) = app.cursor_conversation() {
-        let mut meta = format!("{} msgs", conv.message_count.max(app.messages.len() as i64));
-        if let Some(model) = &conv.model {
-            meta = format!("{meta} · {model}");
+
+    if let Some(session) = app.cursor_session() {
+        let mut meta: Vec<Span<'static>> = vec![
+            Span::styled(" ● ", Style::default().fg(adapter_color(&session.adapter))),
+            Span::styled(session.adapter.clone(), THEME.fg(Token::Muted)),
+        ];
+        let mut push = |text: String| {
+            meta.push(Span::styled(" · ", THEME.fg(Token::Muted)));
+            meta.push(Span::styled(text, THEME.fg(Token::Muted)));
+        };
+        if let Some(model) = &session.conv.model {
+            push(model.clone());
         }
-        if let Some(ws) = &conv.workspace {
-            meta = format!("{meta} · {}", crate::state::shorten_workspace(ws));
+        if let Some(ws) = &session.conv.workspace {
+            push(shorten_workspace(ws));
         }
+        push(relative_time(session.last_active()));
+        push(format!(
+            "{} msgs",
+            session.message_count.max(app.messages.len() as i64)
+        ));
         if !app.chat_images.is_empty() {
-            meta = format!("{meta} · {} images", app.chat_images.len());
+            push(format!("{} images", app.chat_images.len()));
         }
-        block = block.title_bottom(Line::from(Span::styled(
-            format!(" {meta} "),
-            THEME.fg(Token::Muted),
-        )));
+        meta.push(Span::raw(" "));
+        block = block.title_bottom(Line::from(meta));
     }
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-    app.chat_height = inner.height;
-    if usize::from(inner.width) != app.chat_wrap_width {
-        app.chat_wrap_width = usize::from(inner.width);
+    // Leave a column for the scrollbar.
+    let text_area = Rect {
+        width: inner.width.saturating_sub(1),
+        ..inner
+    };
+    app.chat_height = text_area.height;
+    if usize::from(text_area.width) != app.chat_wrap_width {
+        app.chat_wrap_width = usize::from(text_area.width);
         app.rebuild_chat_lines();
     }
 
     if app.chat_lines.is_empty() {
-        let hint = if app.rows.is_empty() {
-            "Nothing here yet — run `hstry sync` to import sessions."
+        let hint = if app.sessions.is_empty() {
+            "Nothing here yet. Run `hstry sync` to import your agent sessions."
+        } else if app.rows.is_empty() {
+            "No session matches the query."
         } else {
-            "Select a session — Enter loads it, l focuses the chat."
+            "Select a session to read it here."
         };
         let empty = Paragraph::new(hint)
             .style(THEME.fg(Token::Muted))
             .wrap(Wrap { trim: true });
-        f.render_widget(empty, inner);
+        f.render_widget(empty, text_area);
         return;
     }
 
-    let max_scroll = app.chat_lines.len().saturating_sub(1);
+    let max_scroll = app
+        .chat_lines
+        .len()
+        .saturating_sub(usize::from(text_area.height).max(1));
     app.chat_scroll = app.chat_scroll.min(max_scroll);
     let scroll = u16::try_from(app.chat_scroll).unwrap_or(u16::MAX);
 
     let paragraph = Paragraph::new(app.chat_lines.clone()).scroll((scroll, 0));
-    f.render_widget(paragraph, inner);
+    f.render_widget(paragraph, text_area);
+
+    if app.chat_lines.len() > usize::from(text_area.height) {
+        let mut state = ScrollbarState::new(max_scroll).position(app.chat_scroll);
+        let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .track_style(THEME.fg(Token::Muted).add_modifier(Modifier::DIM))
+            .thumb_style(if active {
+                THEME.fg(Token::Accent)
+            } else {
+                THEME.fg(Token::Muted)
+            });
+        f.render_stateful_widget(bar, inner.inner(Margin::new(0, 0)), &mut state);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
 
     fn text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn message(role: MessageRole, content: &str, parts: Value) -> Message {
+        serde_json::from_value(json!({
+            "id": Uuid::nil(),
+            "conversation_id": Uuid::nil(),
+            "idx": 0,
+            "role": role,
+            "content": content,
+            "parts_json": parts,
+            "created_at": null,
+            "model": null,
+            "tokens": null,
+            "cost_usd": null,
+            "metadata": {}
+        }))
+        .expect("message fixture")
+    }
+
+    #[test]
+    fn tool_output_attaches_to_the_assistant_turn() {
+        let msgs = vec![
+            message(
+                MessageRole::User,
+                "find it",
+                json!([{"type":"text","text":"find it"}]),
+            ),
+            message(
+                MessageRole::Assistant,
+                "",
+                json!([
+                    {"type":"thinking","text":"look first"},
+                    {"type":"tool_call","toolCallId":"t1","name":"Bash","input":{"command":"rg retry"}}
+                ]),
+            ),
+            message(
+                MessageRole::User,
+                "src/a.rs:1",
+                json!([{"type":"tool_result","toolCallId":"t1","output":"src/a.rs:1"}]),
+            ),
+        ];
+        let (lines, _) = build_chat_lines(&msgs, None, 80, false);
+        let all: Vec<String> = lines.iter().map(text).collect();
+        let you_headers = all.iter().filter(|l| l.contains("you")).count();
+        assert_eq!(
+            you_headers, 1,
+            "tool output must not be labelled as you: {all:#?}"
+        );
+        assert!(
+            all.iter()
+                .any(|l| l.contains("⚙ Bash") && l.contains("rg retry")),
+            "{all:#?}"
+        );
+        assert!(all.iter().any(|l| l.contains("└ src/a.rs:1")), "{all:#?}");
+        assert!(all.iter().any(|l| l.contains("∴ look first")), "{all:#?}");
+    }
+
+    #[test]
+    fn long_tool_output_is_collapsed_until_expanded() {
+        let output: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        let msgs = vec![
+            message(
+                MessageRole::Assistant,
+                "",
+                json!([{"type":"tool_call","toolCallId":"t","name":"ls","input":{}}]),
+            ),
+            message(
+                MessageRole::Tool,
+                &output,
+                json!([{"type":"tool_result","toolCallId":"t","output":output}]),
+            ),
+        ];
+        let (collapsed, _) = build_chat_lines(&msgs, None, 80, false);
+        let (expanded, _) = build_chat_lines(&msgs, None, 80, true);
+        assert!(
+            collapsed
+                .iter()
+                .map(text)
+                .any(|l| l.contains("14 more lines"))
+        );
+        assert!(expanded.len() > collapsed.len());
+        assert!(expanded.iter().map(text).any(|l| l.contains("line 19")));
+    }
+
+    #[test]
+    fn errored_tool_results_are_marked() {
+        let msgs = vec![message(
+            MessageRole::Tool,
+            "boom",
+            json!([{"type":"tool_result","toolCallId":"t","output":"boom","isError":true}]),
+        )];
+        let (lines, _) = build_chat_lines(&msgs, None, 80, false);
+        assert!(lines.iter().map(text).any(|l| l.contains("✗ boom")));
     }
 
     #[test]

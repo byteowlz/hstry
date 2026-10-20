@@ -1,7 +1,7 @@
 [
   {
     "externalId": "test-codex-reasoning-1",
-    "title": "work - 2026-09-22 - Check the repository.",
+    "title": "Check the repository.",
     "createdAt": 1790104651000,
     "updatedAt": 1790104660000,
     "model": "gpt-5.5",

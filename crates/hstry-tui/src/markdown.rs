@@ -259,11 +259,20 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
-fn highlight_lines(lines: Vec<Line<'static>>, term: &str) -> Vec<Line<'static>> {
-    let needle = term.to_lowercase();
+/// Highlight every whitespace-separated term of `query` in `lines`.
+pub fn highlight_lines(lines: Vec<Line<'static>>, query: &str) -> Vec<Line<'static>> {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|t| t.chars().count() > 1)
+        .collect();
     lines
         .into_iter()
-        .map(|line| highlight_line(line, &needle))
+        .map(|line| {
+            terms
+                .iter()
+                .fold(line, |line, term| highlight_line(line, term))
+        })
         .collect()
 }
 

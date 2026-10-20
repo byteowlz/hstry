@@ -1,7 +1,7 @@
 [
   {
     "externalId": "test-codex-session-1",
-    "title": "project - 2023-11-14 - Hello Codex!",
+    "title": "Hello Codex!",
     "createdAt": 1699963200000,
     "updatedAt": 1699963202000,
     "model": "o1-mini",

@@ -1,8 +1,10 @@
-//! Top-level layout: header bar, sidebar, chat, status bar, overlays.
+//! Top-level layout: query bar, list + transcript, action bar, overlays.
 
 pub mod chat;
+pub mod list;
 pub mod overlays;
-pub mod sidebar;
+#[cfg(test)]
+mod render_tests;
 
 use ratatui::{
     Frame,
@@ -11,13 +13,15 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Padding, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 
-use crate::state::{App, Focus, Mode};
+use crate::state::{App, Focus, Mode, NARROW_WIDTH, Scope};
 use crate::theme::{Theme, Token};
 
 pub const THEME: Theme = Theme;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -25,31 +29,39 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Min(0),
             Constraint::Length(1),
         ])
-        .split(f.area());
+        .split(area);
 
-    draw_header(f, app, chunks[0]);
+    draw_query_bar(f, app, chunks[0]);
 
-    if app.sidebar_visible {
-        let sidebar_w = (u32::from(chunks[1].width) * 34 / 100).clamp(28, 46) as u16;
+    app.narrow = area.width < NARROW_WIDTH;
+    if app.narrow {
+        // One pane at a time: the list, or the session being read.
+        if app.focus == Focus::Transcript {
+            app.list_area = Rect::default();
+            app.chat_area = chunks[1];
+            chat::draw(f, app, chunks[1]);
+        } else {
+            app.list_area = chunks[1];
+            app.chat_area = Rect::default();
+            list::draw(f, app, chunks[1]);
+        }
+    } else {
+        let list_w = (u32::from(chunks[1].width) * 38 / 100).clamp(40, 64) as u16;
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(sidebar_w),
+                Constraint::Length(list_w),
                 Constraint::Length(1),
                 Constraint::Min(0),
             ])
             .split(chunks[1]);
-        app.sidebar_area = body[0];
+        app.list_area = body[0];
         app.chat_area = body[2];
-        sidebar::draw(f, app, body[0]);
+        list::draw(f, app, body[0]);
         chat::draw(f, app, body[2]);
-    } else {
-        app.sidebar_area = Rect::default();
-        app.chat_area = chunks[1];
-        chat::draw(f, app, chunks[1]);
     }
 
-    draw_status(f, app, chunks[2]);
+    draw_action_bar(f, app, chunks[2]);
 
     if let Some(prefix) = app.pending_prefix {
         overlays::draw_whichkey(f, prefix, chunks[2]);
@@ -80,116 +92,186 @@ pub fn panel(title: &str, active: bool) -> Block<'static> {
         .padding(Padding::horizontal(1))
 }
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let mut spans = vec![
-        Span::styled(" hstry ", THEME.on_bar_bold(Token::Accent)),
-        Span::styled(" ", THEME.bg(Token::Bar)),
-    ];
+/// ` hstry  ⌕ query▏            sessions│content   12 of 150 `
+fn draw_query_bar(f: &mut Frame, app: &App, area: Rect) {
+    let typing = app.mode == Mode::Query;
+    let brand = Span::styled(" hstry ", THEME.on_bar_bold(Token::Accent));
 
-    if app.show_search_results {
-        spans.push(Span::styled(
-            format!(
-                "search “{}” · {} hits",
-                app.last_search_query.as_deref().unwrap_or(""),
-                app.search_results.len()
-            ),
-            THEME.on_bar(Token::Warn),
-        ));
-    } else {
-        spans.push(Span::styled(
-            format!("group:{}", app.group_by.label()),
-            THEME.on_bar(Token::Primary),
-        ));
-        spans.push(Span::styled("  ", THEME.bg(Token::Bar)));
-        spans.push(Span::styled(
-            format!("sort:{}", app.sort_order.label()),
-            THEME.on_bar(Token::Muted),
-        ));
-        if !app.list_filter.is_empty() {
-            spans.push(Span::styled("  ", THEME.bg(Token::Bar)));
-            spans.push(Span::styled(
-                format!("filter:“{}”", app.list_filter),
-                THEME.on_bar(Token::Warn),
-            ));
-        }
-        spans.push(Span::styled("  ", THEME.bg(Token::Bar)));
-        spans.push(Span::styled(
-            format!("{} sessions", app.visible.len()),
-            THEME.on_bar(Token::Muted),
-        ));
-    }
-
-    if !app.marked.is_empty() {
-        spans.push(Span::styled("  ", THEME.bg(Token::Bar)));
-        spans.push(Span::styled(
-            format!("{} marked", app.marked.len()),
-            THEME.on_bar_bold(Token::Warn),
-        ));
-    }
-
-    let bar = Paragraph::new(Line::from(spans)).style(THEME.bg(Token::Bar));
-    f.render_widget(bar, area);
-}
-
-fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let line = match &app.mode {
-        Mode::Search { query, cursor } => input_line(
-            "search",
-            query,
-            *cursor,
-            &format!("scope:{} (Tab)", app.search_scope.label()),
-        ),
-        Mode::Filter { query, cursor } => input_line("filter", query, *cursor, "Enter to apply"),
-        Mode::Normal => {
-            let mut spans = Vec::new();
-            let focus_label = match app.focus {
-                Focus::Sidebar => " SESSIONS ",
-                Focus::Chat => " CHAT ",
-            };
-            spans.push(Span::styled(focus_label, THEME.on_bar_bold(Token::Accent)));
-            spans.push(Span::styled(" ", THEME.bg(Token::Bar)));
-
-            let msg = app
-                .status
-                .as_ref()
-                .filter(|(_, at)| at.elapsed().as_secs() < 5)
-                .map(|(m, _)| m.as_str())
-                .unwrap_or("");
-            if msg.is_empty() {
-                spans.push(Span::styled(
-                    "?:help  ::palette  /:search  f:filter  Tab:sidebar  R:resume",
-                    THEME.on_bar(Token::Muted),
-                ));
-            } else {
-                spans.push(Span::styled(msg.to_string(), THEME.on_bar(Token::Primary)));
-            }
-            Line::from(spans)
+    // Right side: scope switch and counts.
+    let scope_span = |scope: Scope| {
+        if app.scope == scope {
+            Span::styled(
+                format!(" {} ", scope.label()),
+                THEME
+                    .fg_bold(Token::Accent)
+                    .bg(THEME.color(Token::Bar))
+                    .add_modifier(Modifier::REVERSED),
+            )
+        } else {
+            Span::styled(format!(" {} ", scope.label()), THEME.on_bar(Token::Muted))
         }
     };
+    let count = if app.showing_content() {
+        let hits: usize = app.content_results.iter().map(|g| g.hits.len()).sum();
+        format!("{hits} hits ")
+    } else if app.query.trim().is_empty() || app.scope == Scope::Content {
+        format!("{} sessions ", app.sessions.len())
+    } else {
+        format!("{} of {} ", app.visible.len(), app.sessions.len())
+    };
+    let mut right = vec![
+        scope_span(Scope::Sessions),
+        scope_span(Scope::Content),
+        Span::styled("  ", THEME.bg(Token::Bar)),
+        Span::styled(count, THEME.on_bar(Token::Muted)),
+    ];
+    if !app.marked.is_empty() {
+        right.insert(
+            0,
+            Span::styled(
+                format!("{} marked  ", app.marked.len()),
+                THEME.on_bar_bold(Token::Warn),
+            ),
+        );
+    }
+    let right_w: usize = right.iter().map(|s| s.content.width()).sum();
 
-    let bar = Paragraph::new(line).style(THEME.bg(Token::Bar));
-    f.render_widget(bar, area);
+    // The input field is drawn on the terminal background so it reads as an
+    // inset field inside the bar.
+    let field_w = (area.width as usize)
+        .saturating_sub(brand.content.width() + right_w + 3)
+        .max(10);
+    let mut field: Vec<Span<'static>> = vec![Span::styled(
+        " ⌕ ",
+        if typing {
+            THEME.fg_bold(Token::Accent)
+        } else {
+            THEME.fg(Token::Muted)
+        },
+    )];
+    let text_room = field_w.saturating_sub(4);
+    if app.query.is_empty() && !typing {
+        field.push(Span::styled(
+            crate::markdown::truncate_str("press / to find a session", text_room),
+            THEME.fg(Token::Muted).add_modifier(Modifier::ITALIC),
+        ));
+    } else {
+        let chars: Vec<char> = app.query.chars().collect();
+        // Keep the cursor visible when the query is longer than the field.
+        let start = app.query_cursor.saturating_sub(text_room.saturating_sub(1));
+        let visible: Vec<char> = chars.iter().skip(start).take(text_room).copied().collect();
+        let cur = app.query_cursor - start;
+        let before: String = visible.iter().take(cur).collect();
+        let at: String = visible.get(cur).map_or(" ".into(), |c| c.to_string());
+        let after: String = visible.iter().skip(cur + 1).collect();
+        field.push(Span::styled(before, THEME.fg_bold(Token::Primary)));
+        if typing {
+            field.push(Span::styled(
+                at,
+                THEME.fg(Token::Primary).add_modifier(Modifier::REVERSED),
+            ));
+        } else {
+            field.push(Span::styled(at, THEME.fg_bold(Token::Primary)));
+        }
+        field.push(Span::styled(after, THEME.fg_bold(Token::Primary)));
+        if app.searching {
+            field.push(Span::styled("  searching…", THEME.fg(Token::Muted)));
+        }
+    }
+    let used: usize = field.iter().map(|s| s.content.width()).sum();
+    field.push(Span::raw(" ".repeat(field_w.saturating_sub(used))));
+
+    let mut spans = vec![brand, Span::styled(" ", THEME.bg(Token::Bar))];
+    spans.extend(field);
+    let left_w: usize = spans.iter().map(|s| s.content.width()).sum();
+    spans.push(Span::styled(
+        " ".repeat((area.width as usize).saturating_sub(left_w + right_w)),
+        THEME.bg(Token::Bar),
+    ));
+    spans.extend(right);
+
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(THEME.bg(Token::Bar)),
+        area,
+    );
 }
 
-fn input_line(label: &str, query: &str, cursor: usize, hint: &str) -> Line<'static> {
-    let before: String = query.chars().take(cursor).collect();
-    let at: String = query
-        .chars()
-        .nth(cursor)
-        .map_or(" ".to_string(), |c| c.to_string());
-    let after: String = query.chars().skip(cursor + 1).collect();
+/// Context actions for what is selected, or a fading status message.
+fn draw_action_bar(f: &mut Frame, app: &App, area: Rect) {
+    let status = app
+        .status
+        .as_ref()
+        .filter(|(_, at)| at.elapsed().as_secs() < 4)
+        .map(|(m, _)| m.clone());
 
-    Line::from(vec![
-        Span::styled(format!(" {label} "), THEME.on_bar_bold(Token::Warn)),
-        Span::styled(" ", THEME.bg(Token::Bar)),
-        Span::styled(before, THEME.on_bar(Token::Primary)),
-        Span::styled(
-            at,
-            THEME
-                .on_bar(Token::Primary)
-                .add_modifier(Modifier::REVERSED),
-        ),
-        Span::styled(after, THEME.on_bar(Token::Primary)),
-        Span::styled(format!("   {hint}"), THEME.on_bar(Token::Muted)),
-    ])
+    let actions: &[(&str, &str)] = match (app.mode, app.focus) {
+        (Mode::Query, _) => &[
+            ("type", "to find"),
+            ("↑↓", "select"),
+            ("Tab", "sessions/content"),
+            ("⏎", "done"),
+            ("Esc", "clear"),
+        ],
+        (Mode::Normal, Focus::Transcript) => &[
+            ("o", "open in…"),
+            ("y", "copy"),
+            (
+                "t",
+                if app.expand_details {
+                    "collapse"
+                } else {
+                    "expand"
+                },
+            ),
+            ("j/k", "scroll"),
+            ("e", "export"),
+            ("Esc", "back"),
+            ("?", "help"),
+        ],
+        (Mode::Normal, Focus::List) if app.cursor_conversation_id().is_some() => &[
+            ("⏎", "read"),
+            ("o", "open in…"),
+            ("y", "copy"),
+            ("Y", "copy id"),
+            ("p", "copy path"),
+            ("e", "export"),
+            ("d", "delete"),
+            ("/", "find"),
+            ("?", "help"),
+        ],
+        (Mode::Normal, Focus::List) => &[
+            ("⏎", "expand/collapse"),
+            ("/", "find"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
+    };
+
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(" ", THEME.bg(Token::Bar))];
+    if let Some(msg) = status {
+        spans.push(Span::styled(
+            format!("{msg}  "),
+            THEME.on_bar_bold(Token::Success),
+        ));
+    }
+    let budget = area.width as usize;
+    for (key, label) in actions {
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let piece_w = key.width() + label.width() + 4;
+        if used + piece_w > budget {
+            break;
+        }
+        spans.push(Span::styled(
+            (*key).to_string(),
+            THEME.on_bar_bold(Token::Accent),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}   "),
+            THEME.on_bar(Token::Muted),
+        ));
+    }
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(THEME.bg(Token::Bar)),
+        area,
+    );
 }

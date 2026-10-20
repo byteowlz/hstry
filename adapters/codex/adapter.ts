@@ -52,7 +52,7 @@ import {
   toolResultPart,
   isUnderAnyCanonicalRoot,
 } from '../types/index.ts';
-import { isSystemContext } from '../types/first-message.ts';
+import { formatFrumTitle, isSystemContext } from '../types/first-message.ts';
 
 // Codex honors CODEX_HOME; fall back to ~/.codex like the CLI itself.
 const DEFAULT_CODEX_HOME = process.env.CODEX_HOME || join(homedir(), '.codex');
@@ -502,9 +502,8 @@ async function parseRolloutFile(
   }
 
   const thread = sessionMeta?.id ? threadIndex.get(sessionMeta.id) : undefined;
-  const derivedTitle = sessionMeta?.cwd
-    ? buildTitle(sessionMeta.cwd, createdAt, firstUserMessage)
-    : firstUserMessage?.slice(0, 80);
+  // Workspace and date are separate fields; the title is what was asked.
+  const derivedTitle = firstUserMessage ? formatFrumTitle(firstUserMessage) : undefined;
   const title = thread?.title || derivedTitle;
 
   return {
@@ -641,24 +640,6 @@ function mapRole(role: string): Message['role'] {
     default:
       return 'assistant';
   }
-}
-
-function buildTitle(cwd: string, createdAt: number, firstUserMessage?: string): string {
-  const project = cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
-  const date = new Date(createdAt);
-  const dateStr = date.toISOString().slice(0, 10);
-
-  if (!firstUserMessage) {
-    const time = date.toISOString().slice(11, 16);
-    return `${project} - ${dateStr} - ${time}`;
-  }
-
-  let msg = firstUserMessage.replace(/\s+/g, ' ').trim();
-  if (msg.length > 60) {
-    msg = `${msg.slice(0, 60)}...`;
-  }
-
-  return `${project} - ${dateStr} - ${msg}`;
 }
 
 function safeParseJson(value?: string): unknown {

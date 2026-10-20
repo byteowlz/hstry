@@ -24,3 +24,7 @@ uuid.workspace = true
 chrono.workspace = true
 arboard.workspace = true
 unicode-width.workspace = true
+terminal-colorsaurus = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

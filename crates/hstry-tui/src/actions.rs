@@ -5,12 +5,11 @@
 pub enum ActionId {
     Quit,
     Help,
-    OpenSearch,
-    OpenFilter,
-    ClearFilter,
-    ClearSearch,
+    Find,
+    FindContent,
+    ClearQuery,
     Refresh,
-    ToggleSidebar,
+    SwitchPane,
     GroupFlat,
     GroupAgent,
     GroupRepo,
@@ -22,10 +21,14 @@ pub enum ActionId {
     SortDateAsc,
     SortTitle,
     Delete,
-    Resume,
-    ResumeWith,
+    OpenDefault,
+    OpenWith,
     OpenImages,
     CopySession,
+    CopyId,
+    CopyPath,
+    Export,
+    ToggleDetails,
     MarkAll,
     ClearMarks,
 }
@@ -39,39 +42,69 @@ pub struct Action {
 
 pub const ACTIONS: &[Action] = &[
     Action {
-        id: ActionId::Resume,
-        label: "Resume session in default agent",
-        keys: "Ctrl-R",
-    },
-    Action {
-        id: ActionId::ResumeWith,
-        label: "Resume session with agent…",
-        keys: "R",
-    },
-    Action {
-        id: ActionId::OpenSearch,
-        label: "Search all history",
+        id: ActionId::Find,
+        label: "Find sessions (title, repo, agent, first prompt)",
         keys: "/",
     },
     Action {
-        id: ActionId::OpenFilter,
-        label: "Filter session list",
-        keys: "f",
+        id: ActionId::FindContent,
+        label: "Search inside every message",
+        keys: "/ then Tab",
     },
     Action {
-        id: ActionId::ClearFilter,
-        label: "Clear list filter",
-        keys: "F",
+        id: ActionId::OpenWith,
+        label: "Open session in agent…",
+        keys: "o",
     },
     Action {
-        id: ActionId::ClearSearch,
-        label: "Clear search results",
+        id: ActionId::OpenDefault,
+        label: "Open session in default agent",
+        keys: "O",
+    },
+    Action {
+        id: ActionId::CopySession,
+        label: "Copy transcript (markdown)",
+        keys: "y",
+    },
+    Action {
+        id: ActionId::CopyId,
+        label: "Copy session id",
+        keys: "Y",
+    },
+    Action {
+        id: ActionId::CopyPath,
+        label: "Copy session file path",
+        keys: "p",
+    },
+    Action {
+        id: ActionId::Export,
+        label: "Export session to a file…",
+        keys: "e",
+    },
+    Action {
+        id: ActionId::ToggleDetails,
+        label: "Expand / collapse thinking and tool output",
+        keys: "t",
+    },
+    Action {
+        id: ActionId::OpenImages,
+        label: "View images in session",
+        keys: "i",
+    },
+    Action {
+        id: ActionId::ClearQuery,
+        label: "Clear the query",
         keys: "x",
     },
     Action {
-        id: ActionId::ToggleSidebar,
-        label: "Toggle sidebar",
+        id: ActionId::SwitchPane,
+        label: "Switch between list and transcript",
         keys: "Tab",
+    },
+    Action {
+        id: ActionId::GroupFlat,
+        label: "List: flat, no groups",
+        keys: "z f",
     },
     Action {
         id: ActionId::GroupAgent,
@@ -94,11 +127,6 @@ pub const ACTIONS: &[Action] = &[
         keys: "z d",
     },
     Action {
-        id: ActionId::GroupFlat,
-        label: "Flat list (no groups)",
-        keys: "z f",
-    },
-    Action {
         id: ActionId::CollapseAll,
         label: "Collapse all groups",
         keys: "z c",
@@ -110,12 +138,12 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         id: ActionId::SortDateDesc,
-        label: "Sort by date (newest first)",
+        label: "Sort by last activity (newest first)",
         keys: "s d",
     },
     Action {
         id: ActionId::SortDateAsc,
-        label: "Sort by date (oldest first)",
+        label: "Sort by last activity (oldest first)",
         keys: "s D",
     },
     Action {
@@ -124,18 +152,8 @@ pub const ACTIONS: &[Action] = &[
         keys: "s t",
     },
     Action {
-        id: ActionId::OpenImages,
-        label: "View images in conversation",
-        keys: "i",
-    },
-    Action {
-        id: ActionId::CopySession,
-        label: "Copy session to clipboard (markdown)",
-        keys: "y",
-    },
-    Action {
         id: ActionId::MarkAll,
-        label: "Mark all sessions",
+        label: "Mark all visible sessions",
         keys: "Ctrl-A",
     },
     Action {
@@ -145,12 +163,12 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         id: ActionId::Delete,
-        label: "Delete marked/current session",
+        label: "Delete marked / selected session",
         keys: "d",
     },
     Action {
         id: ActionId::Refresh,
-        label: "Refresh data",
+        label: "Reload sessions from the database",
         keys: "r",
     },
     Action {

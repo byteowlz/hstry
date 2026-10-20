@@ -1,7 +1,7 @@
-//! Application state: data, grouping, sorting, filtering, selection.
+//! Application state: data, the live query, grouping, sorting, selection.
 
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Datelike, Local, Utc};
 use ratatui::layout::Rect;
@@ -11,13 +11,20 @@ use uuid::Uuid;
 
 use hstry_core::{
     Config, Database,
-    db::ListConversationsOptions,
+    db::{ConversationSummary, ListConversationsOptions},
     models::{Conversation, Message, SearchHit, Source},
 };
 
 use crate::actions::PaletteState;
+use crate::fuzzy;
 use crate::images::{ImageEntry, ViewerState};
 use crate::theme::adapter_color;
+
+/// How long the query must be idle before a content search runs.
+pub const CONTENT_SEARCH_DEBOUNCE: Duration = Duration::from_millis(220);
+
+/// Terminals narrower than this show one pane at a time.
+pub const NARROW_WIDTH: u16 = 100;
 
 // =============================================================================
 // Enums
@@ -39,7 +46,7 @@ impl GroupBy {
             Self::Agent => "agent",
             Self::Repo => "repo",
             Self::AgentRepo => "agent▸repo",
-            Self::Date => "date",
+            Self::Date => "month",
         }
     }
 }
@@ -63,52 +70,68 @@ impl SortOrder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    Sidebar,
-    Chat,
+    List,
+    Transcript,
 }
 
-/// Sustained modes only: Normal plus the two text-entry surfaces.
-#[derive(Debug, Clone)]
+/// Sustained modes: Normal, or typing into the query bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
-    /// Full-text search across the database (and remotes).
-    Search {
-        query: String,
-        cursor: usize,
-    },
-    /// Quick substring filter of the visible session list.
-    Filter {
-        query: String,
-        cursor: usize,
-    },
+    Query,
 }
 
+/// What the query bar searches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchScope {
-    Local,
-    Remote,
-    All,
+pub enum Scope {
+    /// Instant fuzzy match over title, repo, agent and first prompt.
+    Sessions,
+    /// Full-text search over every message (debounced).
+    Content,
 }
 
-impl SearchScope {
+impl Scope {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Local => "local",
-            Self::Remote => "remote",
-            Self::All => "all",
+            Self::Sessions => "sessions",
+            Self::Content => "content",
         }
     }
 
-    pub const fn next(self) -> Self {
+    pub const fn toggle(self) -> Self {
         match self {
-            Self::Local => Self::All,
-            Self::All => Self::Remote,
-            Self::Remote => Self::Local,
+            Self::Sessions => Self::Content,
+            Self::Content => Self::Sessions,
         }
     }
 }
 
-/// Transient overlays. They stack conceptually; we keep at most one.
+/// Export formats offered by the export overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Markdown,
+    Json,
+}
+
+impl ExportFormat {
+    pub const ALL: [Self; 2] = [Self::Markdown, Self::Json];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Markdown => "Markdown transcript (.md)",
+            Self::Json => "JSON (conversation + messages)",
+        }
+    }
+
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Json => "json",
+        }
+    }
+}
+
+/// Transient overlays. At most one is open.
 pub enum Overlay {
     Help {
         scroll: usize,
@@ -126,11 +149,74 @@ pub enum Overlay {
         agents: Vec<String>,
         cursor: usize,
     },
+    ExportPicker {
+        conv: Uuid,
+        cursor: usize,
+    },
     ImageViewer(Box<ViewerState>),
 }
 
 // =============================================================================
-// Sidebar rows
+// Data
+// =============================================================================
+
+/// A session plus the derived fields the list needs.
+pub struct Session {
+    pub conv: Conversation,
+    pub adapter: String,
+    pub first_message: Option<String>,
+    pub message_count: i64,
+    /// Lowercase-agnostic secondary match text: repo, agent, first prompt.
+    pub secondary: String,
+}
+
+impl Session {
+    pub fn title(&self) -> &str {
+        self.conv
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .or(self.first_message.as_deref().map(str::trim))
+            .unwrap_or("(untitled)")
+    }
+
+    pub fn last_active(&self) -> DateTime<Utc> {
+        self.conv.updated_at.unwrap_or(self.conv.created_at)
+    }
+
+    /// Best on-disk location for this session: the per-session file when the
+    /// adapter recorded one, otherwise nothing (the source path is a root).
+    pub fn file_path(&self) -> Option<String> {
+        self.conv
+            .metadata
+            .get("file")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    }
+}
+
+/// One visible session with its title highlight positions.
+#[derive(Debug, Clone)]
+pub struct Visible {
+    pub idx: usize,
+    pub title_positions: Vec<usize>,
+}
+
+/// Content-search hits grouped by session (best hit first).
+pub struct SessionHits {
+    pub conversation_id: Uuid,
+    pub hits: Vec<SearchHit>,
+}
+
+impl SessionHits {
+    pub fn best(&self) -> &SearchHit {
+        &self.hits[0]
+    }
+}
+
+// =============================================================================
+// List rows
 // =============================================================================
 
 #[derive(Debug, Clone)]
@@ -145,10 +231,10 @@ pub enum Row {
         /// Set when this header maps 1:1 to a deletable source.
         source_id: Option<String>,
     },
-    /// Index into `visible` (which indexes `all_conversations`).
+    /// Index into `visible`.
     Session { vis: usize, depth: u8 },
-    /// Index into `search_results`.
-    Hit { idx: usize },
+    /// Index into `content_results`.
+    Hits { idx: usize },
 }
 
 // =============================================================================
@@ -162,47 +248,53 @@ pub struct App {
     pub mode: Mode,
     pub overlay: Option<Overlay>,
     pub focus: Focus,
-    pub sidebar_visible: bool,
     pub pending_prefix: Option<char>,
+    /// Set by the renderer: true when only one pane fits.
+    pub narrow: bool,
 
     pub group_by: GroupBy,
     pub sort_order: SortOrder,
-    pub list_filter: String,
     pub collapsed: HashSet<String>,
+
+    // Query
+    pub query: String,
+    pub query_cursor: usize,
+    pub scope: Scope,
+    /// When the query last changed; drives the content-search debounce.
+    pub query_changed_at: Option<Instant>,
+    /// The query the current content results belong to.
+    pub content_query: Option<String>,
+    pub content_results: Vec<SessionHits>,
+    pub searching: bool,
 
     // Data
     pub sources: Vec<Source>,
-    pub all_conversations: Vec<Conversation>,
-    /// Indices into `all_conversations` after filter + sort.
-    pub visible: Vec<usize>,
+    pub sessions: Vec<Session>,
+    pub visible: Vec<Visible>,
     pub rows: Vec<Row>,
     pub cursor: usize,
     pub marked: HashSet<Uuid>,
 
-    // Search
-    pub search_results: Vec<SearchHit>,
-    pub show_search_results: bool,
-    pub last_search_query: Option<String>,
-    pub search_scope: SearchScope,
-
-    // Chat
+    // Transcript
     pub loaded_conversation: Option<Uuid>,
     pub messages: Vec<Message>,
     pub chat_lines: Vec<Line<'static>>,
     pub chat_images: Vec<ImageEntry>,
     pub chat_scroll: usize,
     pub chat_height: u16,
-    /// Content width the chat lines were wrapped for; 0 = unwrapped.
+    /// Content width the transcript lines were wrapped for; 0 = unwrapped.
     pub chat_wrap_width: usize,
+    /// Show thinking and tool output in full instead of a short preview.
+    pub expand_details: bool,
 
     // Layout feedback (for mouse routing)
-    pub sidebar_area: Rect,
+    pub list_area: Rect,
     pub chat_area: Rect,
 
     // Feedback
     pub status: Option<(String, Instant)>,
 
-    // Exit request: launch `hstry resume <id> [--agent x]` after teardown.
+    /// Exit request: launch `hstry resume <id> [--agent x]` after teardown.
     pub pending_resume: Option<(Uuid, Option<String>)>,
 
     pub image_picker: ratatui_image::picker::Picker,
@@ -213,7 +305,7 @@ impl App {
         config: Config,
         db: Database,
         sources: Vec<Source>,
-        conversations: Vec<Conversation>,
+        summaries: Vec<ConversationSummary>,
         image_picker: ratatui_image::picker::Picker,
     ) -> Self {
         let mut app = Self {
@@ -221,23 +313,25 @@ impl App {
             db,
             mode: Mode::Normal,
             overlay: None,
-            focus: Focus::Sidebar,
-            sidebar_visible: true,
+            focus: Focus::List,
             pending_prefix: None,
-            group_by: GroupBy::Agent,
+            narrow: false,
+            group_by: GroupBy::Flat,
             sort_order: SortOrder::DateDesc,
-            list_filter: String::new(),
             collapsed: HashSet::new(),
+            query: String::new(),
+            query_cursor: 0,
+            scope: Scope::Sessions,
+            query_changed_at: None,
+            content_query: None,
+            content_results: Vec::new(),
+            searching: false,
+            sessions: Vec::new(),
             sources,
-            all_conversations: conversations,
             visible: Vec::new(),
             rows: Vec::new(),
             cursor: 0,
             marked: HashSet::new(),
-            search_results: Vec::new(),
-            show_search_results: false,
-            last_search_query: None,
-            search_scope: SearchScope::Local,
             loaded_conversation: None,
             messages: Vec::new(),
             chat_lines: Vec::new(),
@@ -245,25 +339,67 @@ impl App {
             chat_scroll: 0,
             chat_height: 0,
             chat_wrap_width: 0,
-            sidebar_area: Rect::default(),
+            expand_details: false,
+            list_area: Rect::default(),
             chat_area: Rect::default(),
             status: None,
             pending_resume: None,
             image_picker,
         };
+        app.set_sessions(summaries);
         app.rebuild();
         app
     }
 
-    pub fn adapter_of(&self, source_id: &str) -> &str {
-        self.sources
+    fn set_sessions(&mut self, summaries: Vec<ConversationSummary>) {
+        let adapters: HashMap<String, String> = self
+            .sources
             .iter()
-            .find(|s| s.id == source_id)
-            .map_or("unknown", |s| s.adapter.as_str())
+            .map(|s| (s.id.clone(), s.adapter.clone()))
+            .collect();
+        self.sessions = summaries
+            .into_iter()
+            .map(|summary| {
+                let adapter = adapters
+                    .get(&summary.conversation.source_id)
+                    .cloned()
+                    .unwrap_or_else(|| summary.conversation.source_id.clone());
+                let first: Option<String> = summary
+                    .first_user_message
+                    .map(|m| m.chars().take(400).collect::<String>())
+                    .map(|m| m.split_whitespace().collect::<Vec<_>>().join(" "));
+                let secondary = format!(
+                    "{} {} {}",
+                    summary.conversation.workspace.as_deref().unwrap_or(""),
+                    adapter,
+                    first.as_deref().unwrap_or("")
+                );
+                Session {
+                    adapter,
+                    first_message: first,
+                    message_count: summary
+                        .message_count
+                        .max(summary.conversation.message_count),
+                    secondary,
+                    conv: summary.conversation,
+                }
+            })
+            .collect();
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = Some((msg.into(), Instant::now()));
+    }
+
+    pub fn session_by_id(&self, id: Uuid) -> Option<&Session> {
+        self.sessions.iter().find(|s| s.conv.id == id)
+    }
+
+    /// True when the list is showing grouped content-search results.
+    pub fn showing_content(&self) -> bool {
+        self.scope == Scope::Content
+            && self.content_query.is_some()
+            && !self.query.trim().is_empty()
     }
 
     // -------------------------------------------------------------------------
@@ -274,97 +410,108 @@ impl App {
     /// when possible.
     pub fn rebuild(&mut self) {
         let keep = self.cursor_conversation_id();
+        let query = if self.scope == Scope::Sessions {
+            self.query.trim().to_string()
+        } else {
+            String::new()
+        };
 
-        let filter = self.list_filter.to_lowercase();
-        let adapter_by_source: HashMap<&str, &str> = self
-            .sources
-            .iter()
-            .map(|s| (s.id.as_str(), s.adapter.as_str()))
-            .collect();
-
-        self.visible = self
-            .all_conversations
+        let mut scored: Vec<(i64, Visible)> = self
+            .sessions
             .iter()
             .enumerate()
-            .filter(|(_, c)| {
-                if filter.is_empty() {
-                    return true;
-                }
-                let title = c.title.as_deref().unwrap_or("").to_lowercase();
-                let ws = c.workspace.as_deref().unwrap_or("").to_lowercase();
-                let adapter = adapter_by_source
-                    .get(c.source_id.as_str())
-                    .copied()
-                    .unwrap_or("")
-                    .to_lowercase();
-                title.contains(&filter) || ws.contains(&filter) || adapter.contains(&filter)
+            .filter_map(|(idx, s)| {
+                let m = fuzzy::match_query(
+                    &query,
+                    &fuzzy::Target {
+                        title: s.title(),
+                        secondary: &s.secondary,
+                    },
+                )?;
+                Some((
+                    m.score,
+                    Visible {
+                        idx,
+                        title_positions: m.title_positions,
+                    },
+                ))
             })
-            .map(|(i, _)| i)
             .collect();
 
-        let convs = &self.all_conversations;
-        match self.sort_order {
-            SortOrder::DateDesc => self
-                .visible
-                .sort_by_key(|&i| std::cmp::Reverse(convs[i].created_at)),
-            SortOrder::DateAsc => self.visible.sort_by_key(|&i| convs[i].created_at),
-            SortOrder::TitleAsc => self.visible.sort_by(|&a, &b| {
-                convs[a]
-                    .title
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_lowercase()
-                    .cmp(&convs[b].title.as_deref().unwrap_or("").to_lowercase())
-            }),
+        let sessions = &self.sessions;
+        if query.is_empty() {
+            match self.sort_order {
+                SortOrder::DateDesc => {
+                    scored.sort_by_key(|(_, v)| std::cmp::Reverse(sessions[v.idx].last_active()));
+                }
+                SortOrder::DateAsc => scored.sort_by_key(|(_, v)| sessions[v.idx].last_active()),
+                SortOrder::TitleAsc => scored.sort_by(|(_, a), (_, b)| {
+                    sessions[a.idx]
+                        .title()
+                        .to_lowercase()
+                        .cmp(&sessions[b.idx].title().to_lowercase())
+                }),
+            }
+        } else {
+            // Relevance first, recency breaks ties.
+            scored.sort_by(|(sa, a), (sb, b)| {
+                sb.cmp(sa).then_with(|| {
+                    sessions[b.idx]
+                        .last_active()
+                        .cmp(&sessions[a.idx].last_active())
+                })
+            });
         }
+        self.visible = scored.into_iter().map(|(_, v)| v).collect();
 
-        self.rows = if self.show_search_results {
-            (0..self.search_results.len())
-                .map(|idx| Row::Hit { idx })
+        self.rows = if self.showing_content() {
+            (0..self.content_results.len())
+                .map(|idx| Row::Hits { idx })
+                .collect()
+        } else if !query.is_empty() {
+            // A live query is a ranked list; groups would hide the best match.
+            (0..self.visible.len())
+                .map(|vis| Row::Session { vis, depth: 0 })
                 .collect()
         } else {
             self.build_grouped_rows()
         };
 
-        // Restore cursor
         self.cursor = keep
-            .and_then(|id| {
-                self.rows.iter().position(|r| match r {
-                    Row::Session { vis, .. } => self
-                        .visible
-                        .get(*vis)
-                        .is_some_and(|&ci| self.all_conversations[ci].id == id),
-                    Row::Hit { idx } => self
-                        .search_results
-                        .get(*idx)
-                        .is_some_and(|h| h.conversation_id == id),
-                    Row::Header { .. } => false,
-                })
-            })
+            .and_then(|id| self.row_of(id))
+            .or_else(|| self.first_selectable_row())
             .unwrap_or(0)
             .min(self.rows.len().saturating_sub(1));
     }
 
+    fn row_of(&self, id: Uuid) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|r| self.row_conversation_id(r) == Some(id))
+    }
+
+    pub fn first_selectable_row(&self) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|r| !matches!(r, Row::Header { .. }))
+    }
+
     fn build_grouped_rows(&self) -> Vec<Row> {
         match self.group_by {
-            GroupBy::Flat => self
-                .visible
-                .iter()
-                .enumerate()
-                .map(|(vis, _)| Row::Session { vis, depth: 0 })
+            GroupBy::Flat => (0..self.visible.len())
+                .map(|vis| Row::Session { vis, depth: 0 })
                 .collect(),
-            GroupBy::Agent => self.group_by_key(|app, ci| {
-                let adapter = app.adapter_of(&app.all_conversations[ci].source_id);
-                (adapter.to_string(), adapter.to_string())
+            GroupBy::Agent => self.group_by_key(|app, s| {
+                let a = &app.sessions[s].adapter;
+                (a.clone(), a.clone())
             }),
-            GroupBy::Repo => self.group_by_key(|app, ci| {
-                let ws = app.all_conversations[ci].workspace.clone();
+            GroupBy::Repo => self.group_by_key(|app, s| {
+                let ws = app.sessions[s].conv.workspace.clone();
                 let label = ws.as_deref().map_or("(no repo)".into(), shorten_workspace);
                 (ws.unwrap_or_else(|| "\u{0}none".into()), label)
             }),
-            GroupBy::Date => self.group_by_key(|app, ci| {
-                let dt = app.all_conversations[ci].created_at;
-                let local: DateTime<Local> = dt.into();
+            GroupBy::Date => self.group_by_key(|app, s| {
+                let local: DateTime<Local> = app.sessions[s].last_active().into();
                 (
                     format!("{}-{:02}", local.year(), local.month()),
                     local.format("%B %Y").to_string(),
@@ -378,8 +525,8 @@ impl App {
     fn group_by_key(&self, key_of: impl Fn(&Self, usize) -> (String, String)) -> Vec<Row> {
         let mut order: Vec<String> = Vec::new();
         let mut groups: HashMap<String, (String, Vec<usize>)> = HashMap::new();
-        for (vis, &ci) in self.visible.iter().enumerate() {
-            let (key, label) = key_of(self, ci);
+        for (vis, v) in self.visible.iter().enumerate() {
+            let (key, label) = key_of(self, v.idx);
             if !groups.contains_key(&key) {
                 order.push(key.clone());
             }
@@ -425,10 +572,11 @@ impl App {
         let mut agents: HashMap<String, (Vec<String>, HashMap<String, Vec<usize>>)> =
             HashMap::new();
 
-        for (vis, &ci) in self.visible.iter().enumerate() {
-            let conv = &self.all_conversations[ci];
-            let adapter = self.adapter_of(&conv.source_id).to_string();
-            let repo = conv
+        for (vis, v) in self.visible.iter().enumerate() {
+            let session = &self.sessions[v.idx];
+            let adapter = session.adapter.clone();
+            let repo = session
+                .conv
                 .workspace
                 .as_deref()
                 .map_or("(no repo)".to_string(), shorten_workspace);
@@ -507,21 +655,32 @@ impl App {
         self.rows.get(self.cursor)
     }
 
-    pub fn cursor_conversation_id(&self) -> Option<Uuid> {
-        match self.rows.get(self.cursor)? {
+    fn row_conversation_id(&self, row: &Row) -> Option<Uuid> {
+        match row {
             Row::Session { vis, .. } => self
                 .visible
                 .get(*vis)
-                .and_then(|&ci| self.all_conversations.get(ci))
-                .map(|c| c.id),
-            Row::Hit { idx } => self.search_results.get(*idx).map(|h| h.conversation_id),
+                .and_then(|v| self.sessions.get(v.idx))
+                .map(|s| s.conv.id),
+            Row::Hits { idx } => self.content_results.get(*idx).map(|h| h.conversation_id),
             Row::Header { .. } => None,
         }
     }
 
-    pub fn cursor_conversation(&self) -> Option<&Conversation> {
-        let id = self.cursor_conversation_id()?;
-        self.all_conversations.iter().find(|c| c.id == id)
+    pub fn cursor_conversation_id(&self) -> Option<Uuid> {
+        self.row_conversation_id(self.rows.get(self.cursor)?)
+    }
+
+    pub fn cursor_session(&self) -> Option<&Session> {
+        self.session_by_id(self.cursor_conversation_id()?)
+    }
+
+    /// The content hits for the cursor row, when showing content results.
+    pub fn cursor_hits(&self) -> Option<&SessionHits> {
+        match self.rows.get(self.cursor)? {
+            Row::Hits { idx } => self.content_results.get(*idx),
+            _ => None,
+        }
     }
 
     pub fn header_session_ids(&self, header_idx: usize) -> Vec<Uuid> {
@@ -534,7 +693,7 @@ impl App {
             match row {
                 Row::Header { depth, .. } if *depth <= hdr_depth => break,
                 Row::Session { vis, .. } => {
-                    ids.push(self.all_conversations[self.visible[*vis]].id);
+                    ids.push(self.sessions[self.visible[*vis].idx].conv.id);
                 }
                 _ => {}
             }
@@ -569,6 +728,67 @@ impl App {
     }
 
     // -------------------------------------------------------------------------
+    // Query editing
+    // -------------------------------------------------------------------------
+
+    /// Apply a query edit: sessions re-filter instantly; content search is
+    /// debounced by `tick`.
+    pub fn query_edited(&mut self) {
+        self.query_changed_at = Some(Instant::now());
+        if self.scope == Scope::Sessions || self.query.trim().is_empty() {
+            self.content_query = None;
+            self.content_results.clear();
+            self.rebuild();
+            // Like fzf: while typing, the selection follows the best match.
+            self.cursor = self.first_selectable_row().unwrap_or(0);
+            self.loaded_conversation = None;
+        }
+    }
+
+    pub fn set_scope(&mut self, scope: Scope) {
+        if self.scope == scope {
+            return;
+        }
+        self.scope = scope;
+        self.content_query = None;
+        self.content_results.clear();
+        self.query_changed_at = Some(Instant::now());
+        self.rebuild();
+        self.loaded_conversation = None;
+    }
+
+    pub fn clear_query(&mut self) {
+        self.query.clear();
+        self.query_cursor = 0;
+        self.content_query = None;
+        self.content_results.clear();
+        self.query_changed_at = None;
+        self.rebuild();
+        self.loaded_conversation = None;
+    }
+
+    /// Run due background work. Returns true when something changed.
+    pub fn tick(&mut self, rt: &tokio::runtime::Runtime) -> bool {
+        if self.scope != Scope::Content {
+            return false;
+        }
+        let Some(changed) = self.query_changed_at else {
+            return false;
+        };
+        if changed.elapsed() < CONTENT_SEARCH_DEBOUNCE {
+            return false;
+        }
+        self.query_changed_at = None;
+        let q = self.query.trim().to_string();
+        if q.is_empty() || self.content_query.as_deref() == Some(q.as_str()) {
+            return false;
+        }
+        self.perform_content_search(&q, rt);
+        self.load_messages(rt);
+        true
+    }
+
+    // -------------------------------------------------------------------------
     // Data loading
     // -------------------------------------------------------------------------
 
@@ -577,30 +797,34 @@ impl App {
             Ok(sources) => self.sources = sources,
             Err(e) => self.set_status(format!("Error loading sources: {e}")),
         }
-        match rt.block_on(self.db.list_conversations(ListConversationsOptions {
-            limit: None,
-            ..Default::default()
-        })) {
-            Ok(convs) => {
-                self.all_conversations = convs;
-                self.show_search_results = false;
-                self.search_results.clear();
-                self.last_search_query = None;
+        match rt.block_on(
+            self.db
+                .list_conversation_summaries(ListConversationsOptions {
+                    limit: None,
+                    ..Default::default()
+                }),
+        ) {
+            Ok(summaries) => {
+                self.set_sessions(summaries);
+                self.content_query = None;
+                self.content_results.clear();
+                self.loaded_conversation = None;
                 self.rebuild();
-                self.set_status("Refreshed");
+                self.set_status(format!("Refreshed · {} sessions", self.sessions.len()));
             }
-            Err(e) => self.set_status(format!("Error loading conversations: {e}")),
+            Err(e) => self.set_status(format!("Error loading sessions: {e}")),
         }
     }
 
     pub fn load_messages(&mut self, rt: &tokio::runtime::Runtime) {
         // Remote hit: fetch from the remote host.
-        if self.show_search_results
-            && let Some(Row::Hit { idx }) = self.rows.get(self.cursor)
-            && let Some(hit) = self.search_results.get(*idx)
-            && let Some(host) = hit.host.clone()
+        if let Some(hits) = self.cursor_hits()
+            && let Some(host) = hits.best().host.clone()
         {
-            let conv_id = hit.conversation_id;
+            let conv_id = hits.conversation_id;
+            if self.loaded_conversation == Some(conv_id) {
+                return;
+            }
             if let Some(remote) = self.config.remotes.iter().find(|r| r.name == host).cloned() {
                 match rt.block_on(hstry_core::remote::show_remote(
                     &remote,
@@ -612,16 +836,13 @@ impl App {
                         self.after_messages_loaded();
                         return;
                     }
-                    Err(e) => {
-                        self.set_status(format!("Remote load error: {e}"));
-                        self.messages.clear();
-                        self.after_messages_loaded();
-                        return;
-                    }
+                    Err(e) => self.set_status(format!("Remote load error: {e}")),
                 }
+            } else {
+                self.set_status(format!("Remote '{host}' not found in config"));
             }
-            self.set_status(format!("Remote '{host}' not found in config"));
             self.messages.clear();
+            self.loaded_conversation = None;
             self.after_messages_loaded();
             return;
         }
@@ -645,17 +866,19 @@ impl App {
         }
     }
 
-    /// Re-render chat lines for the current wrap width (e.g. after a resize).
+    fn highlight_query(&self) -> Option<String> {
+        self.showing_content()
+            .then(|| self.query.trim().to_string())
+    }
+
+    /// Re-render transcript lines for the current wrap width / detail level.
     pub fn rebuild_chat_lines(&mut self) {
-        let highlight = if self.show_search_results {
-            self.last_search_query.clone()
-        } else {
-            None
-        };
+        let highlight = self.highlight_query();
         let (lines, images) = crate::ui::chat::build_chat_lines(
             &self.messages,
             highlight.as_deref(),
             self.chat_wrap_width,
+            self.expand_details,
         );
         self.chat_lines = lines;
         self.chat_images = images;
@@ -663,81 +886,80 @@ impl App {
 
     fn after_messages_loaded(&mut self) {
         self.rebuild_chat_lines();
-        let highlight = if self.show_search_results {
-            self.last_search_query.clone()
-        } else {
-            None
-        };
+        let highlight = self.highlight_query();
         self.chat_scroll = highlight
             .as_deref()
             .and_then(|q| first_match_line(&self.chat_lines, q))
-            .unwrap_or(0);
+            .map_or(0, |line| line.saturating_sub(2));
     }
 
-    pub fn perform_search(&mut self, query: &str, rt: &tokio::runtime::Runtime) {
-        if query.is_empty() {
-            self.search_results.clear();
-            self.show_search_results = false;
-            self.last_search_query = None;
-            self.rebuild();
-            return;
-        }
-
+    pub fn perform_content_search(&mut self, query: &str, rt: &tokio::runtime::Runtime) {
         let opts = hstry_core::db::SearchOptions {
-            limit: Some(200),
+            limit: Some(400),
             ..Default::default()
         };
-        let scope = self.search_scope;
-        let config = &self.config;
         let db = &self.db;
         let q = query.to_string();
-
+        let remotes = self.config.remotes.clone();
         let search = async {
-            let mut results = Vec::new();
-            if scope != SearchScope::Remote {
-                let local =
-                    if let Some(hits) = hstry_core::service::try_service_search(&q, &opts).await? {
-                        hits
-                    } else {
-                        db.search(&q, opts.clone()).await?
-                    };
-                results.extend(local);
+            let mut results =
+                if let Some(hits) = hstry_core::service::try_service_search(&q, &opts).await? {
+                    hits
+                } else {
+                    db.search(&q, opts.clone()).await?
+                };
+            if !remotes.is_empty()
+                && let Ok(remote) = hstry_core::remote::search_remotes(&remotes, &q, &opts).await
+            {
+                results.extend(remote.hits);
             }
-            if scope != SearchScope::Local {
-                let remote_hits =
-                    hstry_core::remote::search_remotes(&config.remotes, &q, &opts).await?;
-                results.extend(remote_hits.hits);
-            }
-            results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
             Ok::<_, hstry_core::Error>(results)
         };
 
+        self.searching = true;
         match rt.block_on(search) {
             Ok(results) => {
-                let n = results.len();
-                self.search_results = results;
-                self.show_search_results = true;
-                self.last_search_query = Some(query.to_string());
+                let total = results.len();
+                self.content_results = group_hits(results);
+                self.content_query = Some(query.to_string());
+                self.loaded_conversation = None;
                 self.rebuild();
                 self.cursor = 0;
-                self.loaded_conversation = None;
-                self.set_status(format!("{n} results ({})", scope.label()));
+                self.set_status(format!(
+                    "{total} hits in {} sessions",
+                    self.content_results.len()
+                ));
             }
             Err(e) => self.set_status(format!("Search error: {e}")),
         }
+        self.searching = false;
     }
+}
 
-    pub fn clear_search(&mut self) {
-        self.show_search_results = false;
-        self.search_results.clear();
-        self.last_search_query = None;
-        self.loaded_conversation = None;
-        self.rebuild();
+/// Group hits by session, best session first, best hit first within one.
+pub fn group_hits(mut hits: Vec<SearchHit>) -> Vec<SessionHits> {
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut order: Vec<Uuid> = Vec::new();
+    let mut by_conv: HashMap<Uuid, Vec<SearchHit>> = HashMap::new();
+    for hit in hits {
+        if !by_conv.contains_key(&hit.conversation_id) {
+            order.push(hit.conversation_id);
+        }
+        by_conv.entry(hit.conversation_id).or_default().push(hit);
     }
+    order
+        .into_iter()
+        .filter_map(|id| {
+            by_conv.remove(&id).map(|hits| SessionHits {
+                conversation_id: id,
+                hits,
+            })
+        })
+        .collect()
 }
 
 // =============================================================================
@@ -754,6 +976,15 @@ pub fn shorten_workspace(ws: &str) -> String {
     }
 }
 
+/// Last path component of a workspace: the repo name users recognize.
+pub fn repo_name(ws: &str) -> String {
+    ws.trim_end_matches('/')
+        .rsplit('/')
+        .find(|p| !p.is_empty())
+        .unwrap_or(ws)
+        .to_string()
+}
+
 /// Compact relative timestamp for list rows.
 pub fn relative_time(dt: DateTime<Utc>) -> String {
     let now = Utc::now();
@@ -761,29 +992,98 @@ pub fn relative_time(dt: DateTime<Utc>) -> String {
     if delta.num_minutes() < 1 {
         "now".to_string()
     } else if delta.num_hours() < 1 {
-        format!("{}m", delta.num_minutes())
+        format!("{}m ago", delta.num_minutes())
     } else if delta.num_hours() < 24 {
-        format!("{}h", delta.num_hours())
+        format!("{}h ago", delta.num_hours())
     } else if delta.num_days() < 7 {
-        format!("{}d", delta.num_days())
+        format!("{}d ago", delta.num_days())
     } else {
         let local: DateTime<Local> = dt.into();
         if local.year() == Local::now().year() {
-            local.format("%b %d").to_string()
+            local.format("%b %-d").to_string()
         } else {
             local.format("%Y-%m-%d").to_string()
         }
     }
 }
 
+/// A short, word-aligned excerpt of `text` around the first query term.
+pub fn excerpt(text: &str, query: &str, width: usize) -> String {
+    // Markdown fences and heading marks are noise in a one-line excerpt.
+    let flat: String = text
+        .split_whitespace()
+        .filter(|w| !w.starts_with("```") && !w.chars().all(|c| c == '#'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let lower = flat.to_lowercase();
+    let hit = query
+        .split_whitespace()
+        .filter_map(|t| lower.find(&t.to_lowercase()))
+        .min();
+    let Some(hit) = hit else {
+        return crate::markdown::truncate_str(&flat, width);
+    };
+    // Start a few words before the hit, on a word boundary.
+    let lead = width / 4;
+    let mut start = hit.saturating_sub(lead);
+    while start > 0 && !flat.is_char_boundary(start) {
+        start -= 1;
+    }
+    if start > 0 {
+        start = flat[..start].rfind(' ').map_or(0, |i| i + 1);
+    }
+    let body = &flat[start..];
+    let prefix = if start > 0 { "…" } else { "" };
+    crate::markdown::truncate_str(&format!("{prefix}{body}"), width)
+}
+
 fn first_match_line(lines: &[Line<'static>], query: &str) -> Option<usize> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if terms.is_empty() {
         return None;
     }
     lines.iter().position(|line| {
-        line.spans
+        let text: String = line
+            .spans
             .iter()
-            .any(|span| span.content.as_ref().to_lowercase().contains(&needle))
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+            .to_lowercase();
+        terms.iter().any(|t| text.contains(t))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn excerpt_starts_on_a_word_boundary() {
+        let text = "The snippet() call re-tokenized huge tool blobs. Selecting the evidence window first cut p95";
+        let out = excerpt(text, "evidence", 40);
+        assert!(out.starts_with('…'), "{out}");
+        assert!(out.contains("evidence"), "{out}");
+        assert!(
+            !out.contains("electing the") || out.contains("Selecting"),
+            "cut mid-word: {out}"
+        );
+    }
+
+    #[test]
+    fn excerpt_drops_markdown_fences() {
+        let out = excerpt("Done.\n\n```rust\nfn backoff() {}\n```", "backoff", 60);
+        assert!(!out.contains("```"), "{out}");
+        assert!(out.contains("fn backoff"), "{out}");
+    }
+
+    #[test]
+    fn excerpt_without_hit_truncates() {
+        assert_eq!(excerpt("short text", "zzz", 40), "short text");
+    }
+
+    #[test]
+    fn repo_name_is_last_component() {
+        assert_eq!(repo_name("/work/hstry/"), "hstry");
+        assert_eq!(repo_name("hstry"), "hstry");
+    }
 }

@@ -138,7 +138,7 @@ fn wide_layout_shows_list_transcript_and_actions() {
         lines[0]
     );
     assert!(
-        lines[0].contains("sessions") && lines[0].contains("content"),
+        lines[0].contains("sessions") && lines[0].contains("messages"),
         "{}",
         lines[0]
     );

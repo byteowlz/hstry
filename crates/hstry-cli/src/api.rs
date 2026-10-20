@@ -176,6 +176,101 @@ pub fn get_api_status(config_path: &Path) -> Result<ApiStatus> {
     })
 }
 
+/// `hstry ui`: open the web UI. Reuses a running background API; otherwise
+/// serves it from a foreground `hstry-api` until interrupted.
+pub fn cmd_ui(config_path: &Path, port: Option<u16>, open: bool) -> Result<()> {
+    let config = Config::ensure_at(config_path)?;
+    let status = get_api_status(config_path)?;
+    if status.running
+        && port.is_none_or(|p| p == config.api.port)
+        && port_is_listening(config.api.port)
+    {
+        let url = ui_url(config.api.port);
+        println!("hstry UI: {url}");
+        if open {
+            open_browser(&url);
+        }
+        return Ok(());
+    }
+
+    let port = port.unwrap_or(config.api.port);
+    if port_is_listening(port) {
+        anyhow::bail!(
+            "Port {port} is in use by another process. Pass --port <free port>, or start the background API with `hstry api start`."
+        );
+    }
+    let exe = api_binary()?;
+    let mut child = Command::new(&exe)
+        .arg("--config")
+        .arg(config_path)
+        .arg("--port")
+        .arg(port.to_string())
+        .stdin(Stdio::null())
+        .spawn()
+        .with_context(|| format!("Failed to start {}", exe.display()))?;
+
+    // Wait for the listener before opening the browser.
+    let ready = (0..50).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        port_is_listening(port)
+    });
+    if !ready {
+        let _ = child.kill();
+        anyhow::bail!("hstry-api did not start listening on port {port}");
+    }
+    let url = ui_url(port);
+    println!("hstry UI: {url}  (Ctrl-C to stop)");
+    if open {
+        open_browser(&url);
+    }
+    let status = child.wait().context("waiting for hstry-api")?;
+    if !status.success() {
+        anyhow::bail!("hstry-api exited with {status}");
+    }
+    Ok(())
+}
+
+fn ui_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/ui")
+}
+
+fn port_is_listening(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok()
+}
+
+/// Best-effort: `$BROWSER`, then the platform opener. Failure only means the
+/// user opens the printed URL themselves.
+fn open_browser(url: &str) {
+    let mut command = if let Ok(browser) = std::env::var("BROWSER")
+        && !browser.trim().is_empty()
+    {
+        let mut c = Command::new(browser);
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 /// Locate the `hstry-api` binary: prefer one installed next to the `hstry`
 /// CLI (same bin dir), otherwise fall back to `hstry-api` on PATH.
 fn api_binary() -> Result<PathBuf> {

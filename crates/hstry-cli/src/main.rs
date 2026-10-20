@@ -11,6 +11,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use hstry_core::config::{AdapterRepo, AdapterRepoSource};
+use hstry_core::listing::is_continuation_fragment;
 use hstry_core::models::{Conversation, Message, MessageRole, Source};
 use hstry_core::{Config, Database};
 use hstry_runtime::{AdapterRunner, ExportConversation, ExportOptions, ParsedMessage, Runtime};
@@ -371,6 +372,17 @@ enum Command {
         /// Read JSON input from file or "-" for stdin
         #[arg(long)]
         input: Option<PathBuf>,
+    },
+
+    /// Open the web UI (find, read and act on sessions in the browser)
+    Ui {
+        /// Port to serve on (defaults to the configured API port)
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Print the URL instead of opening a browser
+        #[arg(long)]
+        no_open: bool,
     },
 
     /// Find a session and act on it (default: copy its transcript)
@@ -1297,6 +1309,7 @@ async fn run() -> Result<()> {
             apply_storage_config(&db, &config);
             cmd_peek(&db, &id, chars, cli.json).await
         }
+        Command::Ui { port, no_open } => api::cmd_ui(&config_path, port, !no_open),
         Command::Pick {
             query,
             copy,
@@ -2600,17 +2613,6 @@ fn is_system_context(content: &str) -> bool {
     false
 }
 
-/// Detect a resume/compaction continuation fragment whose first user message is
-/// the synthetic "conversation history ... compacted" summary Claude Code
-/// injects. These are hidden from `list` by default but stay fully searchable.
-fn is_continuation_fragment(first_user: Option<&str>) -> bool {
-    first_user.is_some_and(|content| {
-        content
-            .trim_start()
-            .starts_with("The conversation history before this point was compacted")
-    })
-}
-
 #[derive(Serialize)]
 struct SearchApiQuery<'a> {
     query: &'a str,
@@ -2747,82 +2749,6 @@ impl std::fmt::Display for SearchRoleArg {
     }
 }
 
-fn conversation_identity_key(conv: &Conversation) -> String {
-    let harness = conv.harness.as_deref().unwrap_or_default();
-    if let Some(external_id) = conv.external_id.as_deref().filter(|v| !v.is_empty()) {
-        return format!("{harness}|external|{external_id}");
-    }
-    if let Some(readable_id) = conv.readable_id.as_deref().filter(|v| !v.is_empty()) {
-        return format!("{harness}|readable|{readable_id}");
-    }
-    if let Some(platform_id) = conv.platform_id.as_deref().filter(|v| !v.is_empty()) {
-        return format!("{harness}|platform|{platform_id}");
-    }
-    format!("{harness}|id|{}", conv.id)
-}
-
-fn conversation_sort_ts(conv: &Conversation) -> i64 {
-    conv.updated_at.unwrap_or(conv.created_at).timestamp()
-}
-
-fn source_preference(source_id: &str, harness: Option<&str>) -> u8 {
-    if let Some(harness) = harness {
-        if source_id == harness {
-            return 0;
-        }
-        if source_id == format!("import-{harness}") {
-            return 2;
-        }
-    }
-
-    if source_id.starts_with("import-") {
-        2
-    } else {
-        1
-    }
-}
-
-fn should_replace_conversation(candidate: &Conversation, current: &Conversation) -> bool {
-    let candidate_pref = source_preference(&candidate.source_id, candidate.harness.as_deref());
-    let current_pref = source_preference(&current.source_id, current.harness.as_deref());
-
-    if candidate_pref != current_pref {
-        return candidate_pref < current_pref;
-    }
-
-    conversation_sort_ts(candidate) > conversation_sort_ts(current)
-}
-
-fn dedup_conversation_previews(
-    previews: Vec<hstry_core::db::ConversationPreview>,
-) -> Vec<hstry_core::db::ConversationPreview> {
-    let mut best_by_key: HashMap<String, hstry_core::db::ConversationPreview> = HashMap::new();
-
-    for preview in previews {
-        let key = conversation_identity_key(&preview.conversation);
-        match best_by_key.get(&key) {
-            Some(existing)
-                if !should_replace_conversation(&preview.conversation, &existing.conversation) => {}
-            _ => {
-                best_by_key.insert(key, preview);
-            }
-        }
-    }
-
-    let mut deduped: Vec<hstry_core::db::ConversationPreview> = best_by_key.into_values().collect();
-    deduped.sort_by(|a, b| {
-        conversation_sort_ts(&b.conversation).cmp(&conversation_sort_ts(&a.conversation))
-    });
-    deduped
-}
-
-fn expanded_list_limit(limit: i64) -> i64 {
-    if limit <= 0 {
-        return limit;
-    }
-    (limit.saturating_mul(4)).min(2000)
-}
-
 async fn cmd_list(
     db: &Database,
     source: Option<String>,
@@ -2833,34 +2759,20 @@ async fn cmd_list(
     include_all: bool,
     json: bool,
 ) -> Result<()> {
-    let dedup_across_sources = source.is_none();
-    let workspace = workspace.map(|value| format!("%{value}%"));
-    let opts = hstry_core::db::ListConversationsOptions {
-        source_id: source,
-        workspace,
-        after,
-        before,
-        limit: Some(if dedup_across_sources {
-            expanded_list_limit(limit)
-        } else {
-            limit
-        }),
-    };
-
-    let mut fetched = db.list_conversation_previews(opts).await?;
-    if !include_all {
-        fetched.retain(|preview| !is_continuation_fragment(preview.first_user_message.as_deref()));
-    }
-
-    let previews = if dedup_across_sources {
-        let mut deduped = dedup_conversation_previews(fetched);
-        if limit > 0 {
-            deduped.truncate(limit as usize);
-        }
-        deduped
-    } else {
-        fetched
-    };
+    let previews = hstry_core::listing::list_sessions(
+        db,
+        hstry_core::listing::ListSessionsOptions {
+            list: hstry_core::db::ListConversationsOptions {
+                source_id: source,
+                workspace: workspace.map(|value| format!("%{value}%")),
+                after,
+                before,
+                limit: Some(limit),
+            },
+            include_fragments: include_all,
+        },
+    )
+    .await?;
 
     if json {
         return emit_json(JsonResponse {
@@ -2902,29 +2814,21 @@ async fn cmd_list_peek(
     before: Option<chrono::DateTime<chrono::Utc>>,
     last_assistant_chars: Option<usize>,
 ) -> Result<()> {
-    let dedup_across_sources = source.is_none();
-    let workspace_filter = workspace.map(|value| format!("%{value}%"));
-    let opts = hstry_core::db::ListConversationsOptions {
-        source_id: source,
-        workspace: workspace_filter,
-        after,
-        before,
-        limit: Some(if dedup_across_sources {
-            expanded_list_limit(limit)
-        } else {
-            limit
-        }),
-    };
-
-    let previews = if dedup_across_sources {
-        let mut deduped = dedup_conversation_previews(db.list_conversation_previews(opts).await?);
-        if limit > 0 {
-            deduped.truncate(limit as usize);
-        }
-        deduped
-    } else {
-        db.list_conversation_previews(opts).await?
-    };
+    // Peek bundles always included continuation fragments; keep that.
+    let previews = hstry_core::listing::list_sessions(
+        db,
+        hstry_core::listing::ListSessionsOptions {
+            list: hstry_core::db::ListConversationsOptions {
+                source_id: source,
+                workspace: workspace.map(|value| format!("%{value}%")),
+                after,
+                before,
+                limit: Some(limit),
+            },
+            include_fragments: true,
+        },
+    )
+    .await?;
 
     let mut cfg = hstry_core::peek::PeekConfig::default();
     if let Some(n) = last_assistant_chars {

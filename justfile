@@ -251,3 +251,30 @@ update-adapters:
         jq -n --arg v "$VERSION" --arg p "$PROTOCOL" '{hstry_version: $v, protocol_version: $p}' \
         > "${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters/.hstry-adapters.json"
     @echo "Adapters updated in ${XDG_CONFIG_HOME:-$HOME/.config}/hstry/adapters"
+
+# === Web UI and Oqto App ===
+
+# Build the single-file web UI (hstry-api /ui and the Oqto App bundle)
+ui-build:
+    cd web && bun install --frozen-lockfile && bun run build.ts
+
+# Web UI unit tests plus the Oqto App data path (needs a debug hstry build)
+ui-test:
+    cargo build -q -p hstry-cli
+    cd web && bun install --frozen-lockfile && bun run typecheck && bun test
+
+# Fail if the committed bundles are stale relative to web/
+ui-check: ui-build
+    git diff --exit-code -- crates/hstry-api/ui/index.html oqto/hstry.oqtoapp/bundle/index.html
+
+# Refresh the vendored Design Studio tokens (review the diff, then ui-build)
+ui-tokens studio="http://100.64.0.12:4782":
+    curl -fsS "{{studio}}/generated/oqto-web/oqto.css" -o web/vendor/oqto.css
+    sha256sum web/vendor/oqto.css
+
+# Copy the hstry Oqto App into a work directory's oqto-apps/
+oqto-app-install workdir:
+    mkdir -p "{{workdir}}/oqto-apps"
+    rm -rf "{{workdir}}/oqto-apps/hstry.oqtoapp"
+    cp -R oqto/hstry.oqtoapp "{{workdir}}/oqto-apps/hstry.oqtoapp"
+    @echo "Installed to {{workdir}}/oqto-apps/hstry.oqtoapp — publish and approve it in Oqto."

@@ -1,0 +1,39 @@
+# hstry as an Oqto App: find, read and act on past agent sessions inside Oqto.
+#
+# Requests are NOT grants: publication pins this manifest, the bundle and the
+# operation implementation into an immutable Definition, and the App stays
+# inert until the user approves it. Editing anything in this package changes
+# the content digest and requires republish + re-approval.
+#
+# The bundle is generated from hstry's web/ sources (`just ui-build`); the same
+# UI is served standalone by hstry-api at /ui.
+schema = "oqto-app/v0"
+id = "hstry"
+version = "0.5.28"
+title = { en = "Session History", de = "Sitzungsverlauf" }
+description = "Find, read and reuse past coding-agent sessions (Claude Code, Codex, Pi, OpenCode and more) indexed by hstry. Read-only: data comes from the hstry CLI through pinned operations."
+presentations = ["sandboxed-web"]
+requested_capabilities = ["operations", "theme"]
+bindings = ["work-directory"]
+default_binding = "work-directory"
+
+[presentation.sandboxed-web]
+entry = "bundle/index.html"
+
+[capability.operations]
+# Read-only operations executed runner-side by operations/hstry-bridge, which
+# calls the hstry CLI on the runner. The frame never sees a path, command or
+# the database; agents use the same operation ids or the hstry CLI directly.
+table = "operations/table.toml"
+ids = [
+    "hstry.sessions.list",
+    "hstry.sessions.show",
+    "hstry.search",
+    "hstry.sources.list",
+]
+
+[instance_state]
+versioned = false
+
+[assets]
+max_bytes = 2000000

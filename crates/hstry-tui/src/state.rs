@@ -94,7 +94,7 @@ impl Scope {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Sessions => "sessions",
-            Self::Content => "content",
+            Self::Content => "messages",
         }
     }
 

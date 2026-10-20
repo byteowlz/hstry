@@ -208,7 +208,7 @@ fn draw_action_bar(f: &mut Frame, app: &App, area: Rect) {
         (Mode::Query, _) => &[
             ("type", "to find"),
             ("↑↓", "select"),
-            ("Tab", "sessions/content"),
+            ("Tab", "sessions/messages"),
             ("⏎", "done"),
             ("Esc", "clear"),
         ],

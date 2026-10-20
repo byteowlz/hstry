@@ -1,0 +1,50 @@
+# Semantic operations for the hstry Oqto App. Every operation is read-only and
+# runs operations/hstry-bridge, which calls the hstry CLI (`--json`) and bounds
+# the result to the operation output limit (1 MiB). Agents get the same data
+# from the same operation ids or straight from the hstry CLI.
+
+schema = "oqto-app-operations/v0-draft"
+
+[[operation]]
+id = "hstry.sessions.list"
+summary = "Recent sessions, newest first, deduplicated across sources (compact `hstry list --json`)"
+exec = ["operations/hstry-bridge", "sessions"]
+stdin = "json"
+stdout = "json"
+timeout_seconds = 60
+
+[operation.params]
+limit = { type = "integer", min = 1, max = 1500, default = 1500 }
+
+[[operation]]
+id = "hstry.sessions.show"
+summary = "One page of a session transcript with parts (`hstry show --full --json`, paged, long outputs cut)"
+exec = ["operations/hstry-bridge", "show"]
+stdin = "json"
+stdout = "json"
+timeout_seconds = 60
+
+[operation.params]
+id = { type = "string", min_bytes = 1, max_bytes = 64 }
+offset = { type = "integer", min = 0, max = 1000000, default = 0 }
+limit = { type = "integer", min = 1, max = 400, default = 150 }
+
+[[operation]]
+id = "hstry.search"
+summary = "Full-text search over every indexed message (`hstry search --json`)"
+exec = ["operations/hstry-bridge", "search"]
+stdin = "json"
+stdout = "json"
+timeout_seconds = 60
+
+[operation.params]
+query = { type = "string", min_bytes = 1, max_bytes = 512 }
+limit = { type = "integer", min = 1, max = 500, default = 300 }
+
+[[operation]]
+id = "hstry.sources.list"
+summary = "Indexed sources and their adapters (`hstry source list --json`)"
+exec = ["operations/hstry-bridge", "sources"]
+stdin = "json"
+stdout = "json"
+timeout_seconds = 30

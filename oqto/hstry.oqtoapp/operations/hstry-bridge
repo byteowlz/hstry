@@ -1,0 +1,121 @@
+#!/bin/sh
+# hstry-bridge: the only code of the hstry Oqto App that runs outside the
+# sandboxed frame. It calls the hstry CLI on the runner and prints the same
+# `{ok, result, error}` JSON the CLI prints, bounded to the 1 MiB operation
+# output limit:
+#   sessions  compact `hstry list --json` (first prompt and title trimmed)
+#   show      one page of `hstry show --full --json`, long outputs cut with an
+#             explicit "[… N more characters …]" note, never silently
+#   search    `hstry search --json` with a bounded evidence budget
+#   sources   `hstry source list --json`
+# Oqto caps operation output at 1 MiB and 10 000 JSON nodes, so list-shaped
+# results (sessions, transcript messages, search hits) are sent as
+# "json-rows": each row is one JSON-encoded string with exactly the CLI's
+# object inside. Decode each row with JSON.parse / `jq fromjson`.
+# On failure it prints {"error":{"message":"..."}} and exits non-zero.
+set -eu
+
+fail() {
+	jq -cn --arg m "$1" '{error: {message: $m}}' 2>/dev/null || printf '{"error":{"message":"%s"}}\n' "$1"
+	exit "${2:-3}"
+}
+
+command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"error":{"message":"jq is not provisioned on the runner PATH"}}'; exit 78; }
+command -v hstry >/dev/null 2>&1 || fail "hstry is not installed on the runner PATH (see https://github.com/byteowlz/hstry)" 78
+
+op="${1:-}"
+input="$(cat)"
+[ -n "$input" ] || input='{}'
+printf '%s' "$input" | jq -e 'type == "object"' >/dev/null 2>&1 || fail "input must be a JSON object"
+
+# Never let a background service or the HTTP API answer instead of the local
+# database the runner is bound to.
+export HSTRY_NO_API=1
+
+# Run hstry with $1 on stdin; leaves its stdout in $OUT_FILE. On failure,
+# report stderr as the operation error (at top level, never inside a pipe).
+OUT_FILE="$(mktemp)"
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$OUT_FILE" "$ERR_FILE"' EXIT
+call() {
+	stdin="$1"
+	shift
+	if ! printf '%s' "$stdin" | "$@" >"$OUT_FILE" 2>"$ERR_FILE"; then
+		msg="$(tail -c 400 "$ERR_FILE" | tr '\n' ' ' | sed 's/^Error: //')"
+		fail "${msg:-hstry failed}"
+	fi
+}
+
+case "$op" in
+	sessions)
+		limit="$(printf '%s' "$input" | jq -r '(.limit // 1500) | if type == "number" then (if . < 1 then 1 elif . > 1500 then 1500 else floor end) else 1500 end')"
+		call "" hstry list --json --limit "$limit"
+		jq -c '
+			def cut(n): if type == "string" and length > n then .[0:n] + "…" else . end;
+			# Fill by size, not count: stop before the 1 MiB operation output limit.
+			def fit(budget): reduce .[] as $s ({items: [], size: 0, dropped: 0};
+				($s | tojson | tojson | utf8bytelength) as $n
+				| if .dropped == 0 and .size + $n + 1 < budget
+					then .items += [$s] | .size += $n + 1
+					else .dropped += 1 end);
+			[.result[]? | {
+				id, source_id, readable_id, created_at, updated_at, model, workspace,
+				message_count, harness,
+				title: (.title | cut(200)),
+				first_user_message: (.first_user_message | cut(160)),
+				metadata: (if (.metadata.file | type) == "string" then {file: .metadata.file} else {} end)
+			} | with_entries(select(.value != null))]
+			| fit(940000) as $fit
+			| {ok: true, error: null, encoding: "json-rows", result: [$fit.items[] | tojson], truncated: ($fit.dropped > 0)}' "$OUT_FILE"
+		;;
+	show)
+		printf '%s' "$input" | jq -e '(.id | type) == "string" and (.id | length) > 0' >/dev/null || fail "id is required"
+		offset="$(printf '%s' "$input" | jq -r '(.offset // 0) | if type == "number" and . >= 0 then floor else 0 end')"
+		limit="$(printf '%s' "$input" | jq -r '(.limit // 150) | if type == "number" then (if . < 1 then 1 elif . > 400 then 400 else floor end) else 150 end')"
+		call "$(printf '%s' "$input" | jq -c '{id}')" hstry show --full --json --input -
+		jq -c --argjson off "$offset" --argjson lim "$limit" '
+			def cut(n): if type == "string" and length > n
+				then .[0:n] + "\n[… \(length - n) more characters not shown here; run `hstry show` for the full text …]"
+				else . end;
+			def slim:
+				(.parts_json | type == "array" and length > 0) as $has_parts
+				| .content |= cut(if $has_parts then 1000 else 16000 end)
+				| del(.tool_calls, .attachments, .metadata, .tokens, .cost_usd)
+				| .parts_json |= (if type == "array" then map(
+					(if has("text") then .text |= cut(16000) else . end)
+					| (if has("output") then .output |= (if type == "string" then cut(4000) else (tojson | cut(4000)) end) else . end)
+					| (if has("input") then .input |= (if type == "string" then cut(2000) elif (tojson | length) > 2000 then (tojson | cut(2000)) else . end) else . end)
+				) else . end);
+			# Take messages from the offset until the page budget or count is reached
+			# (always at least one), so every page stays under the 1 MiB output limit.
+			def page(budget): reduce .[] as $m ({items: [], size: 0};
+				($m | tojson | tojson | utf8bytelength) as $n
+				| if (.items | length) < $lim and ((.items | length) == 0 or .size + $n + 1 < budget)
+					then .items += [$m] | .size += $n + 1
+					else . end);
+			.result as $r
+			| ($r.messages | length) as $total
+			| ([$r.messages[$off:][] | slim] | page(900000)) as $page
+			| ($off + ($page.items | length)) as $next
+			| {ok: true, error: null, result: ($r
+				| del(.messages)
+				| .metadata |= (if (.file? | type) == "string" then {file: .file} else {} end)
+				| .messages = [$page.items[] | tojson]
+				| .messages_encoding = "json-rows"
+				| .page = {offset: $off, next_offset: $next, total: $total, has_more: ($next < $total)}
+			)}' "$OUT_FILE"
+		;;
+	search)
+		printf '%s' "$input" | jq -e '(.query | type) == "string" and (.query | length) > 0' >/dev/null || fail "query is required"
+		call "$(printf '%s' "$input" | jq -c '{query, limit: ((.limit // 300) | if type == "number" then (if . < 1 then 1 elif . > 500 then 500 else floor end) else 300 end)}')" \
+			hstry search --json --input - --max-chars 600000 --snippet-chars 240
+		jq -c '.result.hits |= map(tojson) | .result.hits_encoding = "json-rows"' "$OUT_FILE"
+		;;
+	sources)
+		call "" hstry source list --json
+		cat "$OUT_FILE"
+		;;
+	*)
+		fail "unknown operation '$op' (expected sessions, show, search or sources)" 2
+		;;
+esac

@@ -77,3 +77,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo build -p hstry-cli
       - run: bun adapters/pi-durable/cli-proof.ts
+
+  web-ui:
+    name: Web UI and Oqto App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: web/.bun-version
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc and jq
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler jq
+      - name: Committed bundles match web/ sources
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build.ts
+          git diff --exit-code -- ../crates/hstry-api/ui/index.html ../oqto/hstry.oqtoapp/bundle/index.html
+      - run: cargo build -p hstry-cli
+      - name: Typecheck and tests (including the Oqto App data path)
+        working-directory: web
+        run: |
+          bun run typecheck
+          bun test

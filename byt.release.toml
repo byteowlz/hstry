@@ -2,7 +2,7 @@
 [release]
 name = "hstry"
 lang = "rust"
-bins = ["hstry", "hstry-tui", "hstry-mcp"]
+bins = ["hstry", "hstry-tui", "hstry-mcp", "hstry-api"]
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",

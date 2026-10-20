@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.28] - 2026-10-20
+
+### Added
+
+- Web UI: find a session as you type (title, repo, agent, first prompt), search inside every message with hits grouped per session, read the transcript with thinking, tool calls and tool output shown as such, and act on it: copy the command to continue it in an agent, copy the transcript, id or path, export Markdown or JSON. `hstry ui` opens it (reusing a running API or serving it until Ctrl-C); `hstry-api` serves it at `/ui` with a strict CSP. Styled only through the byteowlz/Oqto design tokens, light and dark, with a phone layout.
+- Oqto App (`oqto/hstry.oqtoapp`): the same UI inside Oqto, read-only, fed by pinned operations that call the hstry CLI and stay within Oqto's operation output limits. Install with `just oqto-app-install <workdir>`.
+- `hstry-api` read endpoints `GET /sessions`, `/sessions/{id}`, `/sources`, `/agents`, returning the same JSON as `hstry list`, `show --full` and `source list`.
+- `hstry pick`: fuzzy session finder with copy (default), `--print`, `--id-only`, `--path`, `--open <agent>`, `--export <format>` and `--no-pick` for scripts.
+- Pi Durable adapter and qualified Pi <-> Pi Durable conversion with explicit fidelity reports.
+- Adapter conformance suite: every adapter ships sample sessions and a reviewed snapshot; CI gates all of them. A weekly CI job checks the adapters against current public Hugging Face agent traces.
+
+### Changed
+
+- TUI rework around finding and acting: one live query bar (Tab switches to full-text search), two-line rows that keep titles readable at 80 columns, a transcript built from message parts, a visible action bar (open in agent, copy transcript/id/path, export, delete), light-terminal detection, and a single-pane layout below 100 columns. Search hits are grouped per session instead of one row per hit.
+- Release archives now include `hstry-api`, so `hstry ui` and `hstry api` work from an installed release. Oqto deployments that manage hstry must list `hstry-api` in `[binary_owners]`.
+- Codex sessions without a thread title are titled by their first prompt instead of "repo - date - prompt".
+
+### Fixed
+
+Adapters, many of which silently imported nothing or the wrong content for current tool versions (reimport refreshes affected sessions in place):
+
+- claude-code: `/rename` titles, redacted thinking, model fallback and attachment records; honors `CLAUDE_CONFIG_DIR`.
+- codex: reasoning summaries and agent messages indexed; `.jsonl.zst` rollouts, `CODEX_HOME` and the newest `state_N.sqlite` supported.
+- opencode 2.x (`session_v2`) and Qwen Code (`~/.qwen/projects/*.jsonl`) sessions are read; Hermes reads its canonical `state.db` and `hermes sessions export` files; Gemini reads AI Studio prompt files and Takeout `MyActivity.json`.
+- chatgpt, chatgpt-web and openwebui keep only the visible branch instead of merging regenerated answers.
+- aider, amp, antigravity, fx, github-copilot, omp and openwebui parsed nothing from real files; cline, cursor, droid, gemini-cli, goose, kiro, mastracode, claude-web and others lost tool calls, results, reasoning or timestamps.
+- pi: one malformed session no longer aborts the whole import; system prompt sections, extension messages and usage entries are kept.
+- Windows: the CLI no longer overflows the main-thread stack.
+
+## [0.5.27] - 2026-10-06
+
+### Changed
+
+- Search falls back to the local database snapshot when the background service is unavailable.
+- Installed adapters are stamped with the hstry version at install time.
+
 ## [0.5.26] - 2026-09-29
 
 ### Added

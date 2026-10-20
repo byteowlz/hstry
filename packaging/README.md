@@ -92,6 +92,7 @@ The release packages the following binaries when available:
 - `hstry` - CLI tool (always included)
 - `hstry-tui` - Terminal UI (optional)
 - `hstry-mcp` - MCP server (optional)
+- `hstry-api` - HTTP API and web UI server (used by `hstry ui` and `hstry api`)
 
 ## Support
 

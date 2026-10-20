@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="hstry-acquire-") as temporary:
     shutil.copy(archive, source)
     (source / "checksums.txt").write_text(f"{checksum}  {archive.name}\n")
     manifest = stage / "dependencies.toml"
-    manifest.write_text(f'[oqto]\nversion = "0.5.0"\n[byteowlz]\nhstry = "{version}"\n[binary_owners]\nhstry = ["hstry", "hstry-tui", "hstry-mcp"]\n')
+    manifest.write_text(f'[oqto]\nversion = "0.5.0"\n[byteowlz]\nhstry = "{version}"\n[binary_owners]\nhstry = ["hstry", "hstry-tui", "hstry-mcp", "hstry-api"]\n')
     destination = stage / "bin"
     subprocess.run(["oqto-setup", "acquire", "--tools-only", "--manifest", str(manifest), "--base-url", (stage / "source").as_uri(), "--install-bin", str(destination)], check=True)
     for name in config["bins"]:
